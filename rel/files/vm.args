@@ -1,0 +1,39 @@
+
+#
+# Copyright (C) 2011  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
+#
+# This file is part of ecoinpool.
+#
+# ecoinpool is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# ecoinpool is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+## Name of the node
+-name ecoinpool@127.0.0.1
+
+## Cookie for distributed erlang
+-setcookie ecoinpool
+
+## Heartbeat management; auto-restarts VM if it dies or becomes unresponsive
+## (Disabled by default..use with caution!)
+##-heart
+
+## Enable kernel poll and a few async threads
++K true
++A 5
+
+## Increase number of concurrent ports/sockets
+-env ERL_MAX_PORTS 4096
+
+## Tweak GC to run more often
+-env ERL_FULLSWEEP_AFTER 10

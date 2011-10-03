@@ -1,0 +1,10 @@
+
+.DS_Store
+*.swp
+erl_crash.dump
+
+deps/
+ebin/
+
+rel/ecoinpool*/
+
