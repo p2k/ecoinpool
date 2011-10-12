@@ -18,9 +18,30 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(rpc_server).
+-module(ecoinpool_rpc).
+-behaviour(gen_server).
 
 -export([start_link/0]).
 
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+
 start_link() ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+init([]) ->
+    {ok, []}.
+
+handle_call(_Message, _From, State) ->
+    {reply, error, State}.
+
+handle_cast(_Message, State) ->
+    {noreply, State}.
+
+handle_info(_Message, State) ->
+    {noreply, State}.
+
+terminate(_Reason, _State) ->
     ok.
+
+code_change(_OldVersion, State, _Extra) ->
+    {ok, State}.
