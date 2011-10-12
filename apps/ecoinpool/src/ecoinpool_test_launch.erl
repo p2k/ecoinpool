@@ -18,24 +18,12 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(ecoinpool_app).
+-module(ecoinpool_test_launch).
+-export([start/0]).
 
--behaviour(application).
-
-%% Application callbacks
--export([start/2, stop/1]).
-
-%% ===================================================================
-%% Application callbacks
-%% ===================================================================
-
-start(_StartType, _StartArgs) ->
-    % Load configuration
-    {ok, DBHost} = application:get_env(ecoinpool, db_host),
-    {ok, DBPort} = application:get_env(ecoinpool, db_port),
-    {ok, DBPrefix} = application:get_env(ecoinpool, db_prefix),
-    {ok, DBOptions} = application:get_env(ecoinpool, db_options),
-    ecoinpool_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions}).
-
-stop(_State) ->
-    ok.
+start() ->
+    ok = application:start(sasl),
+    ok = application:start(crypto),
+    ok = application:start(ibrowse),
+    ok = application:start(couchbeam),
+    ok = application:start(ecoinpool).

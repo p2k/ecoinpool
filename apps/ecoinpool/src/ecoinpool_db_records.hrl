@@ -18,24 +18,16 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(ecoinpool_app).
+-record(configuration, {
+    active_subpools :: [binary()]
+}).
 
--behaviour(application).
-
-%% Application callbacks
--export([start/2, stop/1]).
-
-%% ===================================================================
-%% Application callbacks
-%% ===================================================================
-
-start(_StartType, _StartArgs) ->
-    % Load configuration
-    {ok, DBHost} = application:get_env(ecoinpool, db_host),
-    {ok, DBPort} = application:get_env(ecoinpool, db_port),
-    {ok, DBPrefix} = application:get_env(ecoinpool, db_prefix),
-    {ok, DBOptions} = application:get_env(ecoinpool, db_options),
-    ecoinpool_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions}).
-
-stop(_State) ->
-    ok.
+-record(subpool, {
+    id :: binary(),
+    name :: binary(),
+    port :: integer(),
+    pool_type :: atom(),
+    coin_daemon_port :: integer(),
+    coin_daemon_user :: binary(),
+    coin_daemon_pass :: binary()
+}).

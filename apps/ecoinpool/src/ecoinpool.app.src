@@ -23,7 +23,7 @@
   {description, "A pool mining software for cryptographic currencies"},
   {vsn, "0.1.0"},
   {registered, [ecoinpool_app]},
-  {applications, [kernel, stdlib, sasl, crypto, ibrowse, couchbeam, piqi_rpc]},
+  {applications, [kernel, stdlib, sasl, crypto, ibrowse, couchbeam]},
   {mod, {ecoinpool_app, []}},
-  {env, []}
+  {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
  ]}.

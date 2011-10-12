@@ -23,7 +23,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/1, start_cfg_monitor/1, stop_cfg_monitor/0]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -35,15 +35,28 @@
 %% API functions
 %% ===================================================================
 
-start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+start_link(DBConfig) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [DBConfig]).
+
+start_cfg_monitor(ConfDb) ->
+    case supervisor:start_child(?MODULE, {ecoinpool_cfg_monitor, {ecoinpool_cfg_monitor, start_link, [ConfDb]}, transient, 5000, worker, [ecoinpool_cfg_monitor]}) of
+        {ok, _} -> ok;
+        {ok, _, _} -> ok;
+        Error -> Error
+    end.
+
+stop_cfg_monitor() ->
+    case supervisor:terminate_child(?MODULE, ecoinpool_cfg_monitor) of
+        ok -> supervisor:delete_child(?MODULE, ecoinpool_cfg_monitor);
+        Error -> Error
+    end.
 
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
 
-init([]) ->
+init([DBConfig]) ->
     {ok, { {one_for_one, 5, 10}, [
-        {ecoinpool_rpc, {ecoinpool_rpc, start_link, []}, transient, 100, worker, [ecoinpool_rpc]}
+        {ecoinpool_db, {ecoinpool_db, start_link, [DBConfig]}, permanent, 5000, worker, [ecoinpool_db]},
+        ?CHILD(ecoinpool_rpc, worker)
     ]} }.
-
