@@ -23,7 +23,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/1, start_cfg_monitor/1, stop_cfg_monitor/0]).
+-export([start_link/1, start_cfg_monitor/1, stop_cfg_monitor/0, start_coindaemon/6, stop_coindaemon/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -48,6 +48,18 @@ start_cfg_monitor(ConfDb) ->
 stop_cfg_monitor() ->
     case supervisor:terminate_child(?MODULE, ecoinpool_cfg_monitor) of
         ok -> supervisor:delete_child(?MODULE, ecoinpool_cfg_monitor);
+        Error -> Error
+    end.
+
+start_coindaemon(CoinDaemonModule, Id, Host, Port, User, Pass) ->
+    case supervisor:start_child(?MODULE, {{CoinDaemonModule, Id}, {CoinDaemonModule, start_link, [Host, Port, User, Pass]}, transient, 5000, worker, [CoinDaemonModule]}) of
+        {ok, Pid, _} -> {ok, Pid};
+        Other -> Other
+    end.
+
+stop_coindaemon(CoinDaemonModule, Id) ->
+    case supervisor:terminate_child(?MODULE, {CoinDaemonModule, Id}) of
+        ok -> supervisor:delete_child(?MODULE, {CoinDaemonModule, Id});
         Error -> Error
     end.
 

@@ -100,17 +100,18 @@ handle_call({get_subpool_record, SubPoolId}, _From, State=#state{conf_db=ConfDb}
                 {CDP} -> CDP;
                 _ -> []
             end,
-            CoinDaemonPort = proplists:get_value(<<"port">>, CoinDaemonProps),
-            CoinDaemonUser = proplists:get_value(<<"user">>, CoinDaemonProps),
-            CoinDaemonPass = proplists:get_value(<<"pass">>, CoinDaemonProps),
+            CoinDaemonHost = proplists:get_value(<<"host">>, CoinDaemonProps, <<"localhost">>),
+            CoinDaemonPort = proplists:get_value(<<"port">>, CoinDaemonProps, 0),
+            CoinDaemonUser = proplists:get_value(<<"user">>, CoinDaemonProps, <<"user">>),
+            CoinDaemonPass = proplists:get_value(<<"pass">>, CoinDaemonProps, <<"pass">>),
             
             if % Validate data
                 DocType =:= <<"sub-pool">>,
                 is_binary(Name),
                 Name =/= <<>>,
                 is_integer(Port),
-                Port > 0,
                 PoolType =/= undefined,
+                is_binary(CoinDaemonHost),
                 is_integer(CoinDaemonPort),
                 is_binary(CoinDaemonUser),
                 is_binary(CoinDaemonPass) ->
@@ -121,6 +122,7 @@ handle_call({get_subpool_record, SubPoolId}, _From, State=#state{conf_db=ConfDb}
                         name=Name,
                         port=Port,
                         pool_type=PoolType,
+                        coin_daemon_host=CoinDaemonHost,
                         coin_daemon_port=CoinDaemonPort,
                         coin_daemon_user=CoinDaemonUser,
                         coin_daemon_pass=CoinDaemonPass
