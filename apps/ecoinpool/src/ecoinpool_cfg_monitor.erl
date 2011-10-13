@@ -29,7 +29,7 @@
 
 % Internal state record
 -record(state, {
-    subpools=[]
+    subpools
 }).
 
 %% ===================================================================
@@ -44,14 +44,14 @@ start_link(ConfDb) ->
 %% ===================================================================
 
 init([]) ->
-    {ok, #state{}}.
+    {ok, #state{subpools=dict:new()}}.
 
 handle_change({ChangeProps}, State=#state{subpools=CurrentSubPools}) ->
     case proplists:get_value(<<"id">>, ChangeProps) of
         <<"configuration">> -> % The one and only root config document
             gen_changes:cast(self(), reload_root_config); % Schedule root config reload
         OtherId ->
-            case lists:any(fun (#subpool{id=SubPoolId}) -> SubPoolId =:= OtherId end, CurrentSubPools) of
+            case dict:is_key(OtherId, CurrentSubPools) of
                 true ->
                     gen_changes:cast(self(), {reload_subpool, OtherId});
                 _ ->
@@ -67,7 +67,7 @@ handle_cast(reload_root_config, State=#state{subpools=CurrentSubPools}) ->
     % Load the root configuration, crash on error
     {ok, #configuration{active_subpools=ActiveSubPoolIds}} = ecoinpool_db:get_configuration(),
     
-    CurrentSubPoolIds = lists:map(fun (#subpool{id=SubPoolId}) -> SubPoolId end, CurrentSubPools),
+    CurrentSubPoolIds = dict:fetch_keys(CurrentSubPools),
     
     lists:foreach( % Add new sub-pools
         fun (SubPoolId) ->
@@ -88,43 +88,24 @@ handle_cast({reload_subpool, SubPoolId}, State=#state{subpools=CurrentSubPools})
     % Load the sub-pool configuration
     case ecoinpool_db:get_subpool_record(SubPoolId) of
         {ok, Subpool} ->
-            CurrentSubPoolIds = lists:map(fun (#subpool{id=Id}) -> Id end, CurrentSubPools),
-            
             % Check if sub-pool is already there
-            case lists:member(SubPoolId, CurrentSubPoolIds) of
-                true -> % Yes: Reconfigure the sub-pool, leave others as they are
-                    NewCurrentSubPools = lists:map(
-                        fun (OldSubpool=#subpool{id=Id}) ->
-                            if
-                                Id =:= SubPoolId ->
-                                    reconfigure_subpool(OldSubpool, Subpool),
-                                    Subpool;
-                                true ->
-                                    OldSubpool
-                            end
-                        end,
-                        CurrentSubPools
-                    ),
-                    {noreply, State#state{subpools=NewCurrentSubPools}};
-                _ -> % No: Add new sub-pool
-                    start_subpool(Subpool),
-                    {noreply, State#state{subpools=[Subpool|CurrentSubPools]}}
-            end;
+            case dict:find(SubPoolId, CurrentSubPools) of
+                {ok, OldSubpool} -> % Yes: Reconfigure the sub-pool, leave others as they are
+                    reconfigure_subpool(OldSubpool, Subpool);
+                error -> % No: Add new sub-pool
+                    start_subpool(Subpool)
+            end,
+            % Add/Update data
+            {noreply, State#state{subpools=dict:store(SubPoolId, Subpool, CurrentSubPools)}};
         
         {error, missing} -> % Stop if missing
-            NewCurrentSubPools = lists:filter(
-                fun (OldSubpool=#subpool{id=Id}) ->
-                    if
-                        Id =:= SubPoolId ->
-                            stop_subpool(OldSubpool),
-                            false;
-                        true ->
-                            true
-                    end
-                end,
-                CurrentSubPools
-            ),
-            {noreply, State#state{subpools=NewCurrentSubPools}};
+            case dict:find(SubPoolId, CurrentSubPools) of
+                {ok, OldSubpool} ->
+                    stop_subpool(OldSubpool),
+                    {noreply, State#state{subpools=dict:erase(SubPoolId, CurrentSubPools)}};
+                error ->
+                    {noreply, State}
+            end;
         
         {error, invalid} -> % Ignore on invalid
             io:format("ecoinpool_cfg_monitor:reload_subpool: Invalid document for subpool ID: ~p.", [SubPoolId]),
@@ -132,19 +113,13 @@ handle_cast({reload_subpool, SubPoolId}, State=#state{subpools=CurrentSubPools})
     end;
 
 handle_cast({remove_subpool, SubPoolId}, State=#state{subpools=CurrentSubPools}) ->
-    NewCurrentSubPools = lists:filter(
-        fun (Subpool=#subpool{id=Id}) ->
-            if
-                Id =:= SubPoolId ->
-                    stop_subpool(Subpool),
-                    false;
-                true ->
-                    true
-            end
-        end,
-        CurrentSubPools
-    ),
-    {noreply, State#state{subpools=NewCurrentSubPools}};
+    case dict:find(SubPoolId, CurrentSubPools) of
+        {ok, Subpool} ->
+            stop_subpool(Subpool),
+            {noreply, State#state{subpools=dict:erase(SubPoolId, CurrentSubPools)}};
+        error ->
+            {noreply, State}
+    end;
 
 handle_cast(_Message, State=#state{}) ->
     io:format("ecoinpool_cfg_monitor:handle_cast: Unhandled message: ~p~n", [_Message]),
