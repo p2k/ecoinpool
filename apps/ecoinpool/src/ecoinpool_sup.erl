@@ -69,6 +69,6 @@ stop_coindaemon(CoinDaemonModule, Id) ->
 
 init([DBConfig]) ->
     {ok, { {one_for_one, 5, 10}, [
-        {ecoinpool_db, {ecoinpool_db, start_link, [DBConfig]}, permanent, 5000, worker, [ecoinpool_db]},
-        ?CHILD(ecoinpool_rpc, worker)
+        ?CHILD(ecoinpool_rpc, worker),
+        {ecoinpool_db, {ecoinpool_db, start_link, [DBConfig]}, permanent, 5000, worker, [ecoinpool_db]}
     ]} }.

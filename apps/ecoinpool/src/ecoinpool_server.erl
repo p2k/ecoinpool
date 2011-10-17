@@ -25,6 +25,10 @@
 
 -export([start_link/1]).
 
+% Callbacks from ecoinpool_rpc
+-export([rpc_request/4, rpc_lp_request/2]).
+
+% Callbacks from gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 % Internal state record
@@ -50,6 +54,12 @@ start_link(Subpool=#subpool{id=Id, pool_type=PoolType}) ->
     CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
     gen_server:start_link({global, {subpool, Id}}, ?MODULE, [Subpool, CoinDaemonModule], []).
 
+rpc_request(SubpoolId, Responder, Method, Params) ->
+    gen_server:cast({global, {subpool, SubpoolId}}, {rpc_request, SubpoolId, Responder, Method, Params}).
+
+rpc_lp_request(SubpoolId, Responder) ->
+    gen_server:cast({global, {subpool, SubpoolId}}, {rpc_lp_request, SubpoolId, Responder}).
+
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
@@ -59,6 +69,8 @@ init([Subpool, CoinDaemonModule]) ->
     WorkTbl = ets:new(worktbl, [set, protected, {keypos, 2}]),
     % Schedule CoinDaemon start
     gen_server:cast(self(), start_coindaemon),
+    % Schedule RPC start
+    gen_server:cast(self(), start_rpc),
     {ok, #state{subpool=Subpool, worktbl=WorkTbl, cdaemon_mod=CoinDaemonModule}}.
 
 handle_call(_Message, _From, State) ->
@@ -70,6 +82,19 @@ handle_cast(start_coindaemon, State=#state{subpool=Subpool, cdaemon_mod=CoinDaem
     % Register the CoinDaemon at the supervisor; terminate on failure
     {ok, CoinDaemon} = ecoinpool_sup:start_coindaemon(CoinDaemonModule, Id, Host, Port, User, Pass),
     {noreply, State#state{cdaemon_pid=CoinDaemon}};
+
+handle_cast(start_rpc, State=#state{subpool=Subpool}) ->
+    % Extract Subpool ID and RPC Port
+    #subpool{id=Id, port=Port} = Subpool,
+    % Start the RPC; terminate on failure
+    {ok, _} = ecoinpool_rpc:start_rpc(Id, Port),
+    {noreply, State};
+
+handle_cast({rpc_request, _SubpoolId, _Responder, _Method, _Params}, State=#state{}) ->
+    {noreply, State};
+
+handle_cast({rpc_lp_request, _SubpoolId, _Responder}, State=#state{}) ->
+    {noreply, State};
 
 handle_cast(_Message, State) ->
     {noreply, State}.
