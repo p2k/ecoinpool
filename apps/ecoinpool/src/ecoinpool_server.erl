@@ -101,7 +101,7 @@ handle_cast({reconfigure, _Subpool}, State=#state{}) ->
     {noreply, State};
 
 handle_cast({rpc_request, Responder, _Method, _Params, Auth}, State=#state{}) ->
-    Responder({ok, list_to_binary(io_lib:print(Auth))}),
+    Responder({ok, list_to_binary(io_lib:print(Auth)), [longpolling]}),
     {noreply, State};
 
 handle_cast({rpc_lp_request, _SubpoolId, _Responder, _Auth}, State=#state{}) ->

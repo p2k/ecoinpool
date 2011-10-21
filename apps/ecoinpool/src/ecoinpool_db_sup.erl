@@ -18,20 +18,13 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(ecoinpool_sup).
-
+-module(ecoinpool_db_sup).
 -behaviour(supervisor).
 
--include("ecoinpool_db_records.hrl").
+-export([start_link/1, start_cfg_monitor/1]).
 
-%% API
--export([start_link/1, start_subpool/1, stop_subpool/1]).
-
-%% Supervisor callbacks
+% Callbacks from supervisor
 -export([init/1]).
-
-%% Helper macro for declaring children of supervisor
--define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
 
 %% ===================================================================
 %% API functions
@@ -40,16 +33,10 @@
 start_link(DBConfig) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, [DBConfig]).
 
-start_subpool(Subpool=#subpool{id=Id}) ->
-    case supervisor:start_child(?MODULE, {{subpool, Id}, {ecoinpool_server_sup, start_link, [Subpool]}, permanent, 5000, supervisor, [ecoinpool_server_sup]}) of
+start_cfg_monitor(ConfDb) ->
+    case supervisor:start_child(?MODULE, {ecoinpool_cfg_monitor, {ecoinpool_cfg_monitor, start_link, [ConfDb]}, permanent, 5000, worker, [ecoinpool_cfg_monitor]}) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
-        Error -> Error
-    end.
-
-stop_subpool(Id) ->
-    case supervisor:terminate_child(?MODULE, {subpool, Id}) of
-        ok -> supervisor:delete_child(?MODULE, {subpool, Id});
         Error -> Error
     end.
 
@@ -58,7 +45,6 @@ stop_subpool(Id) ->
 %% ===================================================================
 
 init([DBConfig]) ->
-    {ok, { {one_for_one, 5, 10}, [
-        {ecoinpool_rpc, {ecoinpool_rpc, start_link, []}, permanent, 5000, worker, [ecoinpool_rpc]},
-        {ecoinpool_db, {ecoinpool_db_sup, start_link, [DBConfig]}, permanent, 5000, supervisor, [ecoinpool_db_sup]}
+    {ok, { {rest_for_one, 5, 10}, [
+        {ecoinpool_db, {ecoinpool_db, start_link, [DBConfig]}, permanent, 5000, worker, [ecoinpool_db]}
     ]} }.

@@ -51,8 +51,6 @@ get_subpool_record(SubPoolId) ->
 %% ===================================================================
 
 init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
-    % Trap exit
-    process_flag(trap_exit, true),
     % Connect to database
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
     % Open database
@@ -129,7 +127,6 @@ handle_call({get_subpool_record, SubPoolId}, _From, State=#state{conf_db=ConfDb}
                     {reply, {ok, Subpool}, State};
                 
                 true ->
-                    
                     {reply, {error, invalid}, State}
             end;
         _ ->
@@ -140,7 +137,7 @@ handle_call(_Message, _From, State=#state{}) ->
     {reply, error, State}.
 
 handle_cast(start_cfg_monitor, State=#state{conf_db=ConfDb}) ->
-    ok = ecoinpool_sup:start_cfg_monitor(ConfDb),
+    ok = ecoinpool_db_sup:start_cfg_monitor(ConfDb),
     {noreply, State};
 
 handle_cast(_Message, State=#state{}) ->
@@ -150,8 +147,6 @@ handle_info(_Message, State=#state{}) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
-    % Stop config monitor
-    ecoinpool_sup:stop_cfg_monitor(),
     ok.
 
 code_change(_OldVersion, State=#state{}, _Extra) ->
