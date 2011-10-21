@@ -51,10 +51,15 @@ get_subpool_record(SubPoolId) ->
 %% ===================================================================
 
 init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
+    % Trap exit
+    process_flag(trap_exit, true),
     % Connect to database
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
     % Open database
-    {ok, ConfDb} = couchbeam:open_or_create_db(S, "ecoinpool", []),
+    ConfDb = case couchbeam:open_or_create_db(S, "ecoinpool", []) of
+        {ok, TheConfDb} -> TheConfDb;
+        {error, Error} -> io:format("couchbeam:open_or_create_db returned an error: ~p~n", [Error]), throw({error, Error})
+    end,
     % Start config monitor (asynchronously)
     gen_server:cast(?MODULE, start_cfg_monitor),
     % Return initial state
@@ -96,25 +101,22 @@ handle_call({get_subpool_record, SubPoolId}, _From, State=#state{conf_db=ConfDb}
                 <<"sc">> -> sc;
                 _ -> undefined
             end,
-            CoinDaemonProps = case proplists:get_value(<<"coin_daemon">>, DocProps) of
-                {CDP} -> CDP;
-                _ -> []
+            CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
+                {CDP} ->
+                    lists:map(
+                        fun ({BinName, Value}) -> {binary_to_atom(BinName, utf8), Value} end,
+                        CDP
+                    );
+                _ ->
+                    []
             end,
-            CoinDaemonHost = proplists:get_value(<<"host">>, CoinDaemonProps, <<"localhost">>),
-            CoinDaemonPort = proplists:get_value(<<"port">>, CoinDaemonProps, 0),
-            CoinDaemonUser = proplists:get_value(<<"user">>, CoinDaemonProps, <<"user">>),
-            CoinDaemonPass = proplists:get_value(<<"pass">>, CoinDaemonProps, <<"pass">>),
             
             if % Validate data
                 DocType =:= <<"sub-pool">>,
                 is_binary(Name),
                 Name =/= <<>>,
                 is_integer(Port),
-                PoolType =/= undefined,
-                is_binary(CoinDaemonHost),
-                is_integer(CoinDaemonPort),
-                is_binary(CoinDaemonUser),
-                is_binary(CoinDaemonPass) ->
+                PoolType =/= undefined ->
                     
                     % Create record
                     Subpool = #subpool{
@@ -122,10 +124,7 @@ handle_call({get_subpool_record, SubPoolId}, _From, State=#state{conf_db=ConfDb}
                         name=Name,
                         port=Port,
                         pool_type=PoolType,
-                        coin_daemon_host=CoinDaemonHost,
-                        coin_daemon_port=CoinDaemonPort,
-                        coin_daemon_user=CoinDaemonUser,
-                        coin_daemon_pass=CoinDaemonPass
+                        coin_daemon_config=CoinDaemonConfig
                     },
                     {reply, {ok, Subpool}, State};
                 

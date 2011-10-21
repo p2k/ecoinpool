@@ -24,7 +24,7 @@
 
 behaviour_info(callbacks) ->
     [
-        {start_link, 4} % start_link(Host, Port, User, Pass)
+        {start_link, 1} % start_link(Config) -- Config is a property list
     ];
 
 behaviour_info(_Other) ->

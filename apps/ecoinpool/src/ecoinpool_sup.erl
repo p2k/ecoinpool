@@ -22,8 +22,10 @@
 
 -behaviour(supervisor).
 
+-include("ecoinpool_db_records.hrl").
+
 %% API
--export([start_link/1, start_cfg_monitor/1, stop_cfg_monitor/0, start_coindaemon/6, stop_coindaemon/2]).
+-export([start_link/1, start_cfg_monitor/1, stop_cfg_monitor/0, start_subpool/1, stop_subpool/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -51,15 +53,16 @@ stop_cfg_monitor() ->
         Error -> Error
     end.
 
-start_coindaemon(CoinDaemonModule, Id, Host, Port, User, Pass) ->
-    case supervisor:start_child(?MODULE, {{CoinDaemonModule, Id}, {CoinDaemonModule, start_link, [Host, Port, User, Pass]}, transient, 5000, worker, [CoinDaemonModule]}) of
-        {ok, Pid, _} -> {ok, Pid};
-        Other -> Other
+start_subpool(Subpool=#subpool{id=Id}) ->
+    case supervisor:start_child(?MODULE, {{subpool, Id}, {ecoinpool_server_sup, start_link, [Subpool]}, transient, 5000, supervisor, [ecoinpool_server]}) of
+        {ok, _} -> ok;
+        {ok, _, _} -> ok;
+        Error -> Error
     end.
 
-stop_coindaemon(CoinDaemonModule, Id) ->
-    case supervisor:terminate_child(?MODULE, {CoinDaemonModule, Id}) of
-        ok -> supervisor:delete_child(?MODULE, {CoinDaemonModule, Id});
+stop_subpool(Id) ->
+    case supervisor:terminate_child(?MODULE, {subpool, Id}) of
+        ok -> supervisor:delete_child(?MODULE, {subpool, Id});
         Error -> Error
     end.
 

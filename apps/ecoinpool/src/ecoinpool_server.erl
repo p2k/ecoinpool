@@ -23,7 +23,7 @@
 
 -include("ecoinpool_db_records.hrl").
 
--export([start_link/1]).
+-export([start_link/1, reconfigure/1]).
 
 % Callbacks from ecoinpool_rpc
 -export([rpc_request/4, rpc_lp_request/2]).
@@ -54,17 +54,23 @@ start_link(Subpool=#subpool{id=Id, pool_type=PoolType}) ->
     CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
     gen_server:start_link({global, {subpool, Id}}, ?MODULE, [Subpool, CoinDaemonModule], []).
 
-rpc_request(SubpoolId, Responder, Method, Params) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {rpc_request, SubpoolId, Responder, Method, Params}).
+reconfigure(Subpool=#subpool{id=Id}) ->
+    gen_server:cast({global, {subpool, Id}}, {reconfigure, Subpool}).
 
-rpc_lp_request(SubpoolId, Responder) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {rpc_lp_request, SubpoolId, Responder}).
+rpc_request(PID, Responder, Method, Params) ->
+    gen_server:cast(PID, {rpc_request, Responder, Method, Params}).
+
+rpc_lp_request(PID, Responder) ->
+    gen_server:cast(PID, {rpc_lp_request, Responder}).
 
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
 
-init([Subpool, CoinDaemonModule]) ->
+init([Subpool=#subpool{id=Id}, CoinDaemonModule]) ->
+    io:format("Subpool ~p starting...~n", [Id]),
+    % Trap exit
+    process_flag(trap_exit, true),
     % Setup the work table
     WorkTbl = ets:new(worktbl, [set, protected, {keypos, 2}]),
     % Schedule CoinDaemon start
@@ -78,19 +84,24 @@ handle_call(_Message, _From, State) ->
 
 handle_cast(start_coindaemon, State=#state{subpool=Subpool, cdaemon_mod=CoinDaemonModule}) ->
     % Extract CoinDaemon configuration
-    #subpool{id=Id, coin_daemon_host=Host, coin_daemon_port=Port, coin_daemon_user=User, coin_daemon_pass=Pass} = Subpool,
-    % Register the CoinDaemon at the supervisor; terminate on failure
-    {ok, CoinDaemon} = ecoinpool_sup:start_coindaemon(CoinDaemonModule, Id, Host, Port, User, Pass),
+    #subpool{id=Id, coin_daemon_config=CoinDaemonConfig} = Subpool,
+    % Register the CoinDaemon at our supervisor; terminate on failure
+    {ok, CoinDaemon} = case ecoinpool_server_sup:start_coindaemon(Id, CoinDaemonModule, CoinDaemonConfig) of
+        {ok, Pid, _} -> {ok, Pid};
+        Other -> Other
+    end,
     {noreply, State#state{cdaemon_pid=CoinDaemon}};
 
-handle_cast(start_rpc, State=#state{subpool=Subpool}) ->
-    % Extract Subpool ID and RPC Port
-    #subpool{id=Id, port=Port} = Subpool,
+handle_cast(start_rpc, State=#state{subpool=#subpool{port=Port}}) ->
     % Start the RPC; terminate on failure
-    {ok, _} = ecoinpool_rpc:start_rpc(Id, Port),
+    ok = ecoinpool_rpc:start_rpc(Port, self()),
     {noreply, State};
 
-handle_cast({rpc_request, _SubpoolId, _Responder, _Method, _Params}, State=#state{}) ->
+handle_cast({reconfigure, _Subpool}, State=#state{}) ->
+    {noreply, State};
+
+handle_cast({rpc_request, Responder, _Method, _Params}, State=#state{}) ->
+    Responder({ok, <<"test">>}),
     {noreply, State};
 
 handle_cast({rpc_lp_request, _SubpoolId, _Responder}, State=#state{}) ->
@@ -102,15 +113,11 @@ handle_cast(_Message, State) ->
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon}) ->
-    #subpool{id=Id} = Subpool,
-    % Stop the CoinDaemon, if running
-    case CoinDaemon of
-        undefined ->
-            ok;
-        _Pid ->
-            ecoinpool_sup:stop_coindaemon(CoinDaemonModule, Id)
-    end,
+terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}}) ->
+    % Stop the RPC
+    ecoinpool_rpc:stop_rpc(Port),
+    % We don't need to stop the CoinDaemon, because that will be handled by the supervisor
+    io:format("Subpool ~p terminated.~n", [Id]),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->

@@ -27,8 +27,5 @@
     name :: binary(),
     port :: integer(),
     pool_type :: atom(),
-    coin_daemon_host :: binary(),
-    coin_daemon_port :: integer(),
-    coin_daemon_user :: binary(),
-    coin_daemon_pass :: binary()
+    coin_daemon_config :: [tuple()]
 }).

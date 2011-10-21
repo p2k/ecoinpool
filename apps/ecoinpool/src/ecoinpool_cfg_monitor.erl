@@ -89,21 +89,21 @@ handle_cast({reload_subpool, SubPoolId}, State=#state{subpools=CurrentSubPools})
     case ecoinpool_db:get_subpool_record(SubPoolId) of
         {ok, Subpool} ->
             % Check if sub-pool is already there
-            case dict:find(SubPoolId, CurrentSubPools) of
-                {ok, OldSubpool} -> % Yes: Reconfigure the sub-pool, leave others as they are
-                    reconfigure_subpool(OldSubpool, Subpool);
-                error -> % No: Add new sub-pool
-                    start_subpool(Subpool)
+            case dict:is_key(SubPoolId, CurrentSubPools) of
+                true -> % Yes: Reconfigure the sub-pool, leave others as they are
+                    ecoinpool_server:reconfigure(Subpool);
+                _ -> % No: Add new sub-pool
+                    ecoinpool_sup:start_subpool(Subpool)
             end,
             % Add/Update data
             {noreply, State#state{subpools=dict:store(SubPoolId, Subpool, CurrentSubPools)}};
         
         {error, missing} -> % Stop if missing
-            case dict:find(SubPoolId, CurrentSubPools) of
-                {ok, OldSubpool} ->
-                    stop_subpool(OldSubpool),
+            case dict:is_key(SubPoolId, CurrentSubPools) of
+                true ->
+                    ecoinpool_sup:stop_subpool(SubPoolId),
                     {noreply, State#state{subpools=dict:erase(SubPoolId, CurrentSubPools)}};
-                error ->
+                _ ->
                     {noreply, State}
             end;
         
@@ -113,11 +113,11 @@ handle_cast({reload_subpool, SubPoolId}, State=#state{subpools=CurrentSubPools})
     end;
 
 handle_cast({remove_subpool, SubPoolId}, State=#state{subpools=CurrentSubPools}) ->
-    case dict:find(SubPoolId, CurrentSubPools) of
-        {ok, Subpool} ->
-            stop_subpool(Subpool),
+    case dict:is_key(SubPoolId, CurrentSubPools) of
+        true ->
+            ecoinpool_sup:stop_subpool(SubPoolId),
             {noreply, State#state{subpools=dict:erase(SubPoolId, CurrentSubPools)}};
-        error ->
+        _ ->
             {noreply, State}
     end;
 
@@ -129,21 +129,4 @@ handle_info(_Message, State=#state{}) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
-    ok.
-
-%% ===================================================================
-%% Private functions
-%% ===================================================================
-
-start_subpool(Subpool=#subpool{}) ->
-    io:format("start_subpool ~p~n", [Subpool]),
-    ok.
-
-stop_subpool(Subpool=#subpool{}) ->
-    io:format("stop_subpool ~p~n", [Subpool]),
-    ok.
-
-reconfigure_subpool(_OldSubpool=#subpool{}, Subpool=#subpool{}) ->
-    %TODO
-    io:format("reconfigure_subpool ~p~n", [Subpool]),
     ok.

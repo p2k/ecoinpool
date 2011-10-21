@@ -22,7 +22,7 @@
 -behaviour(gen_coindaemon).
 -behaviour(gen_server).
 
--export([start_link/4]).
+-export([start_link/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -30,14 +30,16 @@
 %% Gen_CoinDaemon API
 %% ===================================================================
 
-start_link(Host, Port, User, Pass) ->
-    gen_server:start_link(?MODULE, ?MODULE, [Host, Port, User, Pass], []).
+start_link(Config) ->
+    gen_server:start_link(?MODULE, [Config], []).
 
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
 
-init([_Host, _Port, _User, _Pass]) ->
+init([_Config]) ->
+    process_flag(trap_exit, true),
+    io:format("hello~n"),
     {ok, []}.
 
 handle_call(_Message, _From, State) ->
@@ -50,6 +52,7 @@ handle_info(_Message, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
+    io:format("bye~n"),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->

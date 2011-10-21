@@ -28,16 +28,10 @@
 % Export to allow code change; do not call yourself
 -export([handle_request/2]).
 
-% Internal state record
--record(state, {
-    servers,
-    ports
-}).
-
 -record(server, {
-    id,
+    port,
     name,
-    port
+    pid
 }).
 
 %% ===================================================================
@@ -47,72 +41,75 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-start_rpc(SubpoolId, Port) ->
-    gen_server:call(?MODULE, {start_rpc, SubpoolId, Port}).
+start_rpc(Port, SubpoolPID) ->
+    gen_server:call(?MODULE, {start_rpc, Port, SubpoolPID}).
 
-stop_rpc(SubpoolId) ->
-    gen_server:call(?MODULE, {stop_rpc, SubpoolId}).
+stop_rpc(Port) ->
+    gen_server:call(?MODULE, {stop_rpc, Port}).
 
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
 
 init([]) ->
-    {ok, #state{servers=dict:new(), ports=sets:new()}}.
+    {ok, dict:new()}.
 
-handle_call({start_rpc, SubpoolId, Port}, _From, State=#state{servers=Servers, ports=Ports}) ->
-    % Check if already there or port occupied
-    case {dict:is_key(SubpoolId, Servers), sets:is_element(Port, Ports)} of
-        {false, false} ->
+handle_call({start_rpc, Port, SubpoolPID}, _From, Servers) ->
+    % Check if port occupied
+    case dict:is_key(Port, Servers) of
+        false ->
             % Create name
-            Name = list_to_atom(lists:concat([binary_to_list(SubpoolId), '_', Port, "_rpc"])),
+            Name = list_to_atom(lists:concat([ecoinpool_rpc_, Port])),
             % Build server record
-            Srv = #server{id=SubpoolId, name=Name, port=Port},
+            Srv = #server{port=Port, name=Name, pid=SubpoolPID},
             % Create loop function
-            Loop = fun (Req) -> ?MODULE:handle_request(SubpoolId, Req) end,
+            Loop = fun (Req) -> ?MODULE:handle_request(SubpoolPID, Req) end,
             % Launch server
             mochiweb_http:start([{name, Name}, {port, Port}, {loop, Loop}]),
             % Store and reply
-            io:format("Started RPC for Subpool ~p on port ~p~n", [SubpoolId, Port]),
-            {reply, ok, State#state{servers=dict:store(SubpoolId, Srv, Servers), ports=sets:add_element(Port, Ports)}};
-        {true, _} ->
-            {reply, {error, already_running}, State};
+            io:format("Started RPC on port ~p~n", [Port]),
+            {reply, ok, dict:store(Port, Srv, Servers)};
         _ ->
-            {reply, {error, port_occupied}, State}
+            {reply, {error, port_occupied}, Servers}
     end;
 
-handle_call({stop_rpc, SubpoolId}, _From, State=#state{servers=Servers, ports=Ports}) ->
-    case dict:find(SubpoolId, Servers) of
-        {ok, #server{name=Name, port=Port}} ->
+handle_call({stop_rpc, Port}, _From, Servers) ->
+    case dict:find(Port, Servers) of
+        {ok, #server{name=Name}} ->
             % Stop server
             mochiweb_http:stop(Name),
             % Remove and reply
-            io:format("Stopped RPC for Subpool ~p on port ~p~n", [SubpoolId, Port]),
-            {reply, ok, State#state{servers=dict:erase(SubpoolId, Servers), ports=sets:del_element(Port, Ports)}};
+            io:format("Stopped RPC on port ~p~n", [Port]),
+            {reply, ok, dict:erase(Port, Servers)};
         _ ->
-            {reply, {error, already_stopped}, State}
+            {reply, {error, not_running}, Servers}
     end;
 
-handle_call(_Message, _From, State=#state{}) ->
-    {reply, error, State}.
+handle_call(_Message, _From, Servers) ->
+    {reply, error, Servers}.
 
-handle_cast(_Message, State=#state{}) ->
-    {noreply, State}.
+handle_cast(_Message, Servers) ->
+    {noreply, Servers}.
 
-handle_info(_Message, State=#state{}) ->
-    {noreply, State}.
+handle_info(_Message, Servers) ->
+    {noreply, Servers}.
 
-terminate(_Reason, #state{}) ->
+terminate(_Reason, _Servers) ->
     ok.
 
-code_change(_OldVersion, State=#state{}, _Extra) ->
-    {ok, State}.
+code_change(_OldVersion, Servers, _Extra) ->
+    {ok, Servers}.
 
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
 
-respond_success(Req, ReqId, Result) ->
+server_header() ->
+    {ok, VSN} = application:get_key(ecoinpool, vsn),
+    {"Server", "ecoinpool/" ++ VSN}.
+
+respond_success(Req, ReqId, Result, Options) ->
+    % Make JSON reply
     Body = ejson:encode(
         {[
             {result, Result},
@@ -120,7 +117,18 @@ respond_success(Req, ReqId, Result) ->
             {id, ReqId}
         ]}
     ),
-    Req:respond({200, [{"Content-Type", "application/json"}, {"X-Long-Polling", "/LP"}], Body}).
+    % Create headers from options
+    Headers = lists:foldl(
+        fun (Option, AccHeaders) ->
+            case Option of
+                longpolling -> [{"X-Long-Polling", "/LP"} | AccHeaders];
+                _ -> AccHeaders
+            end
+        end,
+        [],
+        Options
+    ),
+    Req:respond({200, [server_header(), {"Content-Type", "application/json"} | Headers], Body}).
 
 respond_error(Req, ReqId, Type) ->
     {HTTPCode, RPCCode, RPCMessage} = case Type of
@@ -130,7 +138,13 @@ respond_error(Req, ReqId, Type) ->
         invalid_method_params -> {400, -32602, <<"Invalid parameters">>};
         authorization_required -> {401, -32001, <<"Authorization required">>};
         permission_denied -> {403, -32002, <<"Permission denied">>};
-        {CustomCode, CustomMessage} when is_integer(CustomCode) -> {500, CustomCode, CustomMessage};
+        {CustomCode, CustomMessage} when is_integer(CustomCode) ->
+            BinCustomMessage = if
+                is_binary(CustomMessage) -> CustomMessage;
+                is_list(CustomMessage) -> list_to_binary(CustomMessage);
+                true -> list_to_binary(io_lib:write(CustomMessage))
+            end,
+            {500, CustomCode, BinCustomMessage};
         _ -> {500, -32603, <<"Internal error">>}
     end,
     Body = ejson:encode(
@@ -143,14 +157,15 @@ respond_error(Req, ReqId, Type) ->
             {id, ReqId}
         ]}
     ),
-    Req:respond({HTTPCode, [{"Content-Type", "application/json"}], Body}).
+    Req:respond({HTTPCode, [server_header(), {"Content-Type", "application/json"}], Body}).
 
 respond_error(Req, Type) ->
     respond_error(Req, 1, Type).
 
 make_responder(Req, ReqId) ->
     fun
-        ({ok, Result}) -> respond_success(Req, ReqId, Result);
+        ({ok, Result}) -> respond_success(Req, ReqId, Result, []);
+        ({ok, Result, Options}) -> respond_success(Req, ReqId, Result, Options);
         ({error, Type}) -> respond_error(Req, ReqId, Type)
     end.
 
@@ -164,7 +179,7 @@ parse_method(<<"sc_getwork">>) -> sc_getwork;
 parse_method(Other) when is_binary(Other) -> unknown;
 parse_method(_) -> invalid.
 
-handle_post(SubpoolId, Req) ->
+handle_post(SubpoolPID, Req) ->
     case Req:get_header_value("Content-Type") of
         Type when Type =:= "application/json"; Type =:= undefined ->
             try
@@ -179,7 +194,7 @@ handle_post(SubpoolId, Req) ->
                             Method ->
                                 case proplists:get_value(<<"params">>, Properties, []) of
                                     Params when is_list(Params) ->
-                                        ecoinpool_server:rpc_request(SubpoolId, make_responder(Req, ReqId), Method, Params);
+                                        ecoinpool_server:rpc_request(SubpoolPID, make_responder(Req, ReqId), Method, Params);
                                     _ ->
                                         respond_error(Req, ReqId, invalid_request)
                                 end
@@ -194,21 +209,21 @@ handle_post(SubpoolId, Req) ->
             Req:respond({415, [{"Content-Type", "text/plain"}], "Unsupported Content-Type. We only accept application/json."})
     end.
 
-handle_request(SubpoolId, Req) ->
+handle_request(SubpoolPID, Req) ->
     case Req:accepts_content_type("application/json") of
         true ->
             case Req:get(method) of
                 'GET' ->
                     case Req:get(path) of
                         "/" -> % Normal request - use default handler
-                            ecoinpool_server:rpc_request(SubpoolId, make_responder(Req), default, []);
+                            ecoinpool_server:rpc_request(SubpoolPID, make_responder(Req), default, []);
                         "/LP" -> % Longpolling
-                            ecoinpool_server:rpc_lp_request(SubpoolId, make_responder(Req));
+                            ecoinpool_server:rpc_lp_request(SubpoolPID, make_responder(Req));
                         _ ->
                             respond_error(Req, method_not_found)
                     end;
                 'POST' ->
-                    handle_post(SubpoolId, Req);
+                    handle_post(SubpoolPID, Req);
                 _ ->
                     Req:respond({501, [], []}) % Unknown method
             end;
