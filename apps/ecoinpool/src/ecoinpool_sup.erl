@@ -25,7 +25,7 @@
 -include("ecoinpool_db_records.hrl").
 
 %% API
--export([start_link/1, start_subpool/1, stop_subpool/1]).
+-export([start_link/1, running_subpools/0, start_subpool/1, reload_subpool/1, stop_subpool/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -40,16 +40,32 @@
 start_link(DBConfig) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, [DBConfig]).
 
-start_subpool(Subpool=#subpool{id=Id}) ->
-    case supervisor:start_child(?MODULE, {{subpool, Id}, {ecoinpool_server_sup, start_link, [Subpool]}, permanent, 5000, supervisor, [ecoinpool_server_sup]}) of
+running_subpools() ->
+    lists:foldl(
+        fun (Spec, SubpoolIdAcc) ->
+            case Spec of
+                {{subpool, SubpoolId}, _, _, _} -> [SubpoolId | SubpoolIdAcc];
+                _ -> SubpoolIdAcc
+            end
+        end,
+        [],
+        supervisor:which_children(?MODULE)
+    ).
+
+start_subpool(SubpoolId) ->
+    case supervisor:start_child(?MODULE, {{subpool, SubpoolId}, {ecoinpool_server_sup, start_link, [SubpoolId]}, permanent, 5000, supervisor, [ecoinpool_server_sup]}) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         Error -> Error
     end.
 
-stop_subpool(Id) ->
-    case supervisor:terminate_child(?MODULE, {subpool, Id}) of
-        ok -> supervisor:delete_child(?MODULE, {subpool, Id});
+reload_subpool(Subpool) ->
+    % Simple forwarding
+    ecoinpool_server:reload_config(Subpool).
+
+stop_subpool(SubpoolId) ->
+    case supervisor:terminate_child(?MODULE, {subpool, SubpoolId}) of
+        ok -> supervisor:delete_child(?MODULE, {subpool, SubpoolId});
         Error -> Error
     end.
 

@@ -21,8 +21,6 @@
 -module(ecoinpool_server_sup).
 -behaviour(supervisor).
 
--include("ecoinpool_db_records.hrl").
-
 -export([start_link/1, start_coindaemon/3, stop_coindaemon/1]).
 
 % Callbacks from supervisor
@@ -32,8 +30,8 @@
 %% API functions
 %% ===================================================================
 
-start_link(Subpool=#subpool{id=SubpoolId}) ->
-    supervisor:start_link({global, {?MODULE, SubpoolId}}, ?MODULE, [Subpool]).
+start_link(SubpoolId) ->
+    supervisor:start_link({global, {?MODULE, SubpoolId}}, ?MODULE, [SubpoolId]).
 
 start_coindaemon(SubpoolId, CoinDaemonModule, CoinDaemonConfig) ->
     case supervisor:start_child({global, {?MODULE, SubpoolId}}, {coindaemon, {CoinDaemonModule, start_link, [CoinDaemonConfig]}, permanent, 5000, worker, [CoinDaemonModule]}) of
@@ -51,7 +49,7 @@ stop_coindaemon(SubpoolId) ->
 %% Supervisor callbacks
 %% ===================================================================
 
-init([Subpool]) ->
+init([SubpoolId]) ->
     {ok, { {rest_for_one, 5, 10}, [
-        {subpool, {ecoinpool_server, start_link, [Subpool]}, permanent, 5000, worker, [ecoinpool_server]}
+        {subpool, {ecoinpool_server, start_link, [SubpoolId]}, permanent, 5000, worker, [ecoinpool_server]}
     ]} }.

@@ -23,7 +23,7 @@
 
 -include("ecoinpool_db_records.hrl").
 
--export([start_link/1, reconfigure/1]).
+-export([start_link/1, reload_config/1]).
 
 % Callbacks from ecoinpool_rpc
 -export([rpc_request/5, rpc_lp_request/3]).
@@ -49,13 +49,11 @@
 %% API functions
 %% ===================================================================
 
-start_link(Subpool=#subpool{id=Id, pool_type=PoolType}) ->
-    % Derive the CoinDaemon module name from PoolType + "_coindaemon"
-    CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
-    gen_server:start_link({global, {subpool, Id}}, ?MODULE, [Subpool, CoinDaemonModule], []).
+start_link(SubpoolId) ->
+    gen_server:start_link({global, {subpool, SubpoolId}}, ?MODULE, [SubpoolId], []).
 
-reconfigure(Subpool=#subpool{id=Id}) ->
-    gen_server:cast({global, {subpool, Id}}, {reconfigure, Subpool}).
+reload_config(Subpool=#subpool{id=Id}) ->
+    gen_server:cast({global, {subpool, Id}}, {reload_config, Subpool}).
 
 rpc_request(PID, Responder, Method, Params, Auth) ->
     gen_server:cast(PID, {rpc_request, Responder, Method, Params, Auth}).
@@ -67,12 +65,16 @@ rpc_lp_request(PID, Responder, Auth) ->
 %% Gen_Server callbacks
 %% ===================================================================
 
-init([Subpool=#subpool{id=Id}, CoinDaemonModule]) ->
-    io:format("Subpool ~p starting...~n", [Id]),
+init([SubpoolId]) ->
+    io:format("Subpool ~p starting...~n", [SubpoolId]),
     % Trap exit
     process_flag(trap_exit, true),
+    % Get Subpool record; terminate on error
+    {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
     % Setup the work table
     WorkTbl = ets:new(worktbl, [set, protected, {keypos, 2}]),
+    % Derive the CoinDaemon module name from PoolType + "_coindaemon"
+    CoinDaemonModule = list_to_atom(lists:concat([Subpool#subpool.pool_type, "_coindaemon"])),
     % Schedule CoinDaemon start
     gen_server:cast(self(), start_coindaemon),
     % Schedule RPC start
@@ -97,7 +99,8 @@ handle_cast(start_rpc, State=#state{subpool=#subpool{port=Port}}) ->
     ok = ecoinpool_rpc:start_rpc(Port, self()),
     {noreply, State};
 
-handle_cast({reconfigure, _Subpool}, State=#state{}) ->
+handle_cast({reload_config, _Subpool}, State=#state{subpool=_OldSubpool}) ->
+    %TODO
     {noreply, State};
 
 handle_cast({rpc_request, Responder, _Method, _Params, Auth}, State=#state{}) ->

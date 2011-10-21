@@ -43,8 +43,8 @@ start_link({DBHost, DBPort, DBPrefix, DBOptions}) ->
 get_configuration() ->
     gen_server:call(?MODULE, get_configuration).
 
-get_subpool_record(SubPoolId) ->
-    gen_server:call(?MODULE, {get_subpool_record, SubPoolId}).
+get_subpool_record(SubpoolId) ->
+    gen_server:call(?MODULE, {get_subpool_record, SubpoolId}).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -68,14 +68,14 @@ handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
         {ok, {DocProps}} ->
             % Unpack and parse data
             DocType = proplists:get_value(<<"type">>, DocProps),
-            ActiveSubPoolIds = proplists:get_value(<<"active_subpools">>, DocProps, []),
-            ActiveSubPoolIdsCheck = lists:all(fun is_binary/1, ActiveSubPoolIds),
+            ActiveSubpoolIds = proplists:get_value(<<"active_subpools">>, DocProps, []),
+            ActiveSubpoolIdsCheck = lists:all(fun is_binary/1, ActiveSubpoolIds),
             
             if % Validate data
                 DocType =:= <<"configuration">>,
-                ActiveSubPoolIdsCheck ->
+                ActiveSubpoolIdsCheck ->
                     % Create record
-                    Configuration = #configuration{active_subpools=ActiveSubPoolIds},
+                    Configuration = #configuration{active_subpools=ActiveSubpoolIds},
                     {reply, {ok, Configuration}, State};
                 true ->
                     {reply, {error, invalid}, State}
@@ -85,9 +85,9 @@ handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
             {reply, {error, missing}, State}
     end;
 
-handle_call({get_subpool_record, SubPoolId}, _From, State=#state{conf_db=ConfDb}) ->
+handle_call({get_subpool_record, SubpoolId}, _From, State=#state{conf_db=ConfDb}) ->
     % Retrieve document
-    case couchbeam:open_doc(ConfDb, SubPoolId) of
+    case couchbeam:open_doc(ConfDb, SubpoolId) of
         {ok, {DocProps}} ->
             % Unpack and parse data
             DocType = proplists:get_value(<<"type">>, DocProps),
@@ -118,7 +118,7 @@ handle_call({get_subpool_record, SubPoolId}, _From, State=#state{conf_db=ConfDb}
                     
                     % Create record
                     Subpool = #subpool{
-                        id=SubPoolId,
+                        id=SubpoolId,
                         name=Name,
                         port=Port,
                         pool_type=PoolType,
