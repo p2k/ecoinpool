@@ -26,7 +26,7 @@
 -export([start_link/1, reconfigure/1]).
 
 % Callbacks from ecoinpool_rpc
--export([rpc_request/4, rpc_lp_request/2]).
+-export([rpc_request/5, rpc_lp_request/3]).
 
 % Callbacks from gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -57,11 +57,11 @@ start_link(Subpool=#subpool{id=Id, pool_type=PoolType}) ->
 reconfigure(Subpool=#subpool{id=Id}) ->
     gen_server:cast({global, {subpool, Id}}, {reconfigure, Subpool}).
 
-rpc_request(PID, Responder, Method, Params) ->
-    gen_server:cast(PID, {rpc_request, Responder, Method, Params}).
+rpc_request(PID, Responder, Method, Params, Auth) ->
+    gen_server:cast(PID, {rpc_request, Responder, Method, Params, Auth}).
 
-rpc_lp_request(PID, Responder) ->
-    gen_server:cast(PID, {rpc_lp_request, Responder}).
+rpc_lp_request(PID, Responder, Auth) ->
+    gen_server:cast(PID, {rpc_lp_request, Responder, Auth}).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -100,11 +100,11 @@ handle_cast(start_rpc, State=#state{subpool=#subpool{port=Port}}) ->
 handle_cast({reconfigure, _Subpool}, State=#state{}) ->
     {noreply, State};
 
-handle_cast({rpc_request, Responder, _Method, _Params}, State=#state{}) ->
-    Responder({ok, <<"test">>}),
+handle_cast({rpc_request, Responder, _Method, _Params, Auth}, State=#state{}) ->
+    Responder({ok, list_to_binary(io_lib:print(Auth))}),
     {noreply, State};
 
-handle_cast({rpc_lp_request, _SubpoolId, _Responder}, State=#state{}) ->
+handle_cast({rpc_lp_request, _SubpoolId, _Responder, _Auth}, State=#state{}) ->
     {noreply, State};
 
 handle_cast(_Message, State) ->

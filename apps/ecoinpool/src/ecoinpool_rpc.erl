@@ -142,7 +142,7 @@ respond_error(Req, ReqId, Type) ->
             BinCustomMessage = if
                 is_binary(CustomMessage) -> CustomMessage;
                 is_list(CustomMessage) -> list_to_binary(CustomMessage);
-                true -> list_to_binary(io_lib:write(CustomMessage))
+                true -> list_to_binary(io_lib:print(CustomMessage))
             end,
             {500, CustomCode, BinCustomMessage};
         _ -> {500, -32603, <<"Internal error">>}
@@ -179,7 +179,7 @@ parse_method(<<"sc_getwork">>) -> sc_getwork;
 parse_method(Other) when is_binary(Other) -> unknown;
 parse_method(_) -> invalid.
 
-handle_post(SubpoolPID, Req) ->
+handle_post(SubpoolPID, Req, Auth) ->
     case Req:get_header_value("Content-Type") of
         Type when Type =:= "application/json"; Type =:= undefined ->
             try
@@ -194,7 +194,7 @@ handle_post(SubpoolPID, Req) ->
                             Method ->
                                 case proplists:get_value(<<"params">>, Properties, []) of
                                     Params when is_list(Params) ->
-                                        ecoinpool_server:rpc_request(SubpoolPID, make_responder(Req, ReqId), Method, Params);
+                                        ecoinpool_server:rpc_request(SubpoolPID, make_responder(Req, ReqId), Method, Params, Auth);
                                     _ ->
                                         respond_error(Req, ReqId, invalid_request)
                                 end
@@ -210,20 +210,34 @@ handle_post(SubpoolPID, Req) ->
     end.
 
 handle_request(SubpoolPID, Req) ->
+    Auth = case Req:get_header_value("Authorization") of
+        "Basic " ++ BasicAuth ->
+            try
+                case binary:split(base64:decode(BasicAuth), <<":">>) of
+                    [User, Pass] -> {User, Pass};
+                    _ -> unauthorized
+                end
+            catch
+                error:_ ->
+                    unauthorized
+            end;
+        _ ->
+            unauthorized
+    end,
     case Req:accepts_content_type("application/json") of
         true ->
             case Req:get(method) of
                 'GET' ->
                     case Req:get(path) of
                         "/" -> % Normal request - use default handler
-                            ecoinpool_server:rpc_request(SubpoolPID, make_responder(Req), default, []);
+                            ecoinpool_server:rpc_request(SubpoolPID, make_responder(Req), default, [], Auth);
                         "/LP" -> % Longpolling
-                            ecoinpool_server:rpc_lp_request(SubpoolPID, make_responder(Req));
+                            ecoinpool_server:rpc_lp_request(SubpoolPID, make_responder(Req), Auth);
                         _ ->
                             respond_error(Req, method_not_found)
                     end;
                 'POST' ->
-                    handle_post(SubpoolPID, Req);
+                    handle_post(SubpoolPID, Req, Auth);
                 _ ->
                     Req:respond({501, [], []}) % Unknown method
             end;
