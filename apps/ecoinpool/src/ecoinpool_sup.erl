@@ -53,7 +53,7 @@ running_subpools() ->
     ).
 
 start_subpool(SubpoolId) ->
-    case supervisor:start_child(?MODULE, {{subpool, SubpoolId}, {ecoinpool_server_sup, start_link, [SubpoolId]}, permanent, 5000, supervisor, [ecoinpool_server_sup]}) of
+    case supervisor:start_child(?MODULE, {{subpool, SubpoolId}, {ecoinpool_server_sup, start_link, [SubpoolId]}, transient, 5000, supervisor, [ecoinpool_server_sup]}) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         Error -> Error

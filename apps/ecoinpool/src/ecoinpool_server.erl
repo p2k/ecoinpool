@@ -69,39 +69,52 @@ init([SubpoolId]) ->
     io:format("Subpool ~p starting...~n", [SubpoolId]),
     % Trap exit
     process_flag(trap_exit, true),
-    % Get Subpool record; terminate on error
-    {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
     % Setup the work table
     WorkTbl = ets:new(worktbl, [set, protected, {keypos, 2}]),
-    % Derive the CoinDaemon module name from PoolType + "_coindaemon"
-    CoinDaemonModule = list_to_atom(lists:concat([Subpool#subpool.pool_type, "_coindaemon"])),
-    % Schedule CoinDaemon start
-    gen_server:cast(self(), start_coindaemon),
-    % Schedule RPC start
-    gen_server:cast(self(), start_rpc),
-    {ok, #state{subpool=Subpool, worktbl=WorkTbl, cdaemon_mod=CoinDaemonModule}}.
+    % Get Subpool record; terminate on error
+    {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
+    % Schedule config reload
+    gen_server:cast(self(), {reload_config, Subpool}),
+    {ok, #state{worktbl=WorkTbl, subpool=#subpool{}}}.
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
-handle_cast(start_coindaemon, State=#state{subpool=Subpool, cdaemon_mod=CoinDaemonModule}) ->
-    % Extract CoinDaemon configuration
-    #subpool{id=Id, coin_daemon_config=CoinDaemonConfig} = Subpool,
-    % Register the CoinDaemon at our supervisor; terminate on failure
-    {ok, CoinDaemon} = case ecoinpool_server_sup:start_coindaemon(Id, CoinDaemonModule, CoinDaemonConfig) of
-        {ok, Pid, _} -> {ok, Pid};
-        Other -> Other
+handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, cdaemon_mod=OldCoinDaemonModule, cdaemon_pid=OldCoinDaemon}) ->
+    % Extract config
+    #subpool{id=SubpoolId, port=Port, pool_type=PoolType, coin_daemon_config=CoinDaemonConfig} = Subpool,
+    #subpool{port=OldPort, coin_daemon_config=OldCoinDaemonConfig} = OldSubpool,
+    % Derive the CoinDaemon module name from PoolType + "_coindaemon"
+    CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
+    
+    % Check the RPC settings; if anything goes wrong, terminate
+    StartRPC = if
+        OldPort =:= Port -> false;
+        OldPort =:= undefined -> true;
+        true -> ecoinpool_rpc:stop_rpc(OldPort), true
     end,
-    {noreply, State#state{cdaemon_pid=CoinDaemon}};
-
-handle_cast(start_rpc, State=#state{subpool=#subpool{port=Port}}) ->
-    % Start the RPC; terminate on failure
-    ok = ecoinpool_rpc:start_rpc(Port, self()),
-    {noreply, State};
-
-handle_cast({reload_config, _Subpool}, State=#state{subpool=_OldSubpool}) ->
-    %TODO
-    {noreply, State};
+    ok = if
+        StartRPC -> ecoinpool_rpc:start_rpc(Port, self());
+        true -> ok
+    end,
+    
+    % Check the CoinDaemon; if anything goes wrong, terminate
+    StartCoinDaemon = if
+        OldCoinDaemonModule =:= CoinDaemonModule, OldCoinDaemonConfig =:= CoinDaemonConfig -> false;
+        OldCoinDaemonModule =:= undefined -> true;
+        true -> ecoinpool_server_sup:stop_coindaemon(SubpoolId), true
+    end,
+    {ok, CoinDaemon} = if
+        StartCoinDaemon ->
+            case ecoinpool_server_sup:start_coindaemon(SubpoolId, CoinDaemonModule, CoinDaemonConfig) of
+                {ok, Pid, _} -> {ok, Pid};
+                {ok, Pid} -> {ok, Pid};
+                Error -> ecoinpool_rpc:stop_rpc(Port), Error % Fail but close the RPC beforehand
+            end;
+        true -> {ok, OldCoinDaemon}
+    end,
+    
+    {noreply, State#state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon}};
 
 handle_cast({rpc_request, Responder, _Method, _Params, Auth}, State=#state{}) ->
     Responder({ok, list_to_binary(io_lib:print(Auth)), [longpolling]}),
