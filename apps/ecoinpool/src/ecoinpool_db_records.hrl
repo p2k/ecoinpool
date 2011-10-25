@@ -29,3 +29,10 @@
     pool_type :: atom(),
     coin_daemon_config :: [tuple()]
 }).
+
+-record(worker, {
+    id :: binary(),
+    sub_pool_id :: binary(),
+    name :: binary(),
+    pass :: binary() | atom()
+}).

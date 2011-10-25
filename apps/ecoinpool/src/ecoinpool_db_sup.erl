@@ -21,7 +21,7 @@
 -module(ecoinpool_db_sup).
 -behaviour(supervisor).
 
--export([start_link/1, start_cfg_monitor/1]).
+-export([start_link/1, start_cfg_monitor/1, start_worker_monitor/1]).
 
 % Callbacks from supervisor
 -export([init/1]).
@@ -35,6 +35,13 @@ start_link(DBConfig) ->
 
 start_cfg_monitor(ConfDb) ->
     case supervisor:start_child(?MODULE, {ecoinpool_cfg_monitor, {ecoinpool_cfg_monitor, start_link, [ConfDb]}, permanent, 5000, worker, [ecoinpool_cfg_monitor]}) of
+        {ok, _} -> ok;
+        {ok, _, _} -> ok;
+        Error -> Error
+    end.
+
+start_worker_monitor(ConfDb) ->
+    case supervisor:start_child(?MODULE, {ecoinpool_worker_monitor, {ecoinpool_worker_monitor, start_link, [ConfDb]}, permanent, 5000, worker, [ecoinpool_worker_monitor]}) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         Error -> Error

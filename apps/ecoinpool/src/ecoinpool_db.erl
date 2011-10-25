@@ -23,7 +23,7 @@
 
 -include("ecoinpool_db_records.hrl").
 
--export([start_link/1, get_subpool_record/1, get_configuration/0]).
+-export([start_link/1, get_configuration/0, get_subpool_record/1, get_worker_record/1, get_workers_for_subpools/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -46,6 +46,12 @@ get_configuration() ->
 get_subpool_record(SubpoolId) ->
     gen_server:call(?MODULE, {get_subpool_record, SubpoolId}).
 
+get_worker_record(WorkerId) ->
+    gen_server:call(?MODULE, {get_worker_record, WorkerId}).
+
+get_workers_for_subpools(SubpoolIds) ->
+    gen_server:call(?MODULE, {get_workers_for_subpools, SubpoolIds}).
+
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
@@ -58,8 +64,8 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
         {ok, TheConfDb} -> TheConfDb;
         {error, Error} -> io:format("couchbeam:open_or_create_db returned an error: ~p~n", [Error]), throw({error, Error})
     end,
-    % Start config monitor (asynchronously)
-    gen_server:cast(?MODULE, start_cfg_monitor),
+    % Start config & worker monitor (asynchronously)
+    gen_server:cast(?MODULE, start_monitors),
     % Return initial state
     {ok, #state{srv_conn=S, conf_db=ConfDb}}.
 
@@ -133,11 +139,45 @@ handle_call({get_subpool_record, SubpoolId}, _From, State=#state{conf_db=ConfDb}
             {reply, {error, missing}, State}
     end;
 
+handle_call({get_worker_record, WorkerId}, _From, State=#state{conf_db=ConfDb}) ->
+    case couchbeam:open_doc(ConfDb, WorkerId) of
+        {ok, Doc} ->
+            {reply, parse_worker_document(WorkerId, Doc), State};
+        _ ->
+            {reply, {error, missing}, State}
+    end;
+
+handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=ConfDb}) ->
+    {ok, Rows} = couchbeam_view:fetch(ConfDb, {"workers", "by_sub_pool"}, [include_docs, {keys, SubpoolIds}]),
+    Workers = lists:foldl(
+        fun ({RowProps}, AccWorkers) ->
+            Id = proplists:get_value(<<"id">>, RowProps),
+            Doc = proplists:get_value(<<"doc">>, RowProps),
+            case parse_worker_document(Id, Doc) of
+                {ok, Worker} ->
+                    [Worker|AccWorkers];
+                {error, invalid} ->
+                    io:format("ecoinpool_db:get_workers_for_subpools: Invalid document for worker ID: ~p.", [Id]),
+                    AccWorkers
+            end
+        end,
+        [],
+        Rows
+    ),
+    {reply, Workers, State};
+
 handle_call(_Message, _From, State=#state{}) ->
     {reply, error, State}.
 
-handle_cast(start_cfg_monitor, State=#state{conf_db=ConfDb}) ->
-    ok = ecoinpool_db_sup:start_cfg_monitor(ConfDb),
+handle_cast(start_monitors, State=#state{conf_db=ConfDb}) ->
+    case ecoinpool_db_sup:start_cfg_monitor(ConfDb) of
+        ok -> ok;
+        {error, {already_started, _}} -> ok
+    end,
+    case ecoinpool_db_sup:start_worker_monitor(ConfDb) of
+        ok -> ok;
+        {error, {already_started, _}} -> ok
+    end,
     {noreply, State};
 
 handle_cast(_Message, State=#state{}) ->
@@ -151,3 +191,30 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVersion, State=#state{}, _Extra) ->
     {ok, State}.
+
+parse_worker_document(WorkerId, {DocProps}) ->
+    DocType = proplists:get_value(<<"type">>, DocProps),
+    SubpoolId = proplists:get_value(<<"sub_pool_id">>, DocProps),
+    Name = proplists:get_value(<<"name">>, DocProps),
+    Pass = proplists:get_value(<<"pass">>, DocProps, null),
+    
+    if
+        DocType =:= <<"worker">>,
+        is_binary(SubpoolId),
+        SubpoolId =/= <<>>,
+        is_binary(Name),
+        Name =/= <<>>,
+        is_binary(Pass) or (Pass =:= null) ->
+            
+            % Create record
+            Worker = #worker{
+                id=WorkerId,
+                sub_pool_id=SubpoolId,
+                name=Name,
+                pass=Pass
+            },
+            {ok, Worker};
+        
+        true ->
+            {error, invalid}
+    end.
