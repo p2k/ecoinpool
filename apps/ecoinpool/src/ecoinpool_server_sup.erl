@@ -34,7 +34,7 @@ start_link(SubpoolId) ->
     supervisor:start_link({global, {?MODULE, SubpoolId}}, ?MODULE, [SubpoolId]).
 
 start_coindaemon(SubpoolId, CoinDaemonModule, CoinDaemonConfig) ->
-    case supervisor:start_child({global, {?MODULE, SubpoolId}}, {coindaemon, {CoinDaemonModule, start_link, [CoinDaemonConfig]}, permanent, 5000, worker, [CoinDaemonModule]}) of
+    case supervisor:start_child({global, {?MODULE, SubpoolId}}, {coindaemon, {CoinDaemonModule, start_link, [SubpoolId, CoinDaemonConfig]}, permanent, 5000, worker, [CoinDaemonModule]}) of
         {ok, Pid, _} -> {ok, Pid};
         Other -> Other
     end.

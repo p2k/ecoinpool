@@ -24,7 +24,28 @@
 
 behaviour_info(callbacks) ->
     [
-        {start_link, 1} % start_link(Config) -- Config is a property list
+        % start_link(SubpoolId, Config)
+        %   Starts the CoinDaemon. Config is a property list.
+        %   Should return {ok, PID} for later reference or an error.
+        {start_link, 2},
+        % getwork_method()
+        %   Should return an atom which is the name of the only valid getwork
+        %   method (static); this is typically getwork for bitcoin networks and
+        %   sc_getwork for solidcoin networks.
+        {getwork_method, 0},
+        % sendwork_method()
+        %   Should return an atom which is the name of the method which is used
+        %   to return shares (static); this is typically getwork for bitcoin
+        %   networks and sc_testwork for solidcoin networks.
+        {sendwork_method, 0},
+        % get_workunit(PID)
+        %   Get an unassigned workunit now. Also check for a new block.
+        %   Should return {ok, Workunit} or {newblock, Workunit} or {error, Message}
+        {get_workunit, 1},
+        % encode_workunit(Workunit)
+        %   Encodes a workunit so it can be sent as result to a getwork call.
+        %   Should return a ejson-encodeable object.
+        {encode_workunit, 1}
     ];
 
 behaviour_info(_Other) ->

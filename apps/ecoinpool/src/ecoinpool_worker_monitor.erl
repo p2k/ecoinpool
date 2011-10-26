@@ -147,7 +147,7 @@ handle_cast({broadcast_update_worker, WorkerId}, State=#state{notify_map=NotifyM
             case dict:find(SubpoolId, NotifyMap) of
                 {ok, NotifySet} ->
                     sets:fold(
-                        fun (TargetSubpoolId, _) -> io:format("!!!~n"), ecoinpool_server:update_worker(TargetSubpoolId, Worker) end,
+                        fun (TargetSubpoolId, _) -> ecoinpool_server:update_worker(TargetSubpoolId, Worker) end,
                         ok,
                         NotifySet
                     );

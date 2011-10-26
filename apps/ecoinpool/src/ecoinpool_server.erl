@@ -22,6 +22,7 @@
 -behaviour(gen_server).
 
 -include("ecoinpool_db_records.hrl").
+-include("ecoinpool_workunit.hrl").
 
 -export([start_link/1, reload_config/1, update_worker/2, remove_worker/2, get_worker_notifications/1]).
 
@@ -39,12 +40,6 @@
     worktbl,
     workertbl,
     workerltbl
-}).
-
-% Workunit record
--record(workunit, {
-    id,
-    worker
 }).
 
 %% ===================================================================
@@ -85,7 +80,7 @@ init([SubpoolId]) ->
     process_flag(trap_exit, true),
     % Setup the work table and worker table
     WorkTbl = ets:new(worktbl, [set, protected, {keypos, 2}]),
-    WorkerTbl = ets:new(workertbl, [set, protected, {keypos, 3}]),
+    WorkerTbl = ets:new(workertbl, [set, protected, {keypos, 4}]),
     WorkerLookupTbl = ets:new(workerltbl, [set, protected]),
     % Get Subpool record; terminate on error
     {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
@@ -159,12 +154,35 @@ handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workert
     
     {noreply, State};
 
-handle_cast({rpc_request, Responder, _Method, _Params, Auth}, State=#state{}) ->
-    Responder({ok, list_to_binary(io_lib:print(Auth)), [longpolling]}),
+handle_cast({rpc_request, Responder, Method, _Params, Auth}, State=#state{cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, workertbl=WorkerTbl, worktbl=WorkTbl}) ->
+    % Always respond; first check the method
+    Responder(case CoinDaemonModule:getwork_method() of
+        Method -> % - Don't get confused here: this is a bound variable
+            % Now check the user
+            case Auth of
+                unauthorized ->
+                    {error, authorization_required};
+                {User, Password} ->
+                    case ets:lookup(WorkerTbl, User) of
+                        [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
+                            case assign_work(Worker, WorkTbl, CoinDaemonModule, CoinDaemon) of
+                                {ok, Result} ->
+                                    {ok, Result, []};
+                                {error, Message} ->
+                                    {error, {-1, Message}}
+                            end;
+                        [] ->
+                            {error, authorization_required}
+                    end
+            end;
+        _ ->
+            {error, method_not_found}
+    end),
     {noreply, State};
 
-handle_cast({rpc_lp_request, _SubpoolId, _Responder, _Auth}, State=#state{}) ->
+handle_cast({rpc_lp_request, _SubpoolId, Responder, _Auth}, State=#state{}) ->
     %TODO
+    Responder({error, {-1, <<"not implemented">>}}),
     {noreply, State};
 
 handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State=#state{workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
@@ -215,3 +233,35 @@ terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}}) ->
 
 code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
+
+%% ===================================================================
+%% Other functions
+%% ===================================================================
+
+assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon) ->
+    % Query the cache
+    Result = case ets:match(WorkTbl, #workunit{id='$1', worker_id=undefined, _='_'}, 1) of
+        {[WorkId], _Cont} -> % Cache hit
+            io:format("Chache hit!~n"),
+            [WU] = ets:lookup(WorkTbl, WorkId),
+            {ok, WU};
+        _ -> % Cache miss
+            io:format("Chache miss!~n"),
+            case CoinDaemonModule:get_workunit(CoinDaemon) of
+                {ok, WU} ->
+                    {ok, WU};
+                {newblock, WU} ->
+                    %TODO: React
+                    {ok, WU};
+                {error, Message} ->
+                    {error, Message}
+            end
+    end,
+    case Result of
+        {ok, Workunit} ->
+            % Update or add assigned work unit
+            ets:insert(WorkTbl, Workunit#workunit{worker_id=WorkerId}),
+            {ok, CoinDaemonModule:encode_workunit(Workunit)};
+        Other ->
+            Other
+    end.

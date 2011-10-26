@@ -22,25 +22,93 @@
 -behaviour(gen_coindaemon).
 -behaviour(gen_server).
 
--export([start_link/1]).
+-include("ecoinpool_workunit.hrl").
+
+-export([start_link/2, getwork_method/0, sendwork_method/0, get_workunit/1, encode_workunit/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+
+% Internal state record
+-record(state, {
+    subpool,
+    url,
+    auth,
+    timer,
+    block_num
+}).
+
+-record(sc_data, {
+    version,
+    hash_prev_block,
+    hash_merkle_root,
+    block_num,
+    time,
+    nonce1,
+    nonce2,
+    nonce3,
+    nonce4,
+    miner_id,
+    bits
+}).
 
 %% ===================================================================
 %% Gen_CoinDaemon API
 %% ===================================================================
 
-start_link(Config) ->
-    gen_server:start_link(?MODULE, [Config], []).
+start_link(SubpoolId, Config) ->
+    gen_server:start_link(?MODULE, [SubpoolId, Config], []).
+
+getwork_method() ->
+    sc_getwork.
+
+sendwork_method() ->
+    sc_testwork.
+
+get_workunit(PID) ->
+    gen_server:call(PID, get_workunit).
+
+encode_workunit(#workunit{target=Target, data=Data}) ->
+    {[
+        {data, encode_sc_data(Data)},
+        {target_share, <<"0x00007fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff">>},
+        {target_real, binary:list_to_bin(io_lib:format("0x~64.16.0b", [Target]))}
+    ]}.
 
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
 
-init([_Config]) ->
+init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
-    io:format("hello~n"),
-    {ok, []}.
+    io:format("SC CoinDaemin starting~n"),
+    
+    Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
+    Port = proplists:get_value(port, Config, 8555),
+    URL = lists:flatten(io_lib:format("http://~s:~b/", [Host, Port])),
+    User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
+    Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
+    
+    {ok, Timer} = timer:send_interval(1000, poll_daemon),
+    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
+
+handle_call(get_workunit, _From, State=#state{url=URL, auth=Auth, block_num=OldBlockNum}) ->
+    try
+        case getwork(URL, Auth) of
+            {ok, Workunit=#workunit{data=#sc_data{block_num=BlockNum}}} ->
+                case OldBlockNum of
+                    undefined ->
+                        {reply, {ok, Workunit}, State#state{block_num=BlockNum}};
+                    BlockNum -> % Note: bound variable
+                        {reply, {ok, Workunit}, State};
+                    _ -> % New block alarm!
+                        {reply, {newblock, Workunit}, State#state{block_num=BlockNum}}
+                end;
+            Other ->
+                Other
+        end
+    catch error:_ ->
+        {reply, {error, <<"exception in sc_coindaemon:getwork/2">>}, State}
+    end;
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
@@ -48,12 +116,97 @@ handle_call(_Message, _From, State) ->
 handle_cast(_Message, State) ->
     {noreply, State}.
 
+handle_info(poll_daemon, State) ->
+
+    {noreply, State};
+
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
-    io:format("bye~n"),
+terminate(_Reason, #state{timer=Timer}) ->
+    timer:cancel(Timer),
+    io:format("SC CoinDaemin stopping~n"),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
+
+%% ===================================================================
+%% Other functions
+%% ===================================================================
+
+getwork(URL, Auth) ->
+    PostData = "{\"method\":\"sc_getwork\"}",
+    {ok, VSN} = application:get_key(ecoinpool, vsn),
+    case ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]) of
+        {ok, "200", _ResponseHeaders, ResponseBody} ->
+            {Body} = ejson:decode(ResponseBody),
+            {Result} = proplists:get_value(<<"result">>, Body),
+            HexSCData = proplists:get_value(<<"data">>, Result),
+            SCData = decode_sc_data(HexSCData),
+            WUId = workunit_id_from_sc_data(SCData),
+            Target = ecoinpool_util:bits_to_target(SCData#sc_data.bits),
+            {ok, #workunit{id=WUId, target=Target, data=SCData}};
+        {ok, Status, _ResponseHeaders, ResponseBody} ->
+            {error, binary:list_to_bin(io_lib:format("Received HTTP ~s - Body: ~p", [Status, ResponseBody]))};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+decode_sc_data(HexSCData) ->
+    <<
+        Version:32/little,
+        HashPrevBlock:32/bytes,
+        HashMerkleRoot:32/bytes,
+        BlockNum:64/little,
+        Time:64/little,
+        Nonce1:64/unsigned-little,
+        Nonce2:64/unsigned-little,
+        Nonce3:64/unsigned-little,
+        Nonce4:32/unsigned-little,
+        MinerId:12/bytes,
+        Bits:32/little
+    >> = ecoinpool_util:hexbin_to_bin(HexSCData),
+    
+    #sc_data{version=Version,
+        hash_prev_block=HashPrevBlock,
+        hash_merkle_root=HashMerkleRoot,
+        block_num=BlockNum,
+        time=Time,
+        nonce1=Nonce1,
+        nonce2=Nonce2,
+        nonce3=Nonce3,
+        nonce4=Nonce4,
+        miner_id=MinerId,
+        bits=Bits}.
+
+encode_sc_data(SCData) ->
+    #sc_data{version=Version,
+        hash_prev_block=HashPrevBlock,
+        hash_merkle_root=HashMerkleRoot,
+        block_num=BlockNum,
+        time=Time,
+        nonce1=Nonce1,
+        nonce2=Nonce2,
+        nonce3=Nonce3,
+        nonce4=Nonce4,
+        miner_id=MinerId,
+        bits=Bits} = SCData,
+    
+    ecoinpool_util:bin_to_hexbin(<<
+        Version:32/little,
+        HashPrevBlock:32/bytes,
+        HashMerkleRoot:32/bytes,
+        BlockNum:64/little,
+        Time:64/little,
+        Nonce1:64/unsigned-little,
+        Nonce2:64/unsigned-little,
+        Nonce3:64/unsigned-little,
+        Nonce4:32/unsigned-little,
+        MinerId:12/bytes,
+        Bits:32/little
+    >>).
+
+workunit_id_from_sc_data(#sc_data{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, nonce2=Nonce2}) ->
+    Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes, Nonce2:64/unsigned-little>>,
+    crypto:sha(Data).
