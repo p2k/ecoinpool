@@ -37,6 +37,8 @@
     subpool,
     cdaemon_mod,
     cdaemon_pid,
+    gw_method,
+    sw_method,
     worktbl,
     workertbl,
     workerltbl
@@ -132,8 +134,10 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, cdaemon_m
             end;
         true -> {ok, OldCoinDaemon}
     end,
+    GetworkMethod = CoinDaemonModule:getwork_method(),
+    SendworkMethod = CoinDaemonModule:sendwork_method(),
     
-    {noreply, State#state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon}};
+    {noreply, State#state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod}};
 
 handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     ets:delete_all_objects(WorkerLookupTbl),
@@ -154,29 +158,54 @@ handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workert
     
     {noreply, State};
 
-handle_cast({rpc_request, Responder, Method, _Params, Auth}, State=#state{cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, workertbl=WorkerTbl, worktbl=WorkTbl}) ->
-    % Always respond; first check the method
-    Responder(case CoinDaemonModule:getwork_method() of
-        Method -> % - Don't get confused here: this is a bound variable
-            % Now check the user
+handle_cast({rpc_request, Responder, Method, Params, Auth}, State=#state{cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workertbl=WorkerTbl, worktbl=WorkTbl}) ->
+    % Check the method
+    Action = case Method of
+        GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
+            if
+                length(Params) =:= 0 -> getwork;
+                true -> sendwork
+            end;
+        GetworkMethod ->
+            getwork;
+        SendworkMethod ->
+            sendwork;
+        _ ->
+            unknown
+    end,
+    Responder(case Action of % First, match for validity
+        unknown -> % Bail out
+            {error, method_not_found};
+        _ ->
+            % Check authentication
             case Auth of
                 unauthorized ->
                     {error, authorization_required};
                 {User, Password} ->
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
-                            case assign_work(Worker, WorkTbl, CoinDaemonModule, CoinDaemon) of
-                                {ok, Result} ->
-                                    {ok, Result, []};
-                                {error, Message} ->
-                                    {error, {-1, Message}}
+                            case Action of % Now match for the action
+                                getwork ->
+                                    case assign_work(Worker, WorkTbl, CoinDaemonModule, CoinDaemon) of
+                                        {ok, Result} ->
+                                            {ok, Result, []};
+                                        {error, Message} ->
+                                            {error, {-1, Message}}
+                                    end;
+                                sendwork ->
+                                    case check_work(Params, WorkTbl, CoinDaemonModule, CoinDaemon) of
+                                        {ok, Result} ->
+                                            {ok, Result, []};
+                                        {error, invalid_request} ->
+                                            {error, invalid_request};
+                                        {error, Message} ->
+                                            {error, {-1, Message}}
+                                    end
                             end;
                         [] ->
                             {error, authorization_required}
                     end
-            end;
-        _ ->
-            {error, method_not_found}
+            end
     end),
     {noreply, State};
 
@@ -251,7 +280,8 @@ assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon) ->
                 {ok, WU} ->
                     {ok, WU};
                 {newblock, WU} ->
-                    %TODO: React
+                    io:format("New block!~n"),
+                    ets:delete_all_objects(WorkTbl), % Clear the work table
                     {ok, WU};
                 {error, Message} ->
                     {error, Message}
@@ -261,7 +291,28 @@ assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon) ->
         {ok, Workunit} ->
             % Update or add assigned work unit
             ets:insert(WorkTbl, Workunit#workunit{worker_id=WorkerId}),
+            io:format("Work: ~b~n", [ets:info(WorkTbl, size)]),
             {ok, CoinDaemonModule:encode_workunit(Workunit)};
         Other ->
             Other
     end.
+
+check_work([Data], WorkTbl, CoinDaemonModule, CoinDaemon) ->
+    %io:format("Data: ~p~n", [Data]),
+    % Lookup workunit
+    {WorkId, Hash} = CoinDaemonModule:analyze_result(Data),
+    case ets:member(WorkTbl, WorkId) of
+        true -> % Found, send in -- TODO check for duplicates and submit share
+            case CoinDaemonModule:send_result(CoinDaemon, Data) of
+                {error, Message} ->
+                    {error, Message};
+                {State, Reply} ->
+                    io:format("Result: ~p~n", [State]),
+                    {ok, Reply}
+            end;
+        _ -> % Not found
+            io:format("Stale!~n"),
+            {ok, CoinDaemonModule:stale_reply()}
+    end;
+check_work(_, _, _, _) ->
+    {error, invalid_request}.

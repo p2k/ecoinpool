@@ -28,24 +28,46 @@ behaviour_info(callbacks) ->
         %   Starts the CoinDaemon. Config is a property list.
         %   Should return {ok, PID} for later reference or an error.
         {start_link, 2},
+        
         % getwork_method()
         %   Should return an atom which is the name of the only valid getwork
         %   method (static); this is typically getwork for bitcoin networks and
         %   sc_getwork for solidcoin networks.
         {getwork_method, 0},
+        
         % sendwork_method()
         %   Should return an atom which is the name of the method which is used
         %   to return shares (static); this is typically getwork for bitcoin
         %   networks and sc_testwork for solidcoin networks.
         {sendwork_method, 0},
+        
         % get_workunit(PID)
         %   Get an unassigned workunit now. Also check for a new block.
         %   Should return {ok, Workunit} or {newblock, Workunit} or {error, Message}
         {get_workunit, 1},
+        
         % encode_workunit(Workunit)
         %   Encodes a workunit so it can be sent as result to a getwork call.
         %   Should return a ejson-encodeable object.
-        {encode_workunit, 1}
+        {encode_workunit, 1},
+        
+        % analyze_result(Result)
+        %   Should return a tuple {WorkunitId, Hash} from result data.
+        %   The hash should be in big-endian format. This is used to identify
+        %   and check the result against the target.
+        {analyze_result, 1},
+        
+        % stale_reply()
+        %   Should return a reply suitable to announce that stale work was sent
+        %   as a ejson-encodable object.
+        {stale_reply, 0},
+        
+        % send_result(PID, Data)
+        %   Sends in a result to the CoinDaemon.
+        %   Should return a tuple {State, Reply} where State can be valid,
+        %   winning or invalid and Reply is a ejson-encodeable object.
+        %   On error it should return {error, Message}.
+        {send_result, 2}
     ];
 
 behaviour_info(_Other) ->

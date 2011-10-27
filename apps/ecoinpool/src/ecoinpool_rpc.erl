@@ -175,6 +175,7 @@ make_responder(Req) ->
 % Valid methods are defined here
 parse_method(<<"getwork">>) -> getwork;
 parse_method(<<"sc_getwork">>) -> sc_getwork;
+parse_method(<<"sc_testwork">>) -> sc_testwork;
 
 parse_method(Other) when is_binary(Other) -> unknown;
 parse_method(_) -> invalid.
