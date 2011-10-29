@@ -4,7 +4,7 @@
   RealSolid's embarrassing 15 minutes of fame. Thank you RealSolid, my pleasure.
 */
 
-	.section .rodata
+	.section __TEXT,__const
 	.globl _BlockHash_1_MemoryPAD8
 
 _BlockHash_1_MemoryPAD8:

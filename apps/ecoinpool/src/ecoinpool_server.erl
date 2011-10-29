@@ -359,7 +359,7 @@ check_work(User, Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinD
                     Responder({ok, CoinDaemonModule:rejected_reply(), [{reject_reason, "Stale or unknown work"}]})
             end;
         _ ->
-            io:format("Wrong data from ~s/~s!~n", [User, Peer]),
+            io:format("Wrong data from ~s/~s!~n~p~n", [User, Peer, Params]),
             ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
             Responder({error, invalid_request})
     end.

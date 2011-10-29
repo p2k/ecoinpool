@@ -1,6 +1,6 @@
 #!/bin/bash
 
-rebar compile || exit 1
+./rebar compile || exit 1
 
 export ERL_LIBS="deps:apps"
 
