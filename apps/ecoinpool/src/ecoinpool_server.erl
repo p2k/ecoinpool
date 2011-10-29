@@ -24,10 +24,10 @@
 -include("ecoinpool_db_records.hrl").
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/1, reload_config/1, update_worker/2, remove_worker/2, get_worker_notifications/1]).
+-export([start_link/1, reload_config/1, update_worker/2, remove_worker/2, get_worker_notifications/1, store_workunit/2, new_block_detected/1]).
 
 % Callbacks from ecoinpool_rpc
--export([rpc_request/5, rpc_lp_request/3]).
+-export([rpc_request/6, rpc_lp_request/4]).
 
 % Callbacks from gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -54,11 +54,11 @@ start_link(SubpoolId) ->
 reload_config(Subpool=#subpool{id=Id}) ->
     gen_server:cast({global, {subpool, Id}}, {reload_config, Subpool}).
 
-rpc_request(PID, Responder, Method, Params, Auth) ->
-    gen_server:cast(PID, {rpc_request, Responder, Method, Params, Auth}).
+rpc_request(PID, Peer, Method, Params, Auth, Responder) ->
+    gen_server:cast(PID, {rpc_request, Peer, Method, Params, Auth, Responder}).
 
-rpc_lp_request(PID, Responder, Auth) ->
-    gen_server:cast(PID, {rpc_lp_request, Responder, Auth}).
+rpc_lp_request(PID, Peer, Auth, Responder) ->
+    gen_server:cast(PID, {rpc_lp_request, Peer, Auth, Responder}).
 
 update_worker(SubpoolId, Worker) ->
     gen_server:cast({global, {subpool, SubpoolId}}, {update_worker, Worker}).
@@ -72,6 +72,12 @@ remove_worker(SubpoolId, WorkerId) ->
 get_worker_notifications(SubpoolId) ->
     gen_server:call({global, {subpool, SubpoolId}}, get_worker_notifications).
 
+store_workunit(SubpoolId, Workunit) ->
+    gen_server:cast({global, {subpool, SubpoolId}}, {store_workunit, Workunit}).
+
+new_block_detected(SubpoolId) ->
+    gen_server:cast({global, {subpool, SubpoolId}}, new_block_detected).
+
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
@@ -82,7 +88,7 @@ init([SubpoolId]) ->
     process_flag(trap_exit, true),
     % Setup the work table and worker table
     WorkTbl = ets:new(worktbl, [set, protected, {keypos, 2}]),
-    WorkerTbl = ets:new(workertbl, [set, protected, {keypos, 4}]),
+    WorkerTbl = ets:new(workertbl, [set, protected, {keypos, 5}]),
     WorkerLookupTbl = ets:new(workerltbl, [set, protected]),
     % Get Subpool record; terminate on error
     {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
@@ -107,6 +113,9 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, cdaemon_m
     #subpool{port=OldPort, coin_daemon_config=OldCoinDaemonConfig} = OldSubpool,
     % Derive the CoinDaemon module name from PoolType + "_coindaemon"
     CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
+    
+    % Setup the shares database
+    ok = ecoinpool_db:setup_shares_db(Subpool),
     
     % Check the RPC settings; if anything goes wrong, terminate
     StartRPC = if
@@ -158,7 +167,9 @@ handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workert
     
     {noreply, State};
 
-handle_cast({rpc_request, Responder, Method, Params, Auth}, State=#state{cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workertbl=WorkerTbl, worktbl=WorkTbl}) ->
+handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
+    % Extract state variables
+    #state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workertbl=WorkerTbl, worktbl=WorkTbl} = State,
     % Check the method
     Action = case Method of
         GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
@@ -170,48 +181,53 @@ handle_cast({rpc_request, Responder, Method, Params, Auth}, State=#state{cdaemon
             getwork;
         SendworkMethod ->
             sendwork;
+        default -> % Getwork is default
+            getwork;
         _ ->
             unknown
     end,
-    Responder(case Action of % First, match for validity
+    case Action of % First, match for validity
         unknown -> % Bail out
-            {error, method_not_found};
+            Responder({error, method_not_found});
         _ ->
             % Check authentication
             case Auth of
                 unauthorized ->
-                    {error, authorization_required};
+                    io:format("rpc_request: ~s: Unauthorized!~n", [Peer]),
+                    Responder({error, authorization_required});
                 {User, Password} ->
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
                             case Action of % Now match for the action
                                 getwork ->
-                                    case assign_work(Worker, WorkTbl, CoinDaemonModule, CoinDaemon) of
-                                        {ok, Result} ->
-                                            {ok, Result, []};
-                                        {error, Message} ->
-                                            {error, {-1, Message}}
+                                    case assign_work(Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) of
+                                        hit -> io:format("Cache hit by ~s/~s!~n", [User, Peer]);
+                                        miss -> io:format("Cache miss by ~s/~s!~n", [User, Peer])
                                     end;
                                 sendwork ->
-                                    case check_work(Params, WorkTbl, CoinDaemonModule, CoinDaemon) of
-                                        {ok, Result} ->
-                                            {ok, Result, []};
-                                        {error, invalid_request} ->
-                                            {error, invalid_request};
-                                        {error, Message} ->
-                                            {error, {-1, Message}}
-                                    end
+                                    check_work(User, Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder)
                             end;
                         [] ->
-                            {error, authorization_required}
+                            io:format("rpc_request: ~s: Wrong password for username ~p!~n", [Peer, User]),
+                            Responder({error, authorization_required})
                     end
             end
-    end),
+    end,
     {noreply, State};
 
-handle_cast({rpc_lp_request, _SubpoolId, Responder, _Auth}, State=#state{}) ->
+handle_cast({rpc_lp_request, _Peer, _Auth, Responder}, State=#state{}) ->
     %TODO
     Responder({error, {-1, <<"not implemented">>}}),
+    {noreply, State};
+
+handle_cast(new_block_detected, State=#state{worktbl=WorkTbl}) ->
+    io:format("New block! Removing ~b workunits.~n", [ets:info(WorkTbl, size)]),
+    ets:delete_all_objects(WorkTbl), % Clear the work table
+    %TODO longpolling
+    {noreply, State};
+
+handle_cast({store_workunit, Workunit}, State=#state{worktbl=WorkTbl}) ->
+    ets:insert(WorkTbl, Workunit),
     {noreply, State};
 
 handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State=#state{workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
@@ -267,52 +283,83 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon) ->
+assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
     % Query the cache
-    Result = case ets:match(WorkTbl, #workunit{id='$1', worker_id=undefined, _='_'}, 1) of
-        {[WorkId], _Cont} -> % Cache hit
-            io:format("Chache hit!~n"),
-            [WU] = ets:lookup(WorkTbl, WorkId),
-            {ok, WU};
-        _ -> % Cache miss
-            io:format("Chache miss!~n"),
-            case CoinDaemonModule:get_workunit(CoinDaemon) of
-                {ok, WU} ->
-                    {ok, WU};
-                {newblock, WU} ->
-                    io:format("New block!~n"),
-                    ets:delete_all_objects(WorkTbl), % Clear the work table
-                    {ok, WU};
-                {error, Message} ->
-                    {error, Message}
-            end
-    end,
-    case Result of
-        {ok, Workunit} ->
-            % Update or add assigned work unit
+    case ets:match_object(WorkTbl, #workunit{worker_id=undefined, _='_'}, 1) of
+        {[Workunit], _Cont} -> % Cache hit
             ets:insert(WorkTbl, Workunit#workunit{worker_id=WorkerId}),
-            io:format("Work: ~b~n", [ets:info(WorkTbl, size)]),
-            {ok, CoinDaemonModule:encode_workunit(Workunit)};
-        Other ->
-            Other
+            Responder({ok, CoinDaemonModule:encode_workunit(Workunit)}),
+            hit;
+        _ -> % Cache miss
+            % Spawn a process to get work
+            ServerPID = self(),
+            spawn(
+                fun () ->
+                    Responder(case CoinDaemonModule:get_workunit(CoinDaemon) of
+                        {error, Message} ->
+                            {error, {-1, Message}};
+                        {Success, Workunit} ->
+                            case Success of
+                                newblock ->
+                                    gen_server:cast(ServerPID, new_block_detected);
+                                _ ->
+                                    ok
+                            end,
+                            gen_server:cast(ServerPID, {store_workunit, Workunit#workunit{worker_id=WorkerId}}),
+                            {ok, CoinDaemonModule:encode_workunit(Workunit)}
+                    end)
+                end
+            ),
+            miss
     end.
 
-check_work([Data], WorkTbl, CoinDaemonModule, CoinDaemon) ->
-    %io:format("Data: ~p~n", [Data]),
-    % Lookup workunit
-    {WorkId, Hash} = CoinDaemonModule:analyze_result(Data),
-    case ets:member(WorkTbl, WorkId) of
-        true -> % Found, send in -- TODO check for duplicates and submit share
-            case CoinDaemonModule:send_result(CoinDaemon, Data) of
-                {error, Message} ->
-                    {error, Message};
-                {State, Reply} ->
-                    io:format("Result: ~p~n", [State]),
-                    {ok, Reply}
+check_work(User, Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
+    % Analyze result
+    case CoinDaemonModule:analyze_result(Params) of
+        {WorkId, Hash, BData} ->
+            % Lookup workunit
+            case ets:lookup(WorkTbl, WorkId) of
+                [Workunit] -> % Found
+                    ShareTarget = CoinDaemonModule:share_target(),
+                    if % Validate
+                        Hash < ShareTarget ->
+                            % Submit share to database and also to the daemon if it isn't a duplicate and meets the work target
+                            spawn(
+                                fun () ->
+                                    Responder(case ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash) of
+                                        duplicate ->
+                                            io:format("Duplicate work from ~s/~s!~n", [User, Peer]),
+                                            {ok, CoinDaemonModule:rejected_reply(), [{reject_reason, "Duplicate work"}]};
+                                        candidate -> % We got a winner (?)
+                                            case CoinDaemonModule:send_result(CoinDaemon, BData) of
+                                                {accepted, Reply} ->
+                                                    io:format("Data sent upstream from ~s/~s got accepted!~n", [User, Peer]),
+                                                    {ok, Reply};
+                                                {rejected, Reply} ->
+                                                    io:format("Data sent upstream from ~s/~s got rejected!~n", [User, Peer]),
+                                                    {ok, Reply, [{reject_reason, "Rejected by coin daemon"}]};
+                                                {error, Message} ->
+                                                    io:format("Upstream error from ~s/~s! Message: ~p~n", [User, Peer, Message]),
+                                                    {error, {-1, Message}}
+                                            end;
+                                        valid -> % consolation prize
+                                            io:format("Got valid share from ~s/~s.~n", [User, Peer]),
+                                            {ok, CoinDaemonModule:normal_reply(Hash)}
+                                    end)
+                                end
+                            );
+                        true ->
+                            io:format("Invalid hash from ~s/~s!~n", [User, Peer]),
+                            ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
+                            Responder({ok, CoinDaemonModule:rejected_reply(), [{reject_reason, "Hash does not meet share target"}]})
+                    end;
+                _ -> % Not found
+                    io:format("Stale share from ~s/~s!~n", [User, Peer]),
+                    ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, stale),
+                    Responder({ok, CoinDaemonModule:rejected_reply(), [{reject_reason, "Stale or unknown work"}]})
             end;
-        _ -> % Not found
-            io:format("Stale!~n"),
-            {ok, CoinDaemonModule:stale_reply()}
-    end;
-check_work(_, _, _, _) ->
-    {error, invalid_request}.
+        _ ->
+            io:format("Wrong data from ~s/~s!~n", [User, Peer]),
+            ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
+            Responder({error, invalid_request})
+    end.

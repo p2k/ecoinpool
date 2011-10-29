@@ -41,4 +41,5 @@ list_to_hexstr(L) ->
     lists:flatten([io_lib:format("~2.16.0b", [X]) || X <- L]).
 
 bits_to_target(B) ->
-    (B band 16#ffffff) bsl ((B bsr 24 - 3) bsl 3).
+    I = (B band 16#ffffff) bsl ((B bsr 24 - 3) bsl 3),
+    <<I:256>>.

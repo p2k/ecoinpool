@@ -119,11 +119,13 @@ respond_success(Req, ReqId, Result, Options) ->
     ),
     % Create headers from options
     Headers = lists:foldl(
-        fun (Option, AccHeaders) ->
-            case Option of
-                longpolling -> [{"X-Long-Polling", "/LP"} | AccHeaders];
-                _ -> AccHeaders
-            end
+        fun
+            (longpolling, AccHeaders) ->
+                [{"X-Long-Polling", "/LP"} | AccHeaders];
+            ({reject_reason, Reason}, AccHeaders) ->
+                [{"X-Reject-Reason", Reason} | AccHeaders];
+            (_, AccHeaders) ->
+                AccHeaders
         end,
         [],
         Options
@@ -195,7 +197,7 @@ handle_post(SubpoolPID, Req, Auth) ->
                             Method ->
                                 case proplists:get_value(<<"params">>, Properties, []) of
                                     Params when is_list(Params) ->
-                                        ecoinpool_server:rpc_request(SubpoolPID, make_responder(Req, ReqId), Method, Params, Auth);
+                                        ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), Method, Params, Auth, make_responder(Req, ReqId));
                                     _ ->
                                         respond_error(Req, ReqId, invalid_request)
                                 end
@@ -231,9 +233,9 @@ handle_request(SubpoolPID, Req) ->
                 'GET' ->
                     case Req:get(path) of
                         "/" -> % Normal request - use default handler
-                            ecoinpool_server:rpc_request(SubpoolPID, make_responder(Req), default, [], Auth);
+                            ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), default, [], Auth, make_responder(Req));
                         "/LP" -> % Longpolling
-                            ecoinpool_server:rpc_lp_request(SubpoolPID, make_responder(Req), Auth);
+                            ecoinpool_server:rpc_lp_request(SubpoolPID, Req:get(peer), Auth, make_responder(Req));
                         _ ->
                             respond_error(Req, method_not_found)
                     end;

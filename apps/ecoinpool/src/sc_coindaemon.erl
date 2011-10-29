@@ -24,7 +24,7 @@
 
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/2, getwork_method/0, sendwork_method/0, get_workunit/1, encode_workunit/1, analyze_result/1, stale_reply/0, send_result/2]).
+-export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, get_workunit/1, encode_workunit/1, analyze_result/1, rejected_reply/0, normal_reply/1, send_result/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -64,34 +64,53 @@ getwork_method() ->
 sendwork_method() ->
     sc_testwork.
 
+share_target() ->
+    <<16#00007fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff:256>>.
+
 get_workunit(PID) ->
     gen_server:call(PID, get_workunit).
 
 encode_workunit(#workunit{target=Target, data=Data}) ->
+    HexTarget = ecoinpool_util:bin_to_hexbin(Target),
     {[
-        {data, encode_sc_data(Data)},
-        {target_share, <<"0x00007fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff">>},
-        {target_real, binary:list_to_bin(io_lib:format("0x~64.16.0b", [Target]))}
+        {<<"data">>, ecoinpool_util:bin_to_hexbin(Data)},
+        {<<"target_share">>, <<"0x00007fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff">>},
+        {<<"target_real">>, <<"0x", HexTarget/bytes>>}
     ]}.
 
-analyze_result(Result) ->
-    BinResult = ecoinpool_util:hexbin_to_bin(Result),
-    SCData = decode_sc_data(BinResult),
-    WorkunitId = workunit_id_from_sc_data(SCData),
-    Hash = rs_hash:block_hash(BinResult),
-    {WorkunitId, Hash}.
+analyze_result([Data]) when is_binary(Data), byte_size(Data) =:= 256 ->
+    case catch ecoinpool_util:hexbin_to_bin(Data) of
+        {'EXIT', _} ->
+            error;
+        BData ->
+            SCData = decode_sc_data(BData),
+            WorkunitId = workunit_id_from_sc_data(SCData),
+            Hash = rs_hash:block_hash(BData),
+            {WorkunitId, Hash, BData}
+    end;
+analyze_result(_) ->
+    error.
 
-stale_reply() ->
+rejected_reply() ->
     {[
-        {work, [{[
-            {share_valid, false},
-            {block_valid, false},
-            {block_hash, <<"0000000000000000000000000000000000000000000000000000000000000000">>}
+        {<<"work">>, [{[
+            {<<"share_valid">>, false},
+            {<<"block_valid">>, false},
+            {<<"block_hash">>, <<"0000000000000000000000000000000000000000000000000000000000000000">>}
         ]}]}
     ]}.
 
-send_result(PID, Data) ->
-    gen_server:call(PID, {send_result, Data}).
+normal_reply(Hash) ->
+    {[
+        {<<"work">>, [{[
+            {<<"share_valid">>, true},
+            {<<"block_valid">>, false},
+            {<<"block_hash">>, Hash}
+        ]}]}
+    ]}.
+
+send_result(PID, BData) ->
+    gen_server:call(PID, {send_result, BData}).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -112,28 +131,13 @@ init([SubpoolId, Config]) ->
     {ok, Timer} = timer:send_interval(1000, poll_daemon),
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 
-handle_call(get_workunit, _From, State=#state{url=URL, auth=Auth, block_num=OldBlockNum}) ->
-    try
-        case getwork(URL, Auth) of
-            {ok, Workunit=#workunit{data=#sc_data{block_num=BlockNum}}} ->
-                case OldBlockNum of
-                    undefined ->
-                        {reply, {ok, Workunit}, State#state{block_num=BlockNum}};
-                    BlockNum -> % Note: bound variable
-                        {reply, {ok, Workunit}, State};
-                    _ -> % New block alarm!
-                        {reply, {newblock, Workunit}, State#state{block_num=BlockNum}}
-                end;
-            {error, Reason} ->
-                {reply, {error, Reason}, State}
-        end
-    catch error:_ ->
-        {reply, {error, <<"exception in sc_coindaemon:getwork/2">>}, State}
-    end;
+handle_call(get_workunit, _From, State) ->
+    {Result, WorkunitOrMessage, NewState} = getwork_with_state(State),
+    {reply, {Result, WorkunitOrMessage}, NewState};
 
-handle_call({send_result, Data}, _From, State=#state{url=URL, auth=Auth}) ->
+handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth}) ->
     try
-        {reply, sendwork(URL, Auth, Data), State}
+        {reply, sendwork(URL, Auth, BData), State}
     catch error:_ ->
         {reply, {error, <<"exception in sc_coindaemon:sendwork/3">>}, State}
     end;
@@ -144,16 +148,26 @@ handle_call(_Message, _From, State) ->
 handle_cast(_Message, State) ->
     {noreply, State}.
 
-handle_info(poll_daemon, State) ->
-
-    {noreply, State};
+handle_info(poll_daemon, State=#state{subpool=SubpoolId}) ->
+    case getwork_with_state(State) of
+        {error, Reason, NState} ->
+            io:format("exception in sc_coindaemon-poll_daemon: ~p~n", Reason),
+            {noreply, NState};
+        {Result, Workunit, NState} ->
+            case Result of
+                newblock -> ecoinpool_server:new_block_detected(SubpoolId);
+                _ -> ok
+            end,
+            ecoinpool_server:store_workunit(SubpoolId, Workunit),
+            {noreply, NState}
+    end;
 
 handle_info(_Message, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{timer=Timer}) ->
     timer:cancel(Timer),
-    io:format("SC CoinDaemin stopping~n"),
+    io:format("SC CoinDaemon stopping~n"),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -163,6 +177,25 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
+getwork_with_state(State=#state{url=URL, auth=Auth, block_num=OldBlockNum}) ->
+    try
+        case getwork(URL, Auth) of
+            {ok, Workunit=#workunit{block_num=BlockNum}} ->
+                case OldBlockNum of
+                    undefined ->
+                        {ok, Workunit, State#state{block_num=BlockNum}};
+                    BlockNum -> % Note: bound variable
+                        {ok, Workunit, State};
+                    _ -> % New block alarm!
+                        {newblock, Workunit, State#state{block_num=BlockNum}}
+                end;
+            {error, Reason} ->
+                {error, Reason, State}
+        end
+    catch error:_ ->
+        {error, <<"exception in sc_coindaemon:getwork/2">>, State}
+    end.
+
 getwork(URL, Auth) ->
     PostData = "{\"method\":\"sc_getwork\"}",
     {ok, VSN} = application:get_key(ecoinpool, vsn),
@@ -170,19 +203,22 @@ getwork(URL, Auth) ->
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
             {Result} = proplists:get_value(<<"result">>, Body),
-            HexSCData = proplists:get_value(<<"data">>, Result),
-            SCData = decode_sc_data(HexSCData),
+            Data = proplists:get_value(<<"data">>, Result),
+            BData = ecoinpool_util:hexbin_to_bin(Data),
+            SCData = decode_sc_data(BData),
             WUId = workunit_id_from_sc_data(SCData),
-            Target = ecoinpool_util:bits_to_target(SCData#sc_data.bits),
-            {ok, #workunit{id=WUId, target=Target, data=SCData}};
+            #sc_data{bits=Bits, block_num=BlockNum} = SCData,
+            Target = ecoinpool_util:bits_to_target(Bits),
+            {ok, #workunit{id=WUId, target=Target, block_num=BlockNum, data=BData}};
         {ok, Status, _ResponseHeaders, ResponseBody} ->
             {error, binary:list_to_bin(io_lib:format("getwork: Received HTTP ~s - Body: ~p", [Status, ResponseBody]))};
         {error, Reason} ->
             {error, Reason}
     end.
 
-sendwork(URL, Auth, Data) ->
-    PostData = "{\"method\":\"sc_testwork\",\"params\":[\"" ++ binary:bin_to_list(Data) ++ "\"]}",
+sendwork(URL, Auth, BData) ->
+    HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
+    PostData = "{\"method\":\"sc_testwork\",\"params\":[\"" ++ HexData ++ "\"]}",
     {ok, VSN} = application:get_key(ecoinpool, vsn),
     case ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
@@ -192,12 +228,9 @@ sendwork(URL, Auth, Data) ->
             [{Work}] = proplists:get_value(<<"work">>, Reply),
             case proplists:get_value(<<"share_valid">>, Work) of
                 true ->
-                    case proplists:get_value(<<"block_valid">>, Work) of
-                        true -> {winning, ReplyObj};
-                        _ -> {valid, ReplyObj}
-                    end;
+                    {accepted, ReplyObj};
                 _ ->
-                    {invalid, ReplyObj}
+                    {rejected, ReplyObj}
             end;
         {ok, Status, _ResponseHeaders, ResponseBody} ->
             {error, binary:list_to_bin(io_lib:format("sendwork: Received HTTP ~s - Body: ~p", [Status, ResponseBody]))};
@@ -205,7 +238,7 @@ sendwork(URL, Auth, Data) ->
             {error, Reason}
     end.
 
-decode_sc_data(SCData) when byte_size(SCData) =:= 128 ->
+decode_sc_data(SCData) ->
     <<
         Version:32/little,
         HashPrevBlock:32/bytes,
@@ -230,36 +263,7 @@ decode_sc_data(SCData) when byte_size(SCData) =:= 128 ->
         nonce3=Nonce3,
         nonce4=Nonce4,
         miner_id=MinerId,
-        bits=Bits};
-decode_sc_data(HexSCData) ->
-    decode_sc_data(ecoinpool_util:hexbin_to_bin(HexSCData)).
-
-encode_sc_data(SCData) ->
-    #sc_data{version=Version,
-        hash_prev_block=HashPrevBlock,
-        hash_merkle_root=HashMerkleRoot,
-        block_num=BlockNum,
-        time=Time,
-        nonce1=Nonce1,
-        nonce2=Nonce2,
-        nonce3=Nonce3,
-        nonce4=Nonce4,
-        miner_id=MinerId,
-        bits=Bits} = SCData,
-    
-    ecoinpool_util:bin_to_hexbin(<<
-        Version:32/little,
-        HashPrevBlock:32/bytes,
-        HashMerkleRoot:32/bytes,
-        BlockNum:64/little,
-        Time:64/little,
-        Nonce1:64/unsigned-little,
-        Nonce2:64/unsigned-little,
-        Nonce3:64/unsigned-little,
-        Nonce4:32/unsigned-little,
-        MinerId:12/bytes,
-        Bits:32/little
-    >>).
+        bits=Bits}.
 
 workunit_id_from_sc_data(#sc_data{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, nonce2=Nonce2}) ->
     Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes, Nonce2:64/unsigned-little>>,

@@ -32,6 +32,7 @@
 
 -record(worker, {
     id :: binary(),
+    user_id :: term(),
     sub_pool_id :: binary(),
     name :: binary(),
     pass :: binary() | atom()

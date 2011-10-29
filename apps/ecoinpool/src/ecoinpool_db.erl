@@ -22,8 +22,9 @@
 -behaviour(gen_server).
 
 -include("ecoinpool_db_records.hrl").
+-include("ecoinpool_workunit.hrl").
 
--export([start_link/1, get_configuration/0, get_subpool_record/1, get_worker_record/1, get_workers_for_subpools/1]).
+-export([start_link/1, get_configuration/0, get_subpool_record/1, get_worker_record/1, get_workers_for_subpools/1, setup_shares_db/1, store_share/5, store_invalid_share/4, store_invalid_share/6]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -52,6 +53,18 @@ get_worker_record(WorkerId) ->
 get_workers_for_subpools(SubpoolIds) ->
     gen_server:call(?MODULE, {get_workers_for_subpools, SubpoolIds}).
 
+setup_shares_db(Subpool) ->
+    gen_server:call(?MODULE, {setup_shares_db, Subpool}).
+
+store_share(Subpool, IP, Worker, Workunit, Hash) ->
+    gen_server:call(?MODULE, {store_share, Subpool, IP, Worker, Workunit, Hash}).
+
+store_invalid_share(Subpool, IP, Worker, Reason) ->
+    store_invalid_share(Subpool, IP, Worker, undefined, undefined, Reason).
+
+store_invalid_share(Subpool, IP, Worker, Workunit, Hash, Reason) ->
+    gen_server:cast(?MODULE, {store_invalid_share, Subpool, IP, Worker, Workunit, Hash, Reason}).
+
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
@@ -62,7 +75,7 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
     % Open database
     ConfDb = case couchbeam:open_or_create_db(S, "ecoinpool", []) of
         {ok, TheConfDb} -> TheConfDb;
-        {error, Error} -> io:format("couchbeam:open_or_create_db returned an error: ~p~n", [Error]), throw({error, Error})
+        {error, Error} -> io:format("couchbeam:open_or_create_db/3 returned an error: ~p~n", [Error]), throw({error, Error})
     end,
     % Start config & worker monitor (asynchronously)
     gen_server:cast(?MODULE, start_monitors),
@@ -94,47 +107,8 @@ handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
 handle_call({get_subpool_record, SubpoolId}, _From, State=#state{conf_db=ConfDb}) ->
     % Retrieve document
     case couchbeam:open_doc(ConfDb, SubpoolId) of
-        {ok, {DocProps}} ->
-            % Unpack and parse data
-            DocType = proplists:get_value(<<"type">>, DocProps),
-            Name = proplists:get_value(<<"name">>, DocProps),
-            Port = proplists:get_value(<<"port">>, DocProps),
-            PoolType = case proplists:get_value(<<"pool_type">>, DocProps) of
-                <<"btc">> -> btc;
-                <<"nmc">> -> nmc;
-                <<"sc">> -> sc;
-                _ -> undefined
-            end,
-            CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
-                {CDP} ->
-                    lists:map(
-                        fun ({BinName, Value}) -> {binary_to_atom(BinName, utf8), Value} end,
-                        CDP
-                    );
-                _ ->
-                    []
-            end,
-            
-            if % Validate data
-                DocType =:= <<"sub-pool">>,
-                is_binary(Name),
-                Name =/= <<>>,
-                is_integer(Port),
-                PoolType =/= undefined ->
-                    
-                    % Create record
-                    Subpool = #subpool{
-                        id=SubpoolId,
-                        name=Name,
-                        port=Port,
-                        pool_type=PoolType,
-                        coin_daemon_config=CoinDaemonConfig
-                    },
-                    {reply, {ok, Subpool}, State};
-                
-                true ->
-                    {reply, {error, invalid}, State}
-            end;
+        {ok, Doc} ->
+            {reply, parse_subpool_document(SubpoolId, Doc), State};
         _ ->
             {reply, {error, missing}, State}
     end;
@@ -166,6 +140,36 @@ handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=
     ),
     {reply, Workers, State};
 
+handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{srv_conn=S}) ->
+    case couchbeam:open_or_create_db(S, SubpoolName, []) of
+        {error, Error} ->
+            io:format("setup_share_db - couchbeam:open_or_create_db/3 returned an error: ~p~n", [Error]),
+            {reply, error, State};
+        {ok, _} ->
+            {reply, ok, State}
+    end;
+
+handle_call({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, _From, State=#state{srv_conn=S}) ->
+    try
+        {ok, DB} = couchbeam:open_db(S, SubpoolName),
+        HexHash = ecoinpool_util:bin_to_hexbin(Hash),
+        QKey = <<34, HexHash/bytes, 34>>,
+        case couchbeam_view:count(DB, {"check", "hash"}, [{start_key, QKey}, {end_key, QKey}, {limit, 1}]) of
+            0 ->
+                Quality = if
+                    Hash < Target -> candidate;
+                    true -> valid
+                end,
+                couchbeam:save_doc(DB, make_share_document(WorkerId, UserId, IP, Quality, HexHash, Target, BlockNum, BData)),
+                {reply, Quality, State};
+            _ ->
+                couchbeam:save_doc(DB, make_reject_share_document(WorkerId, UserId, IP, duplicate, HexHash, Target, BlockNum)),
+                {reply, duplicate, State}
+        end
+    catch error:_ ->
+        {reply, error, State}
+    end;
+
 handle_call(_Message, _From, State=#state{}) ->
     {reply, error, State}.
 
@@ -177,6 +181,21 @@ handle_cast(start_monitors, State=#state{conf_db=ConfDb}) ->
     case ecoinpool_db_sup:start_worker_monitor(ConfDb) of
         ok -> ok;
         {error, {already_started, _}} -> ok
+    end,
+    {noreply, State};
+
+handle_cast({store_invalid_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
+    Document = case Workunit of
+        undefined ->
+            make_reject_share_document(WorkerId, UserId, IP, Reason);
+        #workunit{target=Target, block_num=BlockNum} ->
+            make_reject_share_document(WorkerId, UserId, IP, Reason, ecoinpool_util:bin_to_hexbin(Hash), Target, BlockNum)
+    end,
+    try
+        {ok, DB} = couchbeam:open_db(S, SubpoolName),
+        couchbeam:save_doc(DB, Document)
+    catch error:_ ->
+        ok
     end,
     {noreply, State};
 
@@ -192,8 +211,50 @@ terminate(_Reason, _State) ->
 code_change(_OldVersion, State=#state{}, _Extra) ->
     {ok, State}.
 
+parse_subpool_document(SubpoolId, {DocProps}) ->
+    DocType = proplists:get_value(<<"type">>, DocProps),
+    Name = proplists:get_value(<<"name">>, DocProps),
+    Port = proplists:get_value(<<"port">>, DocProps),
+    PoolType = case proplists:get_value(<<"pool_type">>, DocProps) of
+        <<"btc">> -> btc;
+        <<"nmc">> -> nmc;
+        <<"sc">> -> sc;
+        _ -> undefined
+    end,
+    CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
+        {CDP} ->
+            lists:map(
+                fun ({BinName, Value}) -> {binary_to_atom(BinName, utf8), Value} end,
+                CDP
+            );
+        _ ->
+            []
+    end,
+    
+    if
+        DocType =:= <<"sub-pool">>,
+        is_binary(Name),
+        Name =/= <<>>,
+        is_integer(Port),
+        PoolType =/= undefined ->
+            
+            % Create record
+            Subpool = #subpool{
+                id=SubpoolId,
+                name=Name,
+                port=Port,
+                pool_type=PoolType,
+                coin_daemon_config=CoinDaemonConfig
+            },
+            {ok, Subpool};
+        
+        true ->
+            {error, invalid}
+    end.
+
 parse_worker_document(WorkerId, {DocProps}) ->
     DocType = proplists:get_value(<<"type">>, DocProps),
+    UserId = proplists:get_value(<<"user_id">>, DocProps, null),
     SubpoolId = proplists:get_value(<<"sub_pool_id">>, DocProps),
     Name = proplists:get_value(<<"name">>, DocProps),
     Pass = proplists:get_value(<<"pass">>, DocProps, null),
@@ -209,6 +270,7 @@ parse_worker_document(WorkerId, {DocProps}) ->
             % Create record
             Worker = #worker{
                 id=WorkerId,
+                user_id=UserId,
                 sub_pool_id=SubpoolId,
                 name=Name,
                 pass=Pass
@@ -218,3 +280,42 @@ parse_worker_document(WorkerId, {DocProps}) ->
         true ->
             {error, invalid}
     end.
+
+make_share_document(WorkerId, UserId, IP, State, HexHash, Target, BlockNum, BData) ->
+    {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
+    {[
+        {<<"worker_id">>, WorkerId},
+        {<<"user_id">>, UserId},
+        {<<"ip">>, binary:list_to_bin(IP)},
+        {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
+        {<<"state">>, State},
+        {<<"hash">>, HexHash},
+        {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
+        {<<"block_num">>, BlockNum},
+        {<<"data">>, base64:encode(BData)}
+    ]}.
+
+make_reject_share_document(WorkerId, UserId, IP, Reason, HexHash, Target, BlockNum) ->
+    {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
+    {[
+        {<<"worker_id">>, WorkerId},
+        {<<"user_id">>, UserId},
+        {<<"ip">>, binary:list_to_bin(IP)},
+        {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
+        {<<"state">>, <<"invalid">>},
+        {<<"reject_reason">>, atom_to_binary(Reason, latin1)},
+        {<<"hash">>, HexHash},
+        {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
+        {<<"block_num">>, BlockNum}
+    ]}.
+
+make_reject_share_document(WorkerId, UserId, IP, Reason) ->
+    {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
+    {[
+        {<<"worker_id">>, WorkerId},
+        {<<"user_id">>, UserId},
+        {<<"ip">>, binary:list_to_bin(IP)},
+        {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
+        {<<"state">>, <<"invalid">>},
+        {<<"reject_reason">>, atom_to_binary(Reason, latin1)}
+    ]}.

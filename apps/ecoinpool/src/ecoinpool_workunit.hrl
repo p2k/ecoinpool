@@ -20,8 +20,9 @@
 
 % Workunit record
 -record(workunit, {
-    id,
-    target,
-    data,
-    worker_id
+    id :: binary(),
+    target :: binary(),
+    block_num :: integer(),
+    data :: binary(),
+    worker_id :: binary()
 }).

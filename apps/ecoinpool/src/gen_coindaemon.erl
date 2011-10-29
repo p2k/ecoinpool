@@ -41,6 +41,11 @@ behaviour_info(callbacks) ->
         %   networks and sc_testwork for solidcoin networks.
         {sendwork_method, 0},
         
+        % share_target()
+        %   Should return the target which satisfies a share as 256 bit binary
+        %   in big endian.
+        {share_target, 0},
+        
         % get_workunit(PID)
         %   Get an unassigned workunit now. Also check for a new block.
         %   Should return {ok, Workunit} or {newblock, Workunit} or {error, Message}
@@ -52,21 +57,29 @@ behaviour_info(callbacks) ->
         {encode_workunit, 1},
         
         % analyze_result(Result)
-        %   Should return a tuple {WorkunitId, Hash} from result data.
-        %   The hash should be in big-endian format. This is used to identify
-        %   and check the result against the target.
+        %   Should return a tuple {WorkunitId, Hash, BData} from result data
+        %   (i.e. the params part of the sendwork request). On error, should
+        %   return the atom error. The hash should be in big-endian format.
+        %   BData is the block header data in binary format to be sent later
+        %   with send_result and also to be stored in the shares database.
+        %   This is used to identify and check the result against the target.
         {analyze_result, 1},
         
-        % stale_reply()
-        %   Should return a reply suitable to announce that stale work was sent
-        %   as a ejson-encodable object.
-        {stale_reply, 0},
+        % rejected_reply()
+        %   Should return a reply suitable to announce that invalid work was
+        %   sent as a ejson-encodable object.
+        {rejected_reply, 0},
         
-        % send_result(PID, Data)
+        % normal_reply(Hash)
+        %   Should return a reply suitable to announce that work was valid, but
+        %   not winning, as a ejson-encodable object.
+        {normal_reply, 1},
+        
+        % send_result(PID, BData)
         %   Sends in a result to the CoinDaemon.
-        %   Should return a tuple {State, Reply} where State can be valid,
-        %   winning or invalid and Reply is a ejson-encodeable object.
-        %   On error it should return {error, Message}.
+        %   Should return a tuple {ResultCode, Reply} where ResultCode can be
+        %   accepted, rejected or error and Reply is a ejson-encodeable object
+        %   or error message.
         {send_result, 2}
     ];
 
