@@ -86,16 +86,16 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
                             {<<"doctypes">>, {[{<<"map">>, <<"function (doc) {if (doc.type !== undefined) emit(doc.type, doc._id);}">>}]}}
                         ]}},
                         {<<"filters">>, {[
-                            {<<"pool_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \\\"configuration\\\" || doc.type == \\\"sub-pool\\\";}">>},
-                            {<<"workers_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \\\"worker\\\";}">>}
+                            {<<"pool_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \"configuration\" || doc.type == \"sub-pool\";}">>},
+                            {<<"workers_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \"worker\";}">>}
                         ]}}
                     ]}),
                     {ok, _} = couchbeam:save_doc(NewConfDb, {[
                         {<<"_id">>, <<"_design/workers">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
-                            {<<"by_sub_pool">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \\\"worker\\\") emit(doc.sub_pool_id, doc.name);}">>}]}},
-                            {<<"by_name">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \\\"worker\\\") emit(doc.name, doc.sub_pool_id);}">>}]}}
+                            {<<"by_sub_pool">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit(doc.sub_pool_id, doc.name);}">>}]}},
+                            {<<"by_name">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit(doc.name, doc.sub_pool_id);}">>}]}}
                         ]}}
                     ]}),
                     io:format("ecoinpool_db: Config database created!~n"),
@@ -178,7 +178,7 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
                         {<<"_id">>, <<"_design/check">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
-                            {<<"hash">>, {[{<<"map">>, <<"function(doc) {if (doc.state !== \\\"invalid\\\" && doc.hash !== undefined) emit(doc.hash, doc.block_num);}">>}]}}
+                            {<<"hash">>, {[{<<"map">>, <<"function(doc) {if (doc.state !== \"invalid\" && doc.hash !== undefined) emit(doc.hash, doc.block_num);}">>}]}}
                         ]}}
                     ]}),
                     {ok, _} = couchbeam:save_doc(DB, {[
@@ -190,7 +190,7 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
                                 {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
                             ]}},
                             {<<"rejected">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.state === \\\"invalid\\\") emit([doc.reject_reason, doc.user_id, doc.worker_id], 1);}">>},
+                                {<<"map">>, <<"function(doc) {if (doc.state === \"invalid\") emit([doc.reject_reason, doc.user_id, doc.worker_id], 1);}">>},
                                 {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
                             ]}}
                         ]}}
