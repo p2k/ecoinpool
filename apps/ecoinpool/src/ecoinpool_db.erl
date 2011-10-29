@@ -73,9 +73,36 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
     % Connect to database
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
     % Open database
-    ConfDb = case couchbeam:open_or_create_db(S, "ecoinpool", []) of
-        {ok, TheConfDb} -> TheConfDb;
-        {error, Error} -> io:format("couchbeam:open_or_create_db/3 returned an error: ~p~n", [Error]), throw({error, Error})
+    ConfDb = case couchbeam:db_exists(S, "ecoinpool") of
+        true ->
+            couchbeam:open_db(S, "ecoinpool");
+        _ ->
+            case couchbeam:create_db(S, "ecoinpool") of
+                {ok, NewConfDb} -> % Create basic views
+                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
+                        {<<"_id">>, <<"_design/doctypes">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"views">>, {[
+                            {<<"doctypes">>, {[{<<"map">>, <<"function (doc) {if (doc.type !== undefined) emit(doc.type, doc._id);}">>}]}}
+                        ]}},
+                        {<<"filters">>, {[
+                            {<<"pool_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \\\"configuration\\\" || doc.type == \\\"sub-pool\\\";}">>},
+                            {<<"workers_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \\\"worker\\\";}">>}
+                        ]}}
+                    ]}),
+                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
+                        {<<"_id">>, <<"_design/workers">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"views">>, {[
+                            {<<"by_sub_pool">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \\\"worker\\\") emit(doc.sub_pool_id, doc.name);}">>}]}},
+                            {<<"by_name">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \\\"worker\\\") emit(doc.name, doc.sub_pool_id);}">>}]}}
+                        ]}}
+                    ]}),
+                    io:format("ecoinpool_db: Config database created!~n"),
+                    NewConfDb;
+                {error, Error} ->
+                    io:format("couchbeam:open_or_create_db/3 returned an error: ~p~n", [Error]), throw({error, Error})
+            end
     end,
     % Start config & worker monitor (asynchronously)
     gen_server:cast(?MODULE, start_monitors),
@@ -141,12 +168,39 @@ handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=
     {reply, Workers, State};
 
 handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{srv_conn=S}) ->
-    case couchbeam:open_or_create_db(S, SubpoolName, []) of
-        {error, Error} ->
-            io:format("setup_share_db - couchbeam:open_or_create_db/3 returned an error: ~p~n", [Error]),
-            {reply, error, State};
-        {ok, _} ->
-            {reply, ok, State}
+    case couchbeam:db_exists(S, SubpoolName) of
+        true ->
+            couchbeam:open_db(S, SubpoolName);
+        _ ->
+            case couchbeam:create_db(S, SubpoolName) of
+                {ok, DB} ->
+                    {ok, _} = couchbeam:save_doc(DB, {[
+                        {<<"_id">>, <<"_design/check">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"views">>, {[
+                            {<<"hash">>, {[{<<"map">>, <<"function(doc) {if (doc.state !== \\\"invalid\\\" && doc.hash !== undefined) emit(doc.hash, doc.block_num);}">>}]}}
+                        ]}}
+                    ]}),
+                    {ok, _} = couchbeam:save_doc(DB, {[
+                        {<<"_id">>, <<"_design/stats">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"views">>, {[
+                            {<<"state">>, {[
+                                {<<"map">>, <<"function(doc) {emit([doc.state, doc.user_id, doc.worker_id], 1);}">>},
+                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
+                            ]}},
+                            {<<"rejected">>, {[
+                                {<<"map">>, <<"function(doc) {if (doc.state === \\\"invalid\\\") emit([doc.reject_reason, doc.user_id, doc.worker_id], 1);}">>},
+                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
+                            ]}}
+                        ]}}
+                    ]}),
+                    io:format("ecoinpool_db: Shares database \"~s\" created!~n", [SubpoolName]),
+                    {reply, ok, State};
+                {error, Error} ->
+                    io:format("setup_share_db - couchbeam:open_or_create_db/3 returned an error: ~p~n", [Error]),
+                    {reply, error, State}
+            end
     end;
 
 handle_call({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, _From, State=#state{srv_conn=S}) ->
