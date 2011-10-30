@@ -123,8 +123,9 @@ init([SubpoolId, Config]) ->
     URL = lists:flatten(io_lib:format("http://~s:~b/", [Host, Port])),
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
+    PollInterval = proplists:get_value(poll_interval, Config, 1000),
     
-    {ok, Timer} = timer:send_interval(1000, poll_daemon),
+    {ok, Timer} = timer:send_interval(PollInterval, poll_daemon),
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 
 handle_call(get_workunit, _From, State) ->
