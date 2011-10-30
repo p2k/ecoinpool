@@ -105,7 +105,7 @@ normal_reply(Hash) ->
         {<<"work">>, [{[
             {<<"share_valid">>, true},
             {<<"block_valid">>, false},
-            {<<"block_hash">>, Hash}
+            {<<"block_hash">>, ecoinpool_util:bin_to_hexbin(Hash)}
         ]}]}
     ]}.
 
