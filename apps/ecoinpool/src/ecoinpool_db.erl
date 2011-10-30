@@ -75,7 +75,8 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
     % Open database
     ConfDb = case couchbeam:db_exists(S, "ecoinpool") of
         true ->
-            couchbeam:open_db(S, "ecoinpool");
+            {ok, TheConfDb} = couchbeam:open_db(S, "ecoinpool"),
+            TheConfDb;
         _ ->
             case couchbeam:create_db(S, "ecoinpool") of
                 {ok, NewConfDb} -> % Create basic views
@@ -170,7 +171,7 @@ handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=
 handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{srv_conn=S}) ->
     case couchbeam:db_exists(S, SubpoolName) of
         true ->
-            couchbeam:open_db(S, SubpoolName);
+            {reply, ok, State};
         _ ->
             case couchbeam:create_db(S, SubpoolName) of
                 {ok, DB} ->
