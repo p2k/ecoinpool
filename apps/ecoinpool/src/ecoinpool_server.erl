@@ -340,13 +340,17 @@ check_work(User, Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinD
 process_work(User, Peer, Results, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) ->
     ShareTarget = CoinDaemonModule:share_target(),
     % Process all results
+    case length(Results) of
+        1 -> ok;
+        N -> io:format("Multi-result: ~b~n", [N])
+    end,
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
             (stale, {AccReplyItems, _, AccCandidates}) ->
                 io:format("Stale share from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, stale),
                 {[invalid | AccReplyItems], "Stale or unknown work", AccCandidates};
-            ({Workunit, Hash, _}, {AccReplyItems, _, AccCandidates}) when Hash < ShareTarget ->
+            ({Workunit, Hash, _}, {AccReplyItems, _, AccCandidates}) when Hash > ShareTarget ->
                 io:format("Invalid hash from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
                 {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
