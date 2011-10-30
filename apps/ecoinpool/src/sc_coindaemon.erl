@@ -275,5 +275,6 @@ decode_sc_data(SCData) ->
         bits=Bits}.
 
 workunit_id_from_sc_data(#sc_data{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, nonce2=Nonce2}) ->
-    Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes, Nonce2:64/unsigned-little>>,
+    Nonce2Masked = Nonce2 band 16#ffffffff,
+    Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes, Nonce2Masked:64/unsigned-little>>,
     crypto:sha(Data).

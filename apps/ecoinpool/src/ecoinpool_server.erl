@@ -41,7 +41,8 @@
     sw_method,
     worktbl,
     workertbl,
-    workerltbl
+    workerltbl,
+    lp_queue
 }).
 
 %% ===================================================================
@@ -96,7 +97,7 @@ init([SubpoolId]) ->
     gen_server:cast(self(), {reload_config, Subpool}),
     % Schedule workers reload (TODO: move this to reload_config if worker configuration changed)
     gen_server:cast(self(), reload_workers),
-    {ok, #state{subpool=#subpool{}, worktbl=WorkTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}}.
+    {ok, #state{subpool=#subpool{}, worktbl=WorkTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[]}}.
 
 handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
     % Returns the sub-pool IDs for which worker changes should be retrieved
@@ -170,61 +171,46 @@ handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workert
 handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
     % Extract state variables
     #state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workertbl=WorkerTbl, worktbl=WorkTbl} = State,
-    % Check the method
-    Action = case Method of
-        GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
-            if
-                length(Params) =:= 0 -> getwork;
-                true -> sendwork
+    % Check the method and authentication
+    case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
+        {ok, Worker=#worker{name=User}, Action} ->
+            case Action of % Now match for the action
+                getwork ->
+                    case assign_work(Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) of
+                        hit -> io:format("Cache hit by ~s/~s!~n", [User, Peer]);
+                        miss -> io:format("Cache miss by ~s/~s!~n", [User, Peer])
+                    end;
+                sendwork ->
+                    check_work(Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder)
             end;
-        GetworkMethod ->
-            getwork;
-        SendworkMethod ->
-            sendwork;
-        default -> % Getwork is default
-            getwork;
         _ ->
-            unknown
-    end,
-    case Action of % First, match for validity
-        unknown -> % Bail out
-            Responder({error, method_not_found});
-        _ ->
-            % Check authentication
-            case Auth of
-                unauthorized ->
-                    io:format("rpc_request: ~s: Unauthorized!~n", [Peer]),
-                    Responder({error, authorization_required});
-                {User, Password} ->
-                    case ets:lookup(WorkerTbl, User) of
-                        [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
-                            case Action of % Now match for the action
-                                getwork ->
-                                    case assign_work(Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) of
-                                        hit -> io:format("Cache hit by ~s/~s!~n", [User, Peer]);
-                                        miss -> io:format("Cache miss by ~s/~s!~n", [User, Peer])
-                                    end;
-                                sendwork ->
-                                    check_work(User, Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder)
-                            end;
-                        [] ->
-                            io:format("rpc_request: ~s: Wrong password for username ~p!~n", [Peer, User]),
-                            Responder({error, authorization_required})
-                    end
-            end
+            ok
     end,
     {noreply, State};
 
-handle_cast({rpc_lp_request, _Peer, _Auth, Responder}, State=#state{}) ->
-    %TODO
-    Responder({error, {-1, <<"not implemented">>}}),
-    {noreply, State};
+handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
+    % Extract state variables
+    #state{gw_method=GetworkMethod, sw_method=SendworkMethod, workertbl=WorkerTbl, lp_queue=LPQueue} = State,
+    % Check the method and authentication
+    case parse_method_and_auth(Peer, GetworkMethod, [], Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
+        {ok, Worker=#worker{name=User}, _} ->
+            io:format("LP requested by ~s/~s!~n", [User, Peer]),
+            {noreply, State#state{lp_queue=[{Worker, Responder} | LPQueue]}};
+        _ ->
+            {noreply, State}
+    end;
 
-handle_cast(new_block_detected, State=#state{worktbl=WorkTbl}) ->
-    io:format("New block! Removing ~b workunits.~n", [ets:info(WorkTbl, size)]),
+handle_cast(new_block_detected, State=#state{worktbl=WorkTbl, lp_queue=LPQueue}) ->
+    io:format("--- New block! Removing ~b workunits and calling ~b LPs ---~n", [ets:info(WorkTbl, size), length(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
-    %TODO longpolling
-    {noreply, State};
+    %TODO better longpolling
+    lists:foreach(
+        fun ({_, Responder}) ->
+            catch Responder({ok, true}) % Ignore any errors here
+        end,
+        LPQueue
+    ),
+    {noreply, State#state{lp_queue=[]}};
 
 handle_cast({store_workunit, Workunit}, State=#state{worktbl=WorkTbl}) ->
     ets:insert(WorkTbl, Workunit),
@@ -283,6 +269,45 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
+parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) ->
+    Action = case Method of
+        GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
+            if
+                length(Params) =:= 0 -> getwork;
+                true -> sendwork
+            end;
+        GetworkMethod ->
+            getwork;
+        SendworkMethod ->
+            sendwork;
+        default -> % Getwork is default
+            getwork;
+        _ ->
+            unknown
+    end,
+    case Action of % First, match for validity
+        unknown -> % Bail out
+            Responder({error, method_not_found}),
+            error;
+        _ ->
+            % Check authentication
+            case Auth of
+                unauthorized ->
+                    io:format("rpc_request: ~s: Unauthorized!~n", [Peer]),
+                    Responder({error, authorization_required}),
+                    error;
+                {User, Password} ->
+                    case ets:lookup(WorkerTbl, User) of
+                        [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
+                            {ok, Worker, Action};
+                        [] ->
+                            io:format("rpc_request: ~s: Wrong password for username ~p!~n", [Peer, User]),
+                            Responder({error, authorization_required}),
+                            error
+                    end
+            end
+    end.
+
 assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
     % Query the cache
     case ets:match_object(WorkTbl, #workunit{worker_id=undefined, _='_'}, 1) of
@@ -313,7 +338,7 @@ assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon, Respond
             miss
     end.
 
-check_work(User, Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
+check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
     % Analyze results
     case CoinDaemonModule:analyze_result(Params) of
         error ->
@@ -342,28 +367,28 @@ process_work(User, Peer, Results, Subpool, Worker, CoinDaemonModule, CoinDaemon,
     % Process all results
     case length(Results) of
         1 -> ok;
-        N -> io:format("Multi-result: ~b~n", [N])
+        N -> io:format("Multi-result (~b):~n", [N])
     end,
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
             (stale, {AccReplyItems, _, AccCandidates}) ->
-                io:format("Stale share from ~s/~s!~n", [User, Peer]),
+                io:format("- Stale share from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, stale),
                 {[invalid | AccReplyItems], "Stale or unknown work", AccCandidates};
             ({Workunit, Hash, _}, {AccReplyItems, _, AccCandidates}) when Hash > ShareTarget ->
-                io:format("Invalid hash from ~s/~s!~n", [User, Peer]),
+                io:format("- Invalid hash from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
                 {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
             ({Workunit, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
                 case ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash) of
                     duplicate ->
-                        io:format("Duplicate work from ~s/~s!~n", [User, Peer]),
+                        io:format("- Duplicate work from ~s/~s!~n", [User, Peer]),
                         {[invalid | AccReplyItems], "Duplicate work", AccCandidates};
                     candidate -> % We got a winner (?)
-                        io:format("Got candidate share from ~s/~s!!!~n", [User, Peer]),
+                        io:format("+++ Candidate share from ~s/~s! +++~n", [User, Peer]),
                         {[Hash | AccReplyItems], AccRejectReason, [BData | AccCandidates]};
                     valid -> % Normal share
-                        io:format("Got valid share from ~s/~s.~n", [User, Peer]),
+                        io:format("+ Valid share from ~s/~s.~n", [User, Peer]),
                         {[Hash | AccReplyItems], AccRejectReason, AccCandidates}
                 end
         end,

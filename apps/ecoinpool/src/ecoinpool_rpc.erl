@@ -112,9 +112,9 @@ respond_success(Req, ReqId, Result, Options) ->
     % Make JSON reply
     Body = ejson:encode(
         {[
-            {result, Result},
-            {error, null},
-            {id, ReqId}
+            {<<"result">>, Result},
+            {<<"error">>, null},
+            {<<"id">>, ReqId}
         ]}
     ),
     % Create headers from options
@@ -151,12 +151,12 @@ respond_error(Req, ReqId, Type) ->
     end,
     Body = ejson:encode(
         {[
-            {result, null},
-            {error, {[
+            {<<"result">>, null},
+            {<<"error">>, {[
                 {code, RPCCode},
                 {message, RPCMessage}
             ]}},
-            {id, ReqId}
+            {<<"id">>, ReqId}
         ]}
     ),
     Req:respond({HTTPCode, [server_header(), {"Content-Type", "application/json"}], Body}).
