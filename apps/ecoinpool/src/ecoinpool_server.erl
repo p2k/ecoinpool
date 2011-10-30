@@ -314,52 +314,76 @@ assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon, Respond
     end.
 
 check_work(User, Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
-    % Analyze result
+    % Analyze results
     case CoinDaemonModule:analyze_result(Params) of
-        {WorkId, Hash, BData} ->
-            % Lookup workunit
-            case ets:lookup(WorkTbl, WorkId) of
-                [Workunit] -> % Found
-                    ShareTarget = CoinDaemonModule:share_target(),
-                    if % Validate
-                        Hash < ShareTarget ->
-                            % Submit share to database and also to the daemon if it isn't a duplicate and meets the work target
-                            spawn(
-                                fun () ->
-                                    Responder(case ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash) of
-                                        duplicate ->
-                                            io:format("Duplicate work from ~s/~s!~n", [User, Peer]),
-                                            {ok, CoinDaemonModule:rejected_reply(), [{reject_reason, "Duplicate work"}]};
-                                        candidate -> % We got a winner (?)
-                                            case CoinDaemonModule:send_result(CoinDaemon, BData) of
-                                                {accepted, Reply} ->
-                                                    io:format("Data sent upstream from ~s/~s got accepted!~n", [User, Peer]),
-                                                    {ok, Reply};
-                                                {rejected, Reply} ->
-                                                    io:format("Data sent upstream from ~s/~s got rejected!~n", [User, Peer]),
-                                                    {ok, Reply, [{reject_reason, "Rejected by coin daemon"}]};
-                                                {error, Message} ->
-                                                    io:format("Upstream error from ~s/~s! Message: ~p~n", [User, Peer, Message]),
-                                                    {error, {-1, Message}}
-                                            end;
-                                        valid -> % consolation prize
-                                            io:format("Got valid share from ~s/~s.~n", [User, Peer]),
-                                            {ok, CoinDaemonModule:normal_reply(Hash)}
-                                    end)
-                                end
-                            );
-                        true ->
-                            io:format("Invalid hash from ~s/~s!~n", [User, Peer]),
-                            ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
-                            Responder({ok, CoinDaemonModule:rejected_reply(), [{reject_reason, "Hash does not meet share target"}]})
-                    end;
-                _ -> % Not found
-                    io:format("Stale share from ~s/~s!~n", [User, Peer]),
-                    ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, stale),
-                    Responder({ok, CoinDaemonModule:rejected_reply(), [{reject_reason, "Stale or unknown work"}]})
-            end;
-        _ ->
+        error ->
             io:format("Wrong data from ~s/~s!~n~p~n", [User, Peer, Params]),
             ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
-            Responder({error, invalid_request})
+            Responder({error, invalid_request});
+        Results ->
+            % Lookup workunits
+            ResultsWithWU = lists:map(
+                fun ({WorkId, Hash, BData}) ->
+                    case ets:lookup(WorkTbl, WorkId) of
+                        [Workunit] -> % Found
+                            {Workunit, Hash, BData};
+                        _ -> % Not found
+                            stale
+                    end
+                end,
+                Results
+            ),
+            % Process results in new process
+            spawn(fun () -> process_work(User, Peer, ResultsWithWU, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) end)
     end.
+
+process_work(User, Peer, Results, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) ->
+    ShareTarget = CoinDaemonModule:share_target(),
+    % Process all results
+    {ReplyItems, RejectReason, Candidates} = lists:foldr(
+        fun
+            (stale, {AccReplyItems, _, AccCandidates}) ->
+                io:format("Stale share from ~s/~s!~n", [User, Peer]),
+                ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, stale),
+                {[invalid | AccReplyItems], "Stale or unknown work", AccCandidates};
+            ({Workunit, Hash, _}, {AccReplyItems, _, AccCandidates}) when Hash < ShareTarget ->
+                io:format("Invalid hash from ~s/~s!~n", [User, Peer]),
+                ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
+                {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
+            ({Workunit, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
+                case ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash) of
+                    duplicate ->
+                        io:format("Duplicate work from ~s/~s!~n", [User, Peer]),
+                        {[invalid | AccReplyItems], "Duplicate work", AccCandidates};
+                    candidate -> % We got a winner (?)
+                        io:format("Got candidate share from ~s/~s!!!~n", [User, Peer]),
+                        {[Hash | AccReplyItems], AccRejectReason, [BData | AccCandidates]};
+                    valid -> % Normal share
+                        io:format("Got valid share from ~s/~s.~n", [User, Peer]),
+                        {[Hash | AccReplyItems], AccRejectReason, AccCandidates}
+                end
+        end,
+        {[], undefined, []},
+        Results 
+    ),
+    % Send reply
+    case RejectReason of
+        undefined ->
+            Responder({ok, CoinDaemonModule:make_reply(ReplyItems)});
+        _ ->
+            Responder({ok, CoinDaemonModule:make_reply(ReplyItems), [{reject_reason, RejectReason}]})
+    end,
+    % Send candidates
+    lists:foreach(
+        fun (BData) ->
+            case CoinDaemonModule:send_result(CoinDaemon, BData) of
+                accepted ->
+                    io:format("Data sent upstream from ~s/~s got accepted!~n", [User, Peer]);
+                rejected ->
+                    io:format("Data sent upstream from ~s/~s got rejected!~n", [User, Peer]);
+                {error, Message} ->
+                    io:format("Upstream error from ~s/~s! Message: ~p~n", [User, Peer, Message])
+            end
+        end,
+        Candidates
+    ).

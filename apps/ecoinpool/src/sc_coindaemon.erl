@@ -24,7 +24,7 @@
 
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, get_workunit/1, encode_workunit/1, analyze_result/1, rejected_reply/0, normal_reply/1, send_result/2]).
+-export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, get_workunit/1, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -78,35 +78,31 @@ encode_workunit(#workunit{target=Target, data=Data}) ->
         {<<"target_real">>, <<"0x", HexTarget/bytes>>}
     ]}.
 
-analyze_result([Data]) when is_binary(Data), byte_size(Data) =:= 256 ->
-    case catch ecoinpool_util:hexbin_to_bin(Data) of
-        {'EXIT', _} ->
-            error;
-        BData ->
-            SCData = decode_sc_data(BData),
-            WorkunitId = workunit_id_from_sc_data(SCData),
-            Hash = rs_hash:block_hash(BData),
-            {WorkunitId, Hash, BData}
-    end;
+analyze_result([Data]) when is_binary(Data), byte_size(Data) > 0, byte_size(Data) rem 256 =:= 0 ->
+    analyze_result(Data, []);
 analyze_result(_) ->
     error.
 
-rejected_reply() ->
+make_reply(Items) ->
+    WorkEntries = lists:map(
+        fun
+            (invalid) ->
+                {[
+                    {<<"share_valid">>, false},
+                    {<<"block_valid">>, false},
+                    {<<"block_hash">>, <<"0000000000000000000000000000000000000000000000000000000000000000">>}
+                ]};
+            (BHash) ->
+                {[
+                    {<<"share_valid">>, true},
+                    {<<"block_valid">>, false},
+                    {<<"block_hash">>, ecoinpool_util:bin_to_hexbin(BHash)}
+                ]}
+        end,
+        Items
+    ),
     {[
-        {<<"work">>, [{[
-            {<<"share_valid">>, false},
-            {<<"block_valid">>, false},
-            {<<"block_hash">>, <<"0000000000000000000000000000000000000000000000000000000000000000">>}
-        ]}]}
-    ]}.
-
-normal_reply(Hash) ->
-    {[
-        {<<"work">>, [{[
-            {<<"share_valid">>, true},
-            {<<"block_valid">>, false},
-            {<<"block_hash">>, ecoinpool_util:bin_to_hexbin(Hash)}
-        ]}]}
+        {<<"work">>, WorkEntries}
     ]}.
 
 send_result(PID, BData) ->
@@ -177,6 +173,19 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
+analyze_result(<<>>, Acc) ->
+    Acc;
+analyze_result(<<Data:256/bytes, Remainder/bytes>>, Acc) ->
+    case catch ecoinpool_util:hexbin_to_bin(Data) of
+        {'EXIT', _} ->
+            error;
+        BData ->
+            SCData = decode_sc_data(BData),
+            WorkunitId = workunit_id_from_sc_data(SCData),
+            Hash = rs_hash:block_hash(BData),
+            analyze_result(Remainder, Acc ++ [{WorkunitId, Hash, BData}])
+    end.
+
 getwork_with_state(State=#state{url=URL, auth=Auth, block_num=OldBlockNum}) ->
     try
         case getwork(URL, Auth) of
@@ -223,14 +232,13 @@ sendwork(URL, Auth, BData) ->
     case ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
-            ReplyObj = proplists:get_value(<<"result">>, Body),
-            {Reply} = ReplyObj,
+            {Reply} = proplists:get_value(<<"result">>, Body),
             [{Work}] = proplists:get_value(<<"work">>, Reply),
             case proplists:get_value(<<"share_valid">>, Work) of
                 true ->
-                    {accepted, ReplyObj};
+                    accepted;
                 _ ->
-                    {rejected, ReplyObj}
+                    rejected
             end;
         {ok, Status, _ResponseHeaders, ResponseBody} ->
             {error, binary:list_to_bin(io_lib:format("sendwork: Received HTTP ~s - Body: ~p", [Status, ResponseBody]))};

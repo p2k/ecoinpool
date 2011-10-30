@@ -57,29 +57,29 @@ behaviour_info(callbacks) ->
         {encode_workunit, 1},
         
         % analyze_result(Result)
-        %   Should return a tuple {WorkunitId, Hash, BData} from result data
-        %   (i.e. the params part of the sendwork request). On error, should
-        %   return the atom error. The hash should be in big-endian format.
-        %   BData is the block header data in binary format to be sent later
-        %   with send_result and also to be stored in the shares database.
+        %   Should return a list of tuples {WorkunitId, Hash, BData} from result
+        %   data (i.e. the params part of the sendwork request). If an error
+        %   occurs on any work item, the atom "error" should be returned instead
+        %   of the list which will result in an invalid_request error.
+        %   The hash should be in big-endian binary format. BData is the block
+        %   header data in binary format to be sent later with send_result and
+        %   also to be stored in the shares database.
         %   This is used to identify and check the result against the target.
+        %   For daemons which don't support multi-results, this should always
+        %   return a list with a single item.
         {analyze_result, 1},
         
-        % rejected_reply()
-        %   Should return a reply suitable to announce that invalid work was
-        %   sent as a ejson-encodable object.
-        {rejected_reply, 0},
-        
-        % normal_reply(Hash)
-        %   Should return a reply suitable to announce that work was valid, but
-        %   not winning, as a ejson-encodable object.
-        {normal_reply, 1},
+        % make_reply(Items)
+        %   Should return a reply suitable to announce that work was accepted or
+        %   rejected a ejson-encodable object. Items is a list of (binary)
+        %   hashes and/or the atom "invalid"; for daemons which don't support
+        %   multi-results, Items always contains a single item.
+        {make_reply, 1},
         
         % send_result(PID, BData)
-        %   Sends in a result to the CoinDaemon.
-        %   Should return a tuple {ResultCode, Reply} where ResultCode can be
-        %   accepted, rejected or error and Reply is a ejson-encodeable object
-        %   or error message.
+        %   Sends in a (single) result to the CoinDaemon.
+        %   Should return one of the atoms "accepted", "rejected" or a tuple
+        %   {error, Message} on any error.
         {send_result, 2}
     ];
 
