@@ -212,7 +212,7 @@ handle_call({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, u
         case couchbeam_view:count(DB, {"check", "hash"}, [{start_key, QKey}, {end_key, QKey}, {limit, 1}]) of
             0 ->
                 Quality = if
-                    Hash <= Target -> candidate;
+                    Hash =< Target -> candidate;
                     true -> valid
                 end,
                 couchbeam:save_doc(DB, make_share_document(WorkerId, UserId, IP, Quality, HexHash, Target, BlockNum, BData)),
