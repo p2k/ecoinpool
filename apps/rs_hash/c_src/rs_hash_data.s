@@ -5,7 +5,7 @@
 */
 
 	.section .rodata
-	.globl _BlockHash_1_MemoryPAD8
+	.globl BlockHash_1_MemoryPAD8
 
-_BlockHash_1_MemoryPAD8:
+BlockHash_1_MemoryPAD8:
 	.incbin "c_src/rs_hash_data.bin"
