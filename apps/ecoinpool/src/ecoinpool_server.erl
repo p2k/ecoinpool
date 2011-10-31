@@ -195,6 +195,7 @@ handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
     case parse_method_and_auth(Peer, GetworkMethod, [], Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
         {ok, Worker=#worker{name=User}, _} ->
             io:format("LP requested by ~s/~s!~n", [User, Peer]),
+            Responder(start),
             {noreply, State#state{lp_queue=[{Worker, Responder} | LPQueue]}};
         _ ->
             {noreply, State}
@@ -206,7 +207,7 @@ handle_cast(new_block_detected, State=#state{worktbl=WorkTbl, lp_queue=LPQueue})
     %TODO better longpolling
     lists:foreach(
         fun ({_, Responder}) ->
-            catch Responder({ok, true}) % Ignore any errors here
+            catch Responder({finish, true}) % Ignore any errors here
         end,
         LPQueue
     ),

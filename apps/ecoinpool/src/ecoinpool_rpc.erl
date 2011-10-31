@@ -153,8 +153,8 @@ respond_error(Req, ReqId, Type) ->
         {[
             {<<"result">>, null},
             {<<"error">>, {[
-                {code, RPCCode},
-                {message, RPCMessage}
+                {<<"code">>, RPCCode},
+                {<<"message">>, RPCMessage}
             ]}},
             {<<"id">>, ReqId}
         ]}
@@ -173,6 +173,24 @@ make_responder(Req, ReqId) ->
 
 make_responder(Req) ->
     make_responder(Req, 1).
+
+make_lp_responder(Req) ->
+    fun
+        (start) ->
+            Req:start_response({200, [server_header(), {"Content-Type", "application/json"}]});
+        ({finish, Result}) ->
+            Body = ejson:encode(
+                {[
+                    {<<"result">>, Result},
+                    {<<"error">>, null},
+                    {<<"id">>, 1}
+                ]}
+            ),
+            Req:send(Body),
+            mochiweb_socket:close(Req:get(socket));
+        ({error, Type}) ->
+            respond_error(Req, Type)
+    end.
 
 % Valid methods are defined here
 parse_method(<<"getwork">>) -> getwork;
@@ -235,7 +253,7 @@ handle_request(SubpoolPID, Req) ->
                         "/" -> % Normal request - use default handler
                             ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), default, [], Auth, make_responder(Req));
                         "/LP" -> % Longpolling
-                            ecoinpool_server:rpc_lp_request(SubpoolPID, Req:get(peer), Auth, make_responder(Req));
+                            ecoinpool_server:rpc_lp_request(SubpoolPID, Req:get(peer), Auth, make_lp_responder(Req));
                         _ ->
                             respond_error(Req, method_not_found)
                     end;
