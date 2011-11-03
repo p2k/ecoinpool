@@ -1,8 +1,0 @@
-
-{application, rs_hash,
- [
-  {description, "A pretty weird block hash algorithm by RealSolid"},
-  {vsn, "1.0.0"},
-  {registered, []},
-  {applications, [kernel, stdlib]}
- ]}.

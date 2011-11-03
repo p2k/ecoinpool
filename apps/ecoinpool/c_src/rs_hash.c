@@ -70,11 +70,4 @@ void BlockHash_1(uint8_t *p512bytes, uint8_t *final_hash)
     }
 
     Sha256(work1, final_hash);
-    
-    // Final endian swap
-    for (x = 0; x < 16; x++) {
-	int v = final_hash[x];
-	final_hash[x] = final_hash[31-x];
-	final_hash[31-x] = v;
-    }
 }

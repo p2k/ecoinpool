@@ -116,8 +116,6 @@ init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
     io:format("SC CoinDaemin starting~n"),
     
-    rs_hash:block_hash_init(),
-    
     Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
     Port = proplists:get_value(port, Config, 8555),
     URL = lists:flatten(io_lib:format("http://~s:~b/", [Host, Port])),
@@ -183,7 +181,7 @@ analyze_result(<<Data:256/bytes, Remainder/bytes>>, Acc) ->
         BData ->
             SCData = decode_sc_data(BData),
             WorkunitId = workunit_id_from_sc_data(SCData),
-            Hash = rs_hash:block_hash(BData),
+            Hash = ecoinpool_hash:rs_hash(BData),
             analyze_result(Remainder, Acc ++ [{WorkunitId, Hash, BData}])
     end.
 

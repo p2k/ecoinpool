@@ -47,7 +47,7 @@ void Sha256_initialize(uint32_t* s)
     s[7]=0x5be0cd19;
 }
 
-void Sha256_round(uint32_t* s, unsigned char* data)
+void Sha256_round(uint32_t* s, const unsigned char* data)
 {
     uint32_t work[64];
     uint32_t i;
@@ -137,6 +137,38 @@ void Sha256_round(uint32_t* s, unsigned char* data)
     s[5] += F;
     s[6] += G;
     s[7] += H;
+}
+
+//assumes input is 80 bytes
+void DoubleSha256(const unsigned char* in, unsigned char* out)
+{
+    uint8_t padding[64];
+    memcpy(&padding[0], &in[64], 16);
+    memset(&padding[17], 0, 45);
+    padding[16] = 0x80;
+    padding[62] = 0x02;
+    padding[63] = 0x80;
+    
+    uint32_t i;
+    uint32_t s[8];
+    Sha256_initialize(s);
+    Sha256_round(s, in);
+    Sha256_round(s, padding);
+    
+    uint32_t* paddingi = (uint32_t*)padding;
+    for (i=0; i<8; ++i)
+        paddingi[i] = EndianSwap(s[i]);
+    
+    padding[32] = 0x80;
+    padding[62] = 0x01;
+    padding[63] = 0x00;
+    
+    Sha256_initialize(s);
+    Sha256_round(s, padding);
+    
+    uint32_t* outi = (uint32_t*)out;
+    for (i=0; i<8; ++i)
+        outi[i] = EndianSwap(s[i]);
 }
 
 uint8_t padding[64] = 

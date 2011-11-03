@@ -18,26 +18,31 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(ecoinpool_app).
+-module(ecoinpool_hash).
 
--behaviour(application).
+-export([init/0, dsha256_hash/1, rs_hash/1]).
 
-%% Application callbacks
--export([start/2, stop/1]).
+-on_load(module_init/0).
 
-%% ===================================================================
-%% Application callbacks
-%% ===================================================================
+module_init() ->
+    SoName = case code:priv_dir(ecoinpool) of
+        {error, bad_name} ->
+            case filelib:is_dir(filename:join(["..", priv])) of
+                true ->
+                    filename:join(["..", priv, ?MODULE]);
+                false ->
+                    filename:join([priv, ?MODULE])
+            end;
+        Dir ->
+            filename:join(Dir, ?MODULE)
+    end,
+    ok = erlang:load_nif(SoName, 0).
 
-start(_StartType, _StartArgs) ->
-    % Init hash library
-    ok = ecoinpool_hash:init(),
-    % Load configuration
-    {ok, DBHost} = application:get_env(ecoinpool, db_host),
-    {ok, DBPort} = application:get_env(ecoinpool, db_port),
-    {ok, DBPrefix} = application:get_env(ecoinpool, db_prefix),
-    {ok, DBOptions} = application:get_env(ecoinpool, db_options),
-    ecoinpool_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions}).
-
-stop(_State) ->
+init() ->
     ok.
+
+dsha256_hash(_X) ->
+    exit(nif_library_not_loaded).
+
+rs_hash(_X) ->
+    exit(nif_library_not_loaded).
