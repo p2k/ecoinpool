@@ -193,6 +193,14 @@ make_lp_responder(Req) ->
             catch exit:_ ->
                 error
             end;
+        (check) ->
+            % Explicitly check for connection drops
+            case mochiweb_socket:peername(Req:get(socket)) of
+                {ok, _} -> ok;
+                _ -> error
+            end;
+        (cancel) ->
+            mochiweb_socket:close(Req:get(socket));
         ({finish, Result}) ->
             Body = ejson:encode(
                 {[

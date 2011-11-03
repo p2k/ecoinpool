@@ -220,16 +220,31 @@ handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
             {noreply, State}
     end;
 
-handle_cast(new_block_detected, State=#state{workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue}) ->
+handle_cast(new_block_detected, State=#state{cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue}) ->
     io:format("--- New block! Discarding ~b assigned WUs, ~b queued WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, length(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
     ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
-    %TODO better longpolling
-    lists:foreach(
-        fun ({_, Responder}) ->
-            Responder({finish, true})
-        end,
-        LPQueue
+    % Spawn a process to handle longpolling
+    ServerPID = self(),
+    spawn(
+        fun () ->
+            lists:foreach(
+                fun ({#worker{id=WorkerId, name=User}, Responder}) ->
+                    case Responder(check) of
+                        ok ->
+                            case get_and_store_workunit(ServerPID, WorkerId, CoinDaemonModule, CoinDaemon) of
+                                {error, _} ->
+                                    Responder(cancel);
+                                Workunit ->
+                                    Responder({finish, CoinDaemonModule:encode_workunit(Workunit)})
+                            end;
+                        _ ->
+                            io:format("LP connection for ~s was dropped, skipping.~n", [User])
+                    end
+                end,
+                LPQueue
+            )
+        end
     ),
     {noreply, State#state{workq=queue:new(), workq_size=0, lp_queue=[]}};
 
@@ -334,34 +349,42 @@ parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, Send
             end
     end.
 
-assign_work(#worker{id=WorkerId}, WorkQueue, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
+assign_work(#worker{id=WorkerId, lp=LP}, WorkQueue, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
     % Look if work is available in the queue/cache
     case queue:peek(WorkQueue) of
         {value, Workunit} -> % Cache hit
             ets:insert(WorkTbl, Workunit#workunit{worker_id=WorkerId}),
-            Responder({ok, CoinDaemonModule:encode_workunit(Workunit)}),
+            Responder({ok, CoinDaemonModule:encode_workunit(Workunit), case LP of true -> [longpolling]; _ -> [] end}),
             hit;
         _ -> % Cache miss
             % Spawn a process to get work
             ServerPID = self(),
             spawn(
                 fun () ->
-                    Responder(case CoinDaemonModule:get_workunit(CoinDaemon) of
+                    Responder(case get_and_store_workunit(ServerPID, WorkerId, CoinDaemonModule, CoinDaemon) of
                         {error, Message} ->
                             {error, {-1, Message}};
-                        {Success, Workunit} ->
-                            case Success of
-                                newblock ->
-                                    gen_server:cast(ServerPID, new_block_detected);
-                                _ ->
-                                    ok
-                            end,
-                            gen_server:cast(ServerPID, {store_workunit, Workunit#workunit{worker_id=WorkerId}}),
-                            {ok, CoinDaemonModule:encode_workunit(Workunit)}
+                        Workunit ->
+                            {ok, CoinDaemonModule:encode_workunit(Workunit), case LP of true -> [longpolling]; _ -> [] end}
                     end)
                 end
             ),
             miss
+    end.
+
+get_and_store_workunit(ServerPID, WorkerId, CoinDaemonModule, CoinDaemon) ->
+    case CoinDaemonModule:get_workunit(CoinDaemon) of
+        {error, Message} ->
+            {error, Message};
+        {Success, Workunit} ->
+            case Success of
+                newblock ->
+                    gen_server:cast(ServerPID, new_block_detected);
+                _ ->
+                    ok
+            end,
+            gen_server:cast(ServerPID, {store_workunit, Workunit#workunit{worker_id=WorkerId}}),
+            Workunit
     end.
 
 check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, CoinDaemonModule, CoinDaemon, Responder) ->
@@ -399,7 +422,7 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
             spawn(fun () -> process_results(User, Peer, ResultsWithWU, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) end)
     end.
 
-process_results(User, Peer, Results, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) ->
+process_results(User, Peer, Results, Subpool, Worker=#worker{lp=LP}, CoinDaemonModule, CoinDaemon, Responder) ->
     % Process all results
     case length(Results) of
         1 -> ok;
@@ -433,11 +456,12 @@ process_results(User, Peer, Results, Subpool, Worker, CoinDaemonModule, CoinDaem
         Results 
     ),
     % Send reply
+    Options = case LP of true -> [longpolling]; _ -> [] end,
     case RejectReason of
         undefined ->
-            Responder({ok, CoinDaemonModule:make_reply(ReplyItems)});
+            Responder({ok, CoinDaemonModule:make_reply(ReplyItems), Options});
         _ ->
-            Responder({ok, CoinDaemonModule:make_reply(ReplyItems), [{reject_reason, RejectReason}]})
+            Responder({ok, CoinDaemonModule:make_reply(ReplyItems), [{reject_reason, RejectReason} | Options]})
     end,
     % Send candidates
     lists:foreach(

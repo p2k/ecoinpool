@@ -35,5 +35,6 @@
     user_id :: term(),
     sub_pool_id :: binary(),
     name :: binary(),
-    pass :: binary() | atom()
+    pass :: binary() | atom(),
+    lp :: boolean()
 }).

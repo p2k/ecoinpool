@@ -300,6 +300,7 @@ parse_worker_document(WorkerId, {DocProps}) ->
     SubpoolId = proplists:get_value(<<"sub_pool_id">>, DocProps),
     Name = proplists:get_value(<<"name">>, DocProps),
     Pass = proplists:get_value(<<"pass">>, DocProps, null),
+    LP = proplists:get_value(<<"lp">>, DocProps, true),
     
     if
         DocType =:= <<"worker">>,
@@ -307,7 +308,8 @@ parse_worker_document(WorkerId, {DocProps}) ->
         SubpoolId =/= <<>>,
         is_binary(Name),
         Name =/= <<>>,
-        is_binary(Pass) or (Pass =:= null) ->
+        is_binary(Pass) or (Pass =:= null),
+        is_boolean(LP) ->
             
             % Create record
             Worker = #worker{
@@ -315,7 +317,8 @@ parse_worker_document(WorkerId, {DocProps}) ->
                 user_id=UserId,
                 sub_pool_id=SubpoolId,
                 name=Name,
-                pass=Pass
+                pass=Pass,
+                lp=LP
             },
             {ok, Worker};
         
