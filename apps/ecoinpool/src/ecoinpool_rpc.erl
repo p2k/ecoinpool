@@ -130,7 +130,12 @@ respond_success(Req, ReqId, Result, Options) ->
         [],
         Options
     ),
-    Req:respond({200, [server_header(), {"Content-Type", "application/json"} | Headers], Body}).
+    try % Protect against connection drops
+        catch Req:respond({200, [server_header(), {"Content-Type", "application/json"} | Headers], Body}),
+        ok
+    catch exit:_ ->
+        error
+    end.
 
 respond_error(Req, ReqId, Type) ->
     {HTTPCode, RPCCode, RPCMessage} = case Type of
@@ -159,7 +164,12 @@ respond_error(Req, ReqId, Type) ->
             {<<"id">>, ReqId}
         ]}
     ),
-    Req:respond({HTTPCode, [server_header(), {"Content-Type", "application/json"}], Body}).
+    try % Protect against connection drops
+        Req:respond({HTTPCode, [server_header(), {"Content-Type", "application/json"}], Body}),
+        ok
+    catch exit:_ ->
+        error
+    end.
 
 respond_error(Req, Type) ->
     respond_error(Req, 1, Type).
@@ -177,7 +187,12 @@ make_responder(Req) ->
 make_lp_responder(Req) ->
     fun
         (start) ->
-            Req:start_response({200, [server_header(), {"Content-Type", "application/json"}]});
+            try % Protect against connection drops
+                Req:start_response({200, [server_header(), {"Content-Type", "application/json"}]}),
+                ok
+            catch exit:_ ->
+                error
+            end;
         ({finish, Result}) ->
             Body = ejson:encode(
                 {[
@@ -186,8 +201,13 @@ make_lp_responder(Req) ->
                     {<<"id">>, 1}
                 ]}
             ),
-            Req:send(Body),
-            mochiweb_socket:close(Req:get(socket));
+            try % Protect against connection drops
+                Req:send(Body),
+                mochiweb_socket:close(Req:get(socket)),
+                ok
+            catch exit:_ ->
+                error
+            end;
         ({error, Type}) ->
             respond_error(Req, Type)
     end.

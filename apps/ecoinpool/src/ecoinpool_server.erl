@@ -39,6 +39,8 @@
     cdaemon_pid,
     gw_method,
     sw_method,
+    workq,
+    workq_size,
     worktbl,
     workertbl,
     workerltbl,
@@ -97,7 +99,7 @@ init([SubpoolId]) ->
     gen_server:cast(self(), {reload_config, Subpool}),
     % Schedule workers reload (TODO: move this to reload_config if worker configuration changed)
     gen_server:cast(self(), reload_workers),
-    {ok, #state{subpool=#subpool{}, worktbl=WorkTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[]}}.
+    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[]}}.
 
 handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
     % Returns the sub-pool IDs for which worker changes should be retrieved
@@ -170,23 +172,33 @@ handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workert
 
 handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
     % Extract state variables
-    #state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workertbl=WorkerTbl, worktbl=WorkTbl} = State,
+    #state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workq=WorkQueue, workq_size=WorkQueueSize, workertbl=WorkerTbl, worktbl=WorkTbl} = State,
     % Check the method and authentication
-    case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
+    UpdateState = case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
         {ok, Worker=#worker{name=User}, Action} ->
             case Action of % Now match for the action
                 getwork ->
-                    case assign_work(Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) of
-                        hit -> io:format("Cache hit by ~s/~s!~n", [User, Peer]);
-                        miss -> io:format("Cache miss by ~s/~s!~n", [User, Peer])
+                    case assign_work(Worker, WorkQueue, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) of
+                        hit ->
+                            io:format("Cache hit by ~s/~s!~n", [User, Peer]),
+                            {update_queue, queue:drop(WorkQueue), WorkQueueSize-1};
+                        miss ->
+                            io:format("Cache miss by ~s/~s!~n", [User, Peer]),
+                            false
                     end;
                 sendwork ->
-                    check_work(Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder)
+                    check_work(Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder),
+                    false
             end;
         _ ->
-            ok
+            false
     end,
-    {noreply, State};
+    case UpdateState of
+        false ->
+            {noreply, State};
+        {update_queue, NewWorkQueue, NewWorkQueueSize} ->
+            {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}}
+    end;
 
 handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
     % Extract state variables
@@ -195,25 +207,35 @@ handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
     case parse_method_and_auth(Peer, GetworkMethod, [], Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
         {ok, Worker=#worker{name=User}, _} ->
             io:format("LP requested by ~s/~s!~n", [User, Peer]),
-            Responder(start),
-            {noreply, State#state{lp_queue=[{Worker, Responder} | LPQueue]}};
+            case Responder(start) of
+                ok ->
+                    {noreply, State#state{lp_queue=[{Worker, Responder} | LPQueue]}};
+                _ ->
+                    io:format("But the connection was already dropped!~n"),
+                    {noreply, State}
+            end;
         _ ->
             {noreply, State}
     end;
 
-handle_cast(new_block_detected, State=#state{worktbl=WorkTbl, lp_queue=LPQueue}) ->
-    io:format("--- New block! Removing ~b workunits and calling ~b LPs ---~n", [ets:info(WorkTbl, size), length(LPQueue)]),
+handle_cast(new_block_detected, State=#state{workq_size=WorkQueueSize, worktbl=WorkTbl, lp_queue=LPQueue}) ->
+    io:format("--- New block! Discarding ~b assigned WUs, ~b queued WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, length(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
     %TODO better longpolling
     lists:foreach(
         fun ({_, Responder}) ->
-            catch Responder({finish, true}) % Ignore any errors here
+            Responder({finish, true})
         end,
         LPQueue
     ),
-    {noreply, State#state{lp_queue=[]}};
+    {noreply, State#state{workq=queue:new(), workq_size=0, lp_queue=[]}};
+
+handle_cast({store_workunit, Workunit=#workunit{worker_id=undefined}}, State=#state{workq=WorkQueue, workq_size=WorkQueueSize}) ->
+    % Unassigned work -> queue
+    {noreply, State#state{workq=queue:in(Workunit, WorkQueue), workq_size=WorkQueueSize+1}};
 
 handle_cast({store_workunit, Workunit}, State=#state{worktbl=WorkTbl}) ->
+    % Assigned work -> store
     ets:insert(WorkTbl, Workunit),
     {noreply, State};
 
@@ -309,10 +331,10 @@ parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, Send
             end
     end.
 
-assign_work(#worker{id=WorkerId}, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
-    % Query the cache
-    case ets:match_object(WorkTbl, #workunit{worker_id=undefined, _='_'}, 1) of
-        {[Workunit], _Cont} -> % Cache hit
+assign_work(#worker{id=WorkerId}, WorkQueue, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
+    % Look if work is available in the queue/cache
+    case queue:peek(WorkQueue) of
+        {value, Workunit} -> % Cache hit
             ets:insert(WorkTbl, Workunit#workunit{worker_id=WorkerId}),
             Responder({ok, CoinDaemonModule:encode_workunit(Workunit)}),
             hit;
