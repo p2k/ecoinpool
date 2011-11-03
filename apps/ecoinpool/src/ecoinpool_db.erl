@@ -176,13 +176,6 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
             case couchbeam:create_db(S, SubpoolName) of
                 {ok, DB} ->
                     {ok, _} = couchbeam:save_doc(DB, {[
-                        {<<"_id">>, <<"_design/check">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"hash">>, {[{<<"map">>, <<"function(doc) {if (doc.state !== \"invalid\" && doc.hash !== undefined) emit(doc.hash, doc.block_num);}">>}]}}
-                        ]}}
-                    ]}),
-                    {ok, _} = couchbeam:save_doc(DB, {[
                         {<<"_id">>, <<"_design/stats">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
@@ -207,19 +200,13 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
 handle_call({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, _From, State=#state{srv_conn=S}) ->
     try
         {ok, DB} = couchbeam:open_db(S, SubpoolName),
-        HexHash = ecoinpool_util:bin_to_hexbin(Hash),
-        QKey = <<34, HexHash/bytes, 34>>,
-        case couchbeam_view:count(DB, {"check", "hash"}, [{start_key, QKey}, {end_key, QKey}, {limit, 1}]) of
-            0 ->
-                Quality = if
-                    Hash =< Target -> candidate;
-                    true -> valid
-                end,
-                couchbeam:save_doc(DB, make_share_document(WorkerId, UserId, IP, Quality, HexHash, Target, BlockNum, BData)),
-                {reply, Quality, State};
-            _ ->
-                couchbeam:save_doc(DB, make_reject_share_document(WorkerId, UserId, IP, duplicate, HexHash, Target, BlockNum)),
-                {reply, duplicate, State}
+        if
+            Hash =< Target ->
+                couchbeam:save_doc(DB, make_share_document(WorkerId, UserId, IP, candidate, Hash, Target, BlockNum, BData)),
+                {reply, candidate, State};
+            true ->
+                couchbeam:save_doc(DB, make_share_document(WorkerId, UserId, IP, valid, Hash, Target, BlockNum)),
+                {reply, ok, State}
         end
     catch error:_ ->
         {reply, error, State}
@@ -244,7 +231,7 @@ handle_cast({store_invalid_share, #subpool{name=SubpoolName}, IP, #worker{id=Wor
         undefined ->
             make_reject_share_document(WorkerId, UserId, IP, Reason);
         #workunit{target=Target, block_num=BlockNum} ->
-            make_reject_share_document(WorkerId, UserId, IP, Reason, ecoinpool_util:bin_to_hexbin(Hash), Target, BlockNum)
+            make_reject_share_document(WorkerId, UserId, IP, Reason, Hash, Target, BlockNum)
     end,
     try
         {ok, DB} = couchbeam:open_db(S, SubpoolName),
@@ -336,7 +323,7 @@ parse_worker_document(WorkerId, {DocProps}) ->
             {error, invalid}
     end.
 
-make_share_document(WorkerId, UserId, IP, State, HexHash, Target, BlockNum, BData) ->
+make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum) ->
     {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
     {[
         {<<"worker_id">>, WorkerId},
@@ -344,25 +331,14 @@ make_share_document(WorkerId, UserId, IP, State, HexHash, Target, BlockNum, BDat
         {<<"ip">>, binary:list_to_bin(IP)},
         {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
         {<<"state">>, State},
-        {<<"hash">>, HexHash},
-        {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
-        {<<"block_num">>, BlockNum},
-        {<<"data">>, base64:encode(BData)}
-    ]}.
-
-make_reject_share_document(WorkerId, UserId, IP, Reason, HexHash, Target, BlockNum) ->
-    {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
-    {[
-        {<<"worker_id">>, WorkerId},
-        {<<"user_id">>, UserId},
-        {<<"ip">>, binary:list_to_bin(IP)},
-        {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
-        {<<"state">>, <<"invalid">>},
-        {<<"reject_reason">>, atom_to_binary(Reason, latin1)},
-        {<<"hash">>, HexHash},
+        {<<"hash">>, ecoinpool_util:bin_to_hexbin(Hash)},
         {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
         {<<"block_num">>, BlockNum}
     ]}.
+
+make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum, BData) ->
+    {Doc} = make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum),
+    {Doc ++ [{<<"data">>, base64:encode(BData)}]}.
 
 make_reject_share_document(WorkerId, UserId, IP, Reason) ->
     {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
@@ -373,4 +349,12 @@ make_reject_share_document(WorkerId, UserId, IP, Reason) ->
         {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
         {<<"state">>, <<"invalid">>},
         {<<"reject_reason">>, atom_to_binary(Reason, latin1)}
+    ]}.
+
+make_reject_share_document(WorkerId, UserId, IP, Reason, Hash, Target, BlockNum) ->
+    {Doc} = make_reject_share_document(WorkerId, UserId, IP, Reason),
+    {Doc ++ [
+        {<<"hash">>, ecoinpool_util:bin_to_hexbin(Hash)},
+        {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
+        {<<"block_num">>, BlockNum}
     ]}.

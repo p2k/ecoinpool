@@ -42,6 +42,7 @@
     workq,
     workq_size,
     worktbl,
+    hashtbl,
     workertbl,
     workerltbl,
     lp_queue
@@ -89,8 +90,9 @@ init([SubpoolId]) ->
     io:format("Subpool ~p starting...~n", [SubpoolId]),
     % Trap exit
     process_flag(trap_exit, true),
-    % Setup the work table and worker table
+    % Setup the work table, the duplicate hashes table and worker tables
     WorkTbl = ets:new(worktbl, [set, protected, {keypos, 2}]),
+    HashTbl = ets:new(hashtbl, [set, protected]),
     WorkerTbl = ets:new(workertbl, [set, protected, {keypos, 5}]),
     WorkerLookupTbl = ets:new(workerltbl, [set, protected]),
     % Get Subpool record; terminate on error
@@ -99,7 +101,7 @@ init([SubpoolId]) ->
     gen_server:cast(self(), {reload_config, Subpool}),
     % Schedule workers reload (TODO: move this to reload_config if worker configuration changed)
     gen_server:cast(self(), reload_workers),
-    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[]}}.
+    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[]}}.
 
 handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
     % Returns the sub-pool IDs for which worker changes should be retrieved
@@ -172,7 +174,7 @@ handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workert
 
 handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
     % Extract state variables
-    #state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workq=WorkQueue, workq_size=WorkQueueSize, workertbl=WorkerTbl, worktbl=WorkTbl} = State,
+    #state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl} = State,
     % Check the method and authentication
     UpdateState = case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
         {ok, Worker=#worker{name=User}, Action} ->
@@ -187,7 +189,7 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
                             false
                     end;
                 sendwork ->
-                    check_work(Peer, Params, Subpool, Worker, WorkTbl, CoinDaemonModule, CoinDaemon, Responder),
+                    check_work(Peer, Params, Subpool, Worker, WorkTbl, HashTbl, CoinDaemonModule, CoinDaemon, Responder),
                     false
             end;
         _ ->
@@ -218,9 +220,10 @@ handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
             {noreply, State}
     end;
 
-handle_cast(new_block_detected, State=#state{workq_size=WorkQueueSize, worktbl=WorkTbl, lp_queue=LPQueue}) ->
+handle_cast(new_block_detected, State=#state{workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue}) ->
     io:format("--- New block! Discarding ~b assigned WUs, ~b queued WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, length(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
+    ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
     %TODO better longpolling
     lists:foreach(
         fun ({_, Responder}) ->
@@ -361,7 +364,7 @@ assign_work(#worker{id=WorkerId}, WorkQueue, WorkTbl, CoinDaemonModule, CoinDaem
             miss
     end.
 
-check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
+check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, CoinDaemonModule, CoinDaemon, Responder) ->
     % Analyze results
     case CoinDaemonModule:analyze_result(Params) of
         error ->
@@ -369,12 +372,23 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, CoinDaemon
             ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
             Responder({error, invalid_request});
         Results ->
-            % Lookup workunits
+            % Lookup workunits, check hash target and check duplicates
+            ShareTarget = CoinDaemonModule:share_target(),
             ResultsWithWU = lists:map(
                 fun ({WorkId, Hash, BData}) ->
                     case ets:lookup(WorkTbl, WorkId) of
                         [Workunit] -> % Found
-                            {Workunit, Hash, BData};
+                            if
+                                Hash > ShareTarget ->
+                                    {target, Workunit, Hash};
+                                true ->
+                                    case ets:insert_new(HashTbl, {Hash}) of % Also stores the new hash
+                                        true ->
+                                            {valid, Workunit, Hash, BData};
+                                        _ ->
+                                            {duplicate, Workunit, Hash}
+                                    end
+                            end;
                         _ -> % Not found
                             stale
                     end
@@ -382,11 +396,10 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, CoinDaemon
                 Results
             ),
             % Process results in new process
-            spawn(fun () -> process_work(User, Peer, ResultsWithWU, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) end)
+            spawn(fun () -> process_results(User, Peer, ResultsWithWU, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) end)
     end.
 
-process_work(User, Peer, Results, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) ->
-    ShareTarget = CoinDaemonModule:share_target(),
+process_results(User, Peer, Results, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) ->
     % Process all results
     case length(Results) of
         1 -> ok;
@@ -398,19 +411,20 @@ process_work(User, Peer, Results, Subpool, Worker, CoinDaemonModule, CoinDaemon,
                 io:format("- Stale share from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, stale),
                 {[invalid | AccReplyItems], "Stale or unknown work", AccCandidates};
-            ({Workunit, Hash, _}, {AccReplyItems, _, AccCandidates}) when Hash > ShareTarget ->
+            ({duplicate, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
+                io:format("- Duplicate work from ~s/~s!~n", [User, Peer]),
+                ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, duplicate),
+                {[invalid | AccReplyItems], "Duplicate work", AccCandidates};
+            ({target, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
                 io:format("- Invalid hash from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
                 {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
-            ({Workunit, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
+            ({valid, Workunit, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
                 case ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash) of
-                    duplicate ->
-                        io:format("- Duplicate work from ~s/~s!~n", [User, Peer]),
-                        {[invalid | AccReplyItems], "Duplicate work", AccCandidates};
                     candidate -> % We got a winner (?)
                         io:format("+++ Candidate share from ~s/~s! +++~n", [User, Peer]),
                         {[Hash | AccReplyItems], AccRejectReason, [BData | AccCandidates]};
-                    valid -> % Normal share
+                    ok -> % Normal share
                         io:format("+ Valid share from ~s/~s.~n", [User, Peer]),
                         {[Hash | AccReplyItems], AccRejectReason, AccCandidates}
                 end
