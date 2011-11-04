@@ -431,15 +431,12 @@ process_results(User, Peer, Results, Subpool, Worker=#worker{lp=LP}, CoinDaemonM
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
             (stale, {AccReplyItems, _, AccCandidates}) ->
-                io:format("- Stale share from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, stale),
                 {[invalid | AccReplyItems], "Stale or unknown work", AccCandidates};
             ({duplicate, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
-                io:format("- Duplicate work from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, duplicate),
                 {[invalid | AccReplyItems], "Duplicate work", AccCandidates};
             ({target, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
-                io:format("- Invalid hash from ~s/~s!~n", [User, Peer]),
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
                 {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
             ({valid, Workunit, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
@@ -448,7 +445,6 @@ process_results(User, Peer, Results, Subpool, Worker=#worker{lp=LP}, CoinDaemonM
                         io:format("+++ Candidate share from ~s/~s! +++~n", [User, Peer]),
                         {[Hash | AccReplyItems], AccRejectReason, [BData | AccCandidates]};
                     ok -> % Normal share
-                        io:format("+ Valid share from ~s/~s.~n", [User, Peer]),
                         {[Hash | AccReplyItems], AccRejectReason, AccCandidates}
                 end
         end,

@@ -19,8 +19,6 @@
 # along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-import sys
-
 # -- Configure here: --
 
 POOL_HOST = "ecoinpool.p2k-network.org:8888"
@@ -32,11 +30,9 @@ SC_USER = "user"
 SC_PASS = "pass"
 SC_MINER = 4 # The miner to restart; this starts with 0 (= Solo), 4 is usually "Other"
 
-sys.exit() # Please remove this line to confirm you have checked the configuration
-
 # ---------------------
 
-import httplib, time, os
+import httplib, time, os, sys
 
 def make_basic_auth(user, pwd):
     return "Basic " + ("%s:%s" % (user, pwd)).encode("base64").strip()
@@ -44,9 +40,9 @@ def make_basic_auth(user, pwd):
 def make_connection(host):
     spl = host.split(":")
     if len(spl) == 1:
-        return httplib.HTTPConnection(host, 80)
+        return httplib.HTTPConnection(host, 80, timeout=3600)
     else:
-        return httplib.HTTPConnection(spl[0], int(spl[1]))
+        return httplib.HTTPConnection(spl[0], int(spl[1]), timeout=3600)
 
 def post_request(host, user, pwd, method, params=[]):
     conn = host if isinstance(host, httplib.HTTPConnection) else make_connection(host)
@@ -104,6 +100,10 @@ def main():
             sys.stdout.flush()
 
 if __name__ == "__main__":
+    if len(POOL_USER) == 0:
+        print "Please open this script in a text editor and set a username!"
+        exit()
+    
     import signal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     main()

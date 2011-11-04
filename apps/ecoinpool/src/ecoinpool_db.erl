@@ -79,7 +79,7 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
             TheConfDb;
         _ ->
             case couchbeam:create_db(S, "ecoinpool") of
-                {ok, NewConfDb} -> % Create basic views
+                {ok, NewConfDb} -> % Create basic views and auth lock-out
                     {ok, _} = couchbeam:save_doc(NewConfDb, {[
                         {<<"_id">>, <<"_design/doctypes">>},
                         {<<"language">>, <<"javascript">>},
@@ -96,8 +96,15 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
                             {<<"by_sub_pool">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit(doc.sub_pool_id, doc.name);}">>}]}},
-                            {<<"by_name">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit(doc.name, doc.sub_pool_id);}">>}]}}
+                            {<<"by_name">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit(doc.name, doc.sub_pool_id);}">>}]}},
+                            {<<"by_sub_pool_and_name">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit([doc.sub_pool_id, doc.name], doc.user_id);}">>}]}},
+                            {<<"by_sub_pool_and_user_id">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit([doc.sub_pool_id, doc.user_id], doc.name);}">>}]}}
                         ]}}
+                    ]}),
+                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
+                        {<<"_id">>, <<"_design/auth">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
                     ]}),
                     io:format("ecoinpool_db: Config database created!~n"),
                     NewConfDb;
@@ -188,6 +195,11 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
                                 {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
                             ]}}
                         ]}}
+                    ]}),
+                    {ok, _} = couchbeam:save_doc(DB, {[
+                        {<<"_id">>, <<"_design/auth">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
                     ]}),
                     io:format("ecoinpool_db: Shares database \"~s\" created!~n", [SubpoolName]),
                     {reply, ok, State};
