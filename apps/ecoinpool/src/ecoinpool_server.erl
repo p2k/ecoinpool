@@ -256,7 +256,7 @@ handle_cast({store_workunit, Workunit}, State=#state{worktbl=WorkTbl}) ->
     % Assigned work -> store
     case ets:insert_new(WorkTbl, Workunit) of
         false ->
-            io:format("store_workunit got a collision :/~n"),
+            io:format("store_workunit got a collision :/~n");
         _ -> ok
     end,
     {noreply, State};
