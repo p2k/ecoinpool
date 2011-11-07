@@ -127,7 +127,7 @@ init([SubpoolId, Config]) ->
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 
 handle_call(get_workunit, _From, State) ->
-    {Result, WorkunitOrMessage, NewState} = getwork_with_state(State),
+    {Result, WorkunitOrMessage, NewState} = getwork_with_state(State, true),
     {reply, {Result, WorkunitOrMessage}, NewState};
 
 handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth}) ->
@@ -144,9 +144,12 @@ handle_cast(_Message, State) ->
     {noreply, State}.
 
 handle_info(poll_daemon, State=#state{subpool=SubpoolId}) ->
-    case getwork_with_state(State) of
+    case getwork_with_state(State, false) of
         {error, Reason, NState} ->
-            io:format("exception in sc_coindaemon-poll_daemon: ~p~n", Reason),
+            case Reason of
+                no_new_block -> ok;
+                _ -> io:format("exception in sc_coindaemon-poll_daemon: ~p~n", Reason)
+            end,
             {noreply, NState};
         {Result, Workunit, NState} ->
             case Result of
@@ -203,32 +206,48 @@ check_getwork_now(Now, #state{url=URL, auth=Auth, last_getwork=LastGetwork, getw
             case send_req(URL, Auth, "{\"method\":\"getblocknumber\"}") of
                 {ok, "200", _ResponseHeaders, ResponseBody} ->
                     {Body} = ejson:decode(ResponseBody),
-                    BlockNum = proplists:get_value(<<"result">>, Body),
+                    BlockNum = proplists:get_value(<<"result">>, Body) + 1,
                     SCData#sc_data.block_num =/= BlockNum;
                 _ ->
                     true
             end
     end.
 
-getwork_with_state(State=#state{url=URL, auth=Auth, getwork_data=OldSCData}) ->
+getwork_with_state(State=#state{url=URL, auth=Auth, getwork_data=OldSCData}, Extrapolate) ->
     Now = erlang:now(),
     case check_getwork_now(Now, State) of
-        true -> % Actually fetch work; this is always on a block change
+        true -> % Actually fetch work
             try
                 case getwork(URL, Auth) of
-                    {ok, SCData} ->
-                        Workunit = make_workunit(SCData),
-                        {newblock, Workunit, State#state{last_getwork=Now, getwork_data=SCData}};
+                    {ok, SCData=#sc_data{block_num=BlockNum}} ->
+                        OldBlockNum = case OldSCData of
+                            undefined -> undefined;
+                            #sc_data{block_num=BN} -> BN
+                        end,
+                        Result = case OldBlockNum of
+                            undefined ->
+                                ok;
+                            BlockNum -> % Note: bound variable
+                                ok;
+                            _ ->
+                                newblock % New block alarm!
+                        end,
+                        {Result, make_workunit(SCData), State#state{last_getwork=Now, getwork_data=SCData}};
                     {error, Reason} ->
                         {error, Reason, State}
                 end
             catch error:_ ->
                 {error, <<"exception in sc_coindaemon:getwork/2">>, State}
             end;
-        _ -> % Extrapolate work
-            SCData = OldSCData#sc_data{nonce2 = OldSCData#sc_data.nonce2 + 1}, % Increase Nonce2
-            Workunit = make_workunit(SCData),
-            {ok, Workunit, State#state{getwork_data=SCData}}
+        _ -> % Extrapolate work or report no new block
+            case Extrapolate of
+                true ->
+                    SCData = OldSCData#sc_data{nonce2 = OldSCData#sc_data.nonce2 + 1}, % Increase Nonce2
+                    Workunit = make_workunit(SCData),
+                    {ok, Workunit, State#state{getwork_data=SCData}};
+                _ ->
+                    {error, no_new_block, State}
+            end
     end.
 
 getwork(URL, Auth) ->
