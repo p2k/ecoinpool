@@ -254,7 +254,11 @@ handle_cast({store_workunit, Workunit=#workunit{worker_id=undefined}}, State=#st
 
 handle_cast({store_workunit, Workunit}, State=#state{worktbl=WorkTbl}) ->
     % Assigned work -> store
-    ets:insert(WorkTbl, Workunit),
+    case ets:insert_new(WorkTbl, Workunit) of
+        false ->
+            io:format("store_workunit got a collision :/~n"),
+        _ -> ok
+    end,
     {noreply, State};
 
 handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State=#state{workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->

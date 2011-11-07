@@ -242,7 +242,7 @@ getwork_with_state(State=#state{url=URL, auth=Auth, getwork_data=OldSCData}, Ext
         _ -> % Extrapolate work or report no new block
             case Extrapolate of
                 true ->
-                    SCData = OldSCData#sc_data{nonce2 = OldSCData#sc_data.nonce2 + 1}, % Increase Nonce2
+                    SCData = OldSCData#sc_data{nonce2 = OldSCData#sc_data.nonce2 + 16#00001000}, % Increase Nonce2 (starting at bit 12)
                     Workunit = make_workunit(SCData),
                     {ok, Workunit, State#state{getwork_data=SCData}};
                 _ ->
