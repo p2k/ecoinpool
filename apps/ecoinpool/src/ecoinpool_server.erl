@@ -419,10 +419,10 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
                 Results
             ),
             % Process results in new process
-            spawn(fun () -> process_results(User, Peer, ResultsWithWU, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) end)
+            spawn(fun () -> process_results(Peer, ResultsWithWU, Subpool, Worker, CoinDaemonModule, CoinDaemon, Responder) end)
     end.
 
-process_results(User, Peer, Results, Subpool, Worker=#worker{lp=LP}, CoinDaemonModule, CoinDaemon, Responder) ->
+process_results(Peer, Results, Subpool, Worker=#worker{name=User, lp=LP}, CoinDaemonModule, CoinDaemon, Responder) ->
     % Process all results
     case length(Results) of
         1 -> ok;

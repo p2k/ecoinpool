@@ -34,7 +34,8 @@
     url,
     auth,
     timer,
-    block_num
+    last_getwork,
+    getwork_data
 }).
 
 -record(sc_data, {
@@ -121,9 +122,8 @@ init([SubpoolId, Config]) ->
     URL = lists:flatten(io_lib:format("http://~s:~b/", [Host, Port])),
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
-    PollInterval = proplists:get_value(poll_interval, Config, 1000),
     
-    {ok, Timer} = timer:send_interval(PollInterval, poll_daemon),
+    {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 
 handle_call(get_workunit, _From, State) ->
@@ -185,39 +185,60 @@ analyze_result(<<Data:256/bytes, Remainder/bytes>>, Acc) ->
             analyze_result(Remainder, Acc ++ [{WorkunitId, Hash, BData}])
     end.
 
-getwork_with_state(State=#state{url=URL, auth=Auth, block_num=OldBlockNum}) ->
-    try
-        case getwork(URL, Auth) of
-            {ok, Workunit=#workunit{block_num=BlockNum}} ->
-                case OldBlockNum of
-                    undefined ->
-                        {ok, Workunit, State#state{block_num=BlockNum}};
-                    BlockNum -> % Note: bound variable
-                        {ok, Workunit, State};
-                    _ -> % New block alarm!
-                        {newblock, Workunit, State#state{block_num=BlockNum}}
-                end;
-            {error, Reason} ->
-                {error, Reason, State}
-        end
-    catch error:_ ->
-        {error, <<"exception in sc_coindaemon:getwork/2">>, State}
+send_req(URL, Auth, PostData) ->
+    {ok, VSN} = application:get_key(ecoinpool, vsn),
+    ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]).
+
+check_getwork_now(_, #state{last_getwork=undefined}) ->
+    true;
+check_getwork_now(_, #state{getwork_data=undefined}) ->
+    true;
+check_getwork_now(Now, #state{url=URL, auth=Auth, last_getwork=LastGetwork, getwork_data=SCData}) ->
+    case timer:now_diff(Now, LastGetwork) of
+        Diff when Diff < 200000 -> % Prevent rpc call if less than 200ms passed
+            false;
+        Diff when Diff > 20000000 -> % Force block load every 20s
+            true;
+        _ ->
+            case send_req(URL, Auth, "{\"method\":\"getblocknumber\"}") of
+                {ok, "200", _ResponseHeaders, ResponseBody} ->
+                    {Body} = ejson:decode(ResponseBody),
+                    BlockNum = proplists:get_value(<<"result">>, Body),
+                    SCData#sc_data.block_num =/= BlockNum;
+                _ ->
+                    true
+            end
+    end.
+
+getwork_with_state(State=#state{url=URL, auth=Auth, getwork_data=OldSCData}) ->
+    Now = erlang:now(),
+    case check_getwork_now(Now, State) of
+        true -> % Actually fetch work; this is always on a block change
+            try
+                case getwork(URL, Auth) of
+                    {ok, SCData} ->
+                        Workunit = make_workunit(SCData),
+                        {newblock, Workunit, State#state{last_getwork=Now, getwork_data=SCData}};
+                    {error, Reason} ->
+                        {error, Reason, State}
+                end
+            catch error:_ ->
+                {error, <<"exception in sc_coindaemon:getwork/2">>, State}
+            end;
+        _ -> % Extrapolate work
+            SCData = OldSCData#sc_data{nonce2 = OldSCData#sc_data.nonce2 + 1}, % Increase Nonce2
+            Workunit = make_workunit(SCData),
+            {ok, Workunit, State#state{getwork_data=SCData}}
     end.
 
 getwork(URL, Auth) ->
-    PostData = "{\"method\":\"sc_getwork\"}",
-    {ok, VSN} = application:get_key(ecoinpool, vsn),
-    case ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]) of
+    case send_req(URL, Auth, "{\"method\":\"sc_getwork\"}") of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
             {Result} = proplists:get_value(<<"result">>, Body),
             Data = proplists:get_value(<<"data">>, Result),
             BData = ecoinpool_util:hexbin_to_bin(Data),
-            SCData = decode_sc_data(BData),
-            WUId = workunit_id_from_sc_data(SCData),
-            #sc_data{bits=Bits, block_num=BlockNum} = SCData,
-            Target = ecoinpool_util:bits_to_target(Bits),
-            {ok, #workunit{id=WUId, target=Target, block_num=BlockNum, data=BData}};
+            {ok, decode_sc_data(BData)};
         {ok, Status, _ResponseHeaders, ResponseBody} ->
             {error, binary:list_to_bin(io_lib:format("getwork: Received HTTP ~s - Body: ~p", [Status, ResponseBody]))};
         {error, Reason} ->
@@ -227,8 +248,7 @@ getwork(URL, Auth) ->
 sendwork(URL, Auth, BData) ->
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"sc_testwork\",\"params\":[\"" ++ HexData ++ "\"]}",
-    {ok, VSN} = application:get_key(ecoinpool, vsn),
-    case ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]) of
+    case send_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
             {Reply} = proplists:get_value(<<"result">>, Body),
@@ -272,7 +292,40 @@ decode_sc_data(SCData) ->
         miner_id=MinerId,
         bits=Bits}.
 
+encode_sc_data(SCData) ->
+    #sc_data{version=Version,
+        hash_prev_block=HashPrevBlock,
+        hash_merkle_root=HashMerkleRoot,
+        block_num=BlockNum,
+        time=Time,
+        nonce1=Nonce1,
+        nonce2=Nonce2,
+        nonce3=Nonce3,
+        nonce4=Nonce4,
+        miner_id=MinerId,
+        bits=Bits} = SCData,
+    
+    <<
+        Version:32/little,
+        HashPrevBlock:32/bytes,
+        HashMerkleRoot:32/bytes,
+        BlockNum:64/little,
+        Time:64/little,
+        Nonce1:64/unsigned-little,
+        Nonce2:64/unsigned-little,
+        Nonce3:64/unsigned-little,
+        Nonce4:32/unsigned-little,
+        MinerId:12/bytes,
+        Bits:32/little
+    >>.
+
 workunit_id_from_sc_data(#sc_data{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, nonce2=Nonce2}) ->
     Nonce2Masked = Nonce2 band 16#ffffffff,
     Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes, Nonce2Masked:64/unsigned-little>>,
     crypto:sha(Data).
+
+make_workunit(SCData=#sc_data{bits=Bits, block_num=BlockNum}) ->
+    BData = encode_sc_data(SCData),
+    WUId = workunit_id_from_sc_data(SCData),
+    Target = ecoinpool_util:bits_to_target(Bits),
+    #workunit{id=WUId, target=Target, block_num=BlockNum, data=BData}.

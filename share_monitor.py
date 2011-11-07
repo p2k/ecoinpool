@@ -48,10 +48,16 @@ class ShareMonitor(object):
         update_seq = self.shares_db.info()["update_seq"]
         current_block = None
         print "* Share Monitor activated *"
-        
+        while True:
+            update_seq, current_block = self._run(update_seq, current_block)
+    
+    def _run(self, update_seq, current_block): 
         for row in self.shares_db.changes(feed="continuous", since=update_seq):
             if not row.has_key("id"):
-                print "?", row
+                if row.has_key("last_seq"):
+                    update_seq = row["last_seq"]
+                else:
+                    print "?", row
                 continue
             
             doc_id = row["id"]
@@ -83,6 +89,7 @@ class ShareMonitor(object):
             if text is not None:
                 timestamp = "%d-%02d-%02d %02d:%02d:%02d" % tuple(doc["timestamp"])
                 print ("[%s] " + text) % (timestamp, worker["name"], doc["ip"])
+        return update_seq, current_block
 
 if __name__ == "__main__":
     import signal

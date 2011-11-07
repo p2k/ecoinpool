@@ -1,7 +1,7 @@
 
 /*
-  This file, in companion with rs_hash_data.bin, prevents us from witnessing
-  RealSolid's embarrassing 15 minutes of fame. Thank you RealSolid, my pleasure.
+  This file, in companion with rs_hash_data.bin, circumvents the need of
+  initializing the RSHash algorithm.
 */
 
 	.section .rodata
