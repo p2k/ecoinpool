@@ -58,27 +58,79 @@ class EcoinpoolClient
         return $workers;
     }
     
-    public function sharesForWorkers($workers, $shares_db = NULL)
+    public function setSharesForWorkers($workers)
     {
-        // Divide workers array by sub pools
-        $workers_per_subpool = array();
-        foreach ($workers as $worker) {
-            if (array_key_exists($worker->sub_pool_id, $workers_per_subpool))
-                $workers_per_subpool[$worker->sub_pool_id][$worker->id] = $worker;
-            else
-                $workers_per_subpool[$worker->sub_pool_id] = array($worker->id => $worker);
-        }
-        
-        foreach ($workers_per_subpool as $sub_pool_id => $sub_pool_workers) {
+        $workers_by_subpool = self::SplitWorkersBySubPools($workers);
+        foreach ($workers_by_subpool as $sub_pool_id => $sub_pool_workers) {
             $sub_pool = $this->subPoolWithId($sub_pool_id);
             
-            $view_data = $this->getViewMultiKey($sub_pool->name, "stats", "worker", array_keys($sub_pool_workers), false, true);
+            $view_data = $this->getViewMultiKey($sub_pool->name, "stats", "workers", array_keys($sub_pool_workers), false, true);
             
             foreach ($view_data->rows as $row) {
                 $worker = $sub_pool_workers[$row->key];
                 list($worker->shares->invalid, $worker->shares->valid, $worker->shares->candidate) = $row->value;
             }
         }
+    }
+    
+    public function setLastShareForWorkers($workers)
+    {
+        $workers_by_subpool = self::SplitWorkersBySubPools($workers);
+        foreach ($workers_by_subpool as $sub_pool_id => $sub_pool_workers) {
+            $sub_pool = $this->subPoolWithId($sub_pool_id);
+            
+            $view_data = $this->getViewMultiKey($sub_pool->name, "timed_stats", "worker_last_share", array_keys($sub_pool_workers), false, true);
+            
+            foreach ($view_data->rows as $row) {
+                $worker = $sub_pool_workers[$row->key];
+                list(list($year, $month, $day, $hour, $minute, $second), $state) = $row->value;
+                $worker->last_share_ts = gmmktime($hour, $minute, $second, $month, $day, $year);
+                $worker->last_share_state = $state;
+            }
+        }
+    }
+    
+    public function speedOfWorker($worker, $minutes = 10)
+    {
+        $sub_pool = $this->subPoolWithId($worker->sub_pool_id);
+        
+        list($ts, $start_key, $end_key) = self::MakeTimeIntervalKeys(time()-60, $minutes);
+        array_unshift($start_key, $worker->id);
+        array_unshift($end_key, $worker->id);
+        
+        $view_data = $this->getView($sub_pool->name, "timed_stats", "valids_per_worker", $start_key, $end_key, false, 0);
+        
+        $shares = $view_data->rows[0]->value;
+        $sps = $shares / ($minutes * 60);
+        
+        return $sub_pool->hashspeedFromSharespeed($sps);
+    }
+    
+    public function workerSharesPerMinute($worker, $intervals = 11)
+    {
+        $sub_pool = $this->subPoolWithId($worker->sub_pool_id);
+        
+        list($ts, $start_key, $end_key) = self::MakeTimeIntervalKeys(time(), $intervals);
+        array_unshift($start_key, $worker->id);
+        array_unshift($end_key, $worker->id);
+        
+        $view_data = $this->getView($sub_pool->name, "timed_stats", "valids_per_worker", $start_key, $end_key, false, 6);
+        
+        $result = array();
+        foreach ($view_data->rows as $row) {
+            list($k_worker_id, $k_year, $k_month, $k_day, $k_hour, $k_minute) = $row->key;
+            $k_ts = gmmktime($k_hour, $k_minute, 0, $k_month, $k_day, $k_year);
+            while ($ts < $k_ts) {
+                $result[] = 0;
+                $ts += 60;
+            }
+            $result[] = $row->value;
+            $ts += 60;
+        }
+        while (count($result) < $intervals)
+            $result[] = 0;
+        
+        return $result;
     }
     
     public function workerWithId($worker_id)
@@ -293,6 +345,33 @@ class EcoinpoolClient
         // Return results
         return array($status, $reason, $headers, json_decode($body));
     }
+    
+    private static function MakeTimeIntervalKeys($ts, $minutes_to_subtract)
+    {
+        list($year, $month, $day, $hour, $minute) = self::SDateToArray(gmdate("Y-m-d-H-i", $ts));
+        $end_key = array($year, $month, $day, $hour, $minute, 59);
+        $ts = gmmktime($hour, $minute - $minutes_to_subtract + 1, 0, $month, $day, $year);
+        list($year, $month, $day, $hour, $minute) = self::SDateToArray(gmdate("Y-m-d-H-i", $ts));
+        $start_key = array($year, $month, $day, $hour, $minute, 0);
+        return array($ts, $start_key, $end_key);
+    }
+    
+    private static function SDateToArray($str_date)
+    {
+        return array_map(function($x) {return intval($x, 10);}, explode("-", $str_date));
+    }
+    
+    private static function SplitWorkersBySubPools($workers)
+    {
+        $workers_by_subpool = array();
+        foreach ($workers as $worker) {
+            if (array_key_exists($worker->sub_pool_id, $workers_by_subpool))
+                $workers_by_subpool[$worker->sub_pool_id][$worker->id] = $worker;
+            else
+                $workers_by_subpool[$worker->sub_pool_id] = array($worker->id => $worker);
+        }
+        return $workers_by_subpool;
+    }
 }
 
 class EcoinpoolWorker
@@ -306,6 +385,8 @@ class EcoinpoolWorker
     public $_rev = NULL;
     
     public $shares;
+    public $last_share_ts = NULL;
+    public $last_share_state = NULL;
     
     public function __construct($user_id, $name, $sub_pool_id = NULL)
     {
@@ -337,6 +418,13 @@ class EcoinpoolWorker
     {
         return $this->shares->valid + $this->shares->candidate;
     }
+    
+    public function isActive($minutes_until_idle = 10)
+    {
+        if ($this->last_share_ts === NULL)
+            return false;
+        return (time() - $this->last_share_ts < $minutes_until_idle * 60);
+    }
 }
 
 class EcoinpoolSubPool
@@ -358,6 +446,14 @@ class EcoinpoolSubPool
             $this->coin_daemon = stdClass();
         else
             $this->coin_daemon = (object)$coin_daemon;
+    }
+    
+    public function hashspeedFromSharespeed($shares_per_second)
+    {
+        if ($this->pool_type == "sc")
+            return $shares_per_second * 131072;
+        else
+            return $shares_per_second * 4294967296;
     }
 }
 

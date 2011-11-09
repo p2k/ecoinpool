@@ -190,13 +190,31 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
                                 {<<"map">>, <<"function(doc) {emit([doc.state, doc.user_id, doc.worker_id], 1);}">>},
                                 {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
                             ]}},
+                            {<<"rejected">>, {[
+                                {<<"map">>, <<"function(doc) {if (doc.state == \"invalid\") emit([doc.reject_reason, doc.user_id, doc.worker_id], 1);}">>},
+                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
+                            ]}},
                             {<<"workers">>, {[
                                 {<<"map">>, <<"function(doc) {var d = [0,0,0]; switch(doc.state) {case \"invalid\": d[0] = 1; break; case \"valid\": d[1] = 1; break; case \"candidate\": d[2] = 1; break;} emit(doc.worker_id, d);}">>},
-                                {<<"reduce">>, <<"function(keys, values, rereduce) {var s = [0,0,0]; for (var i = 0; i < values.length; i++) {var value = values[i]; s[0] += value[0]; s[1] += value[1]; s[2] += value[2];} return s;}">>}
-                            ]}},
-                            {<<"rejected">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.state === \"invalid\") emit([doc.reject_reason, doc.user_id, doc.worker_id], 1);}">>},
+                                {<<"reduce">>, <<"function(keys, values, rereduce) {var s = [0,0,0]; for (var i in values) {var value = values[i]; s[0] += value[0]; s[1] += value[1]; s[2] += value[2];} return s;}">>}
+                            ]}}
+                        ]}}
+                    ]}),
+                    {ok, _} = couchbeam:save_doc(DB, {[
+                        {<<"_id">>, <<"_design/timed_stats">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"views">>, {[
+                            {<<"valids_per_user">>, {[
+                                {<<"map">>, <<"function(doc) {if (doc.state == \"valid\" || doc.state == \"candidate\") emit([doc.user_id].concat(doc.timestamp), 1);}">>},
                                 {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
+                            ]}},
+                            {<<"valids_per_worker">>, {[
+                                {<<"map">>, <<"function(doc) {if (doc.state == \"valid\" || doc.state == \"candidate\") emit([doc.worker_id].concat(doc.timestamp), 1);}">>},
+                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
+                            ]}},
+                            {<<"worker_last_share">>, {[
+                                {<<"map">>, <<"function(doc) {emit(doc.worker_id, [doc.timestamp, doc.state]);}">>},
+                                {<<"reduce">>, <<"function(keys, values, rereduce) {var cmp = function (a, b) {for (var i in a) {if (a[i] != b[i]) return (a[i] < b[i]);} return false;}; var best = null; for (var i in values) {if (best === null || cmp(best[0], values[i][0])) best = values[i];} return best;}">>}
                             ]}}
                         ]}}
                     ]}),
