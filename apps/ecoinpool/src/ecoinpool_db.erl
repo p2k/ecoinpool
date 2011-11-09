@@ -190,6 +190,10 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
                                 {<<"map">>, <<"function(doc) {emit([doc.state, doc.user_id, doc.worker_id], 1);}">>},
                                 {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
                             ]}},
+                            {<<"workers">>, {[
+                                {<<"map">>, <<"function(doc) {var d = [0,0,0]; switch(doc.state) {case \"invalid\": d[0] = 1; break; case \"valid\": d[1] = 1; break; case \"candidate\": d[2] = 1; break;} emit(doc.worker_id, d);}">>},
+                                {<<"reduce">>, <<"function(keys, values, rereduce) {var s = [0,0,0]; for (var i = 0; i < values.length; i++) {var value = values[i]; s[0] += value[0]; s[1] += value[1]; s[2] += value[2];} return s;}">>}
+                            ]}},
                             {<<"rejected">>, {[
                                 {<<"map">>, <<"function(doc) {if (doc.state === \"invalid\") emit([doc.reject_reason, doc.user_id, doc.worker_id], 1);}">>},
                                 {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
