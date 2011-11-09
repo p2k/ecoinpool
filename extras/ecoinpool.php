@@ -133,6 +133,55 @@ class EcoinpoolClient
         return $result;
     }
     
+    public function speedOfSubPool($minutes = 10, $sub_pool_id = NULL)
+    {
+        if ($sub_pool_id instanceof EcoinpoolSubPool)
+            $sub_pool = $sub_pool_id;
+        else if ($sub_pool_id == NULL)
+            $sub_pool = $this->subPoolWithId($this->default_sub_pool_id);
+        else
+            $sub_pool = $this->subPoolWithId($sub_pool_id);
+        
+        list($ts, $start_key, $end_key) = self::MakeTimeIntervalKeys(time()-60, $minutes);
+        
+        $view_data = $this->getView($sub_pool->name, "timed_stats", "all_valids", $start_key, $end_key, false, 0);
+        
+        $shares = $view_data->rows[0]->value;
+        $sps = $shares / ($minutes * 60);
+        
+        return $sub_pool->hashspeedFromSharespeed($sps);
+    }
+    
+    public function poolSharesPerMinute($intervals = 11, $sub_pool_id = NULL)
+    {
+        if ($sub_pool_id instanceof EcoinpoolSubPool)
+            $sub_pool = $sub_pool_id;
+        else if ($sub_pool_id == NULL)
+            $sub_pool = $this->subPoolWithId($this->default_sub_pool_id);
+        else
+            $sub_pool = $this->subPoolWithId($sub_pool_id);
+        
+        list($ts, $start_key, $end_key) = self::MakeTimeIntervalKeys(time(), $intervals);
+        
+        $view_data = $this->getView($sub_pool->name, "timed_stats", "all_valids", $start_key, $end_key, false, 5);
+        
+        $result = array();
+        foreach ($view_data->rows as $row) {
+            list($k_year, $k_month, $k_day, $k_hour, $k_minute) = $row->key;
+            $k_ts = gmmktime($k_hour, $k_minute, 0, $k_month, $k_day, $k_year);
+            while ($ts < $k_ts) {
+                $result[] = 0;
+                $ts += 60;
+            }
+            $result[] = $row->value;
+            $ts += 60;
+        }
+        while (count($result) < $intervals)
+            $result[] = 0;
+        
+        return $result;
+    }
+    
     public function workerWithId($worker_id)
     {
         return $this->unserializeWorker($this->getDocument("ecoinpool", $worker_id));

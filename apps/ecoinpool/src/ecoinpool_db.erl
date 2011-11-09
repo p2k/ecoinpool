@@ -204,6 +204,10 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
                         {<<"_id">>, <<"_design/timed_stats">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
+                            {<<"all_valids">>, {[
+                                {<<"map">>, <<"function(doc) {if (doc.state == \"valid\" || doc.state == \"candidate\") emit(doc.timestamp, 1);}">>},
+                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
+                            ]}},
                             {<<"valids_per_user">>, {[
                                 {<<"map">>, <<"function(doc) {if (doc.state == \"valid\" || doc.state == \"candidate\") emit([doc.user_id].concat(doc.timestamp), 1);}">>},
                                 {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
