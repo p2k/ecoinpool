@@ -22,7 +22,7 @@
 # -- Configure here: --
 
 SERVER_URL = "http://ecoinpool.p2k-network.org:5984/"
-SHARES_DB = "sc-livetest2"
+SHARES_DB = "sc-livetest3"
 CONFIG_DB = "ecoinpool"
 
 # ---------------------
@@ -52,7 +52,7 @@ class ShareMonitor(object):
             update_seq, current_block = self._run(update_seq, current_block)
     
     def _run(self, update_seq, current_block): 
-        for row in self.shares_db.changes(feed="continuous", since=update_seq):
+        for row in self.shares_db.changes(feed="continuous", since=update_seq, include_docs=True):
             if not row.has_key("id"):
                 if row.has_key("last_seq"):
                     update_seq = row["last_seq"]
@@ -60,8 +60,7 @@ class ShareMonitor(object):
                     print "?", row
                 continue
             
-            doc_id = row["id"]
-            doc = self.shares_db.get(doc_id)
+            doc = row["doc"]
             if not doc.has_key("state"):
                 continue
             

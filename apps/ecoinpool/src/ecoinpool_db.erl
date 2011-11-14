@@ -301,6 +301,8 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
         <<"sc">> -> sc;
         _ -> undefined
     end,
+    MaxCacheSize = proplists:get_value(<<"max_cache_size">>, DocProps, 300),
+    MaxWorkAge = proplists:get_value(<<"max_work_age">>, DocProps, 20),
     CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
         {CDP} ->
             lists:map(
@@ -316,7 +318,9 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
         is_binary(Name),
         Name =/= <<>>,
         is_integer(Port),
-        PoolType =/= undefined ->
+        PoolType =/= undefined,
+        is_integer(MaxCacheSize),
+        is_integer(MaxWorkAge) ->
             
             % Create record
             Subpool = #subpool{
@@ -324,6 +328,8 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
                 name=Name,
                 port=Port,
                 pool_type=PoolType,
+                max_cache_size=if MaxCacheSize > 0 -> MaxCacheSize; true -> 0 end,
+                max_work_age=if MaxWorkAge > 1 -> MaxWorkAge; true -> 1 end,
                 coin_daemon_config=CoinDaemonConfig
             },
             {ok, Subpool};

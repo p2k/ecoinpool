@@ -21,6 +21,7 @@
 % Workunit record
 -record(workunit, {
     id :: binary(),
+    ts :: tuple(),
     target :: binary(),
     block_num :: integer(),
     data :: binary(),

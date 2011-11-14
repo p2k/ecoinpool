@@ -27,6 +27,8 @@
     name :: binary(),
     port :: integer(),
     pool_type :: atom(),
+    max_cache_size = 0 :: integer(),
+    max_work_age :: integer(),
     coin_daemon_config :: [tuple()]
 }).
 

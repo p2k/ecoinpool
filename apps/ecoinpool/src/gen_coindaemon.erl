@@ -46,10 +46,12 @@ behaviour_info(callbacks) ->
         %   in big endian.
         {share_target, 0},
         
-        % get_workunit(PID)
-        %   Get an unassigned workunit now. Also check for a new block.
-        %   Should return {ok, Workunit} or {newblock, Workunit} or {error, Message}
-        {get_workunit, 1},
+        % post_workunit(PID)
+        %   Post an unassigned workunit asynchronously. Also check for a new block.
+        %   Should use ecoinpool_server:store_workunit/2 and new_block_detected/1
+        %   to return a work unit. It must be guaranteed that store_workunit/2
+        %   gets called at some point or the workflow might deadlock!
+        {post_workunit, 1},
         
         % encode_workunit(Workunit)
         %   Encodes a workunit so it can be sent as result to a getwork call.

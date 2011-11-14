@@ -45,7 +45,8 @@
     hashtbl,
     workertbl,
     workerltbl,
-    lp_queue
+    lp_queue,
+    work_checker
 }).
 
 %% ===================================================================
@@ -101,7 +102,9 @@ init([SubpoolId]) ->
     gen_server:cast(self(), {reload_config, Subpool}),
     % Schedule workers reload (TODO: move this to reload_config if worker configuration changed)
     gen_server:cast(self(), reload_workers),
-    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[]}}.
+    % Create work check timer
+    {ok, WorkChecker} = timer:send_interval(500, check_work_age), % Fixed to twice per second
+    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=queue:new(), work_checker=WorkChecker}}.
 
 handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
     % Returns the sub-pool IDs for which worker changes should be retrieved
@@ -112,10 +115,10 @@ handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
-handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, cdaemon_mod=OldCoinDaemonModule, cdaemon_pid=OldCoinDaemon}) ->
+handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_size=WorkQueueSize, cdaemon_mod=OldCoinDaemonModule, cdaemon_pid=OldCoinDaemon}) ->
     % Extract config
-    #subpool{id=SubpoolId, port=Port, pool_type=PoolType, coin_daemon_config=CoinDaemonConfig} = Subpool,
-    #subpool{port=OldPort, coin_daemon_config=OldCoinDaemonConfig} = OldSubpool,
+    #subpool{id=SubpoolId, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, coin_daemon_config=CoinDaemonConfig} = Subpool,
+    #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, coin_daemon_config=OldCoinDaemonConfig} = OldSubpool,
     % Derive the CoinDaemon module name from PoolType + "_coindaemon"
     CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
     
@@ -151,6 +154,18 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, cdaemon_m
     GetworkMethod = CoinDaemonModule:getwork_method(),
     SendworkMethod = CoinDaemonModule:sendwork_method(),
     
+    % Check caching
+    if
+        WorkQueueSize =:= OldMaxCacheSize, % Cache was full
+        WorkQueueSize < MaxCacheSize -> % But too few entries on new setting
+            io:format("reload_config: cache size changed from ~b to ~b requesting more work.~n", [OldMaxCacheSize, MaxCacheSize]),
+            CoinDaemonModule:post_workunit(CoinDaemon);
+        StartCoinDaemon -> % If the coin daemon was restarted, always do a post_workunit call
+            CoinDaemonModule:post_workunit(CoinDaemon);
+        true ->
+            ok
+    end,
+    
     {noreply, State#state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod}};
 
 handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
@@ -175,91 +190,119 @@ handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workert
 handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
     % Extract state variables
     #state{subpool=Subpool, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl} = State,
+    #subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
     % Check the method and authentication
-    UpdateState = case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
+    case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
         {ok, Worker=#worker{name=User}, Action} ->
             case Action of % Now match for the action
                 getwork ->
-                    case assign_work(Worker, WorkQueue, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) of
+                    {Result, NewWorkQueue, NewWorkQueueSize} = assign_work(erlang:now(), MaxWorkAge, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemonModule, Responder),
+                    case Result of
                         hit ->
-                            io:format("Cache hit by ~s/~s!~n", [User, Peer]),
-                            {update_queue, queue:drop(WorkQueue), WorkQueueSize-1};
+                            io:format("Cache hit by ~s/~s - Queue size: ~b/~b~n", [User, Peer, NewWorkQueueSize, MaxCacheSize]);
                         miss ->
-                            io:format("Cache miss by ~s/~s!~n", [User, Peer]),
-                            false
-                    end;
+                            io:format("Cache miss by ~s/~s - Queue size: ~b/~b~n", [User, Peer, NewWorkQueueSize, MaxCacheSize])
+                    end,
+                    if
+                        WorkQueueSize =:= MaxCacheSize, % Cache was max size
+                        NewWorkQueueSize < MaxCacheSize -> % And now is below max size
+                            CoinDaemonModule:post_workunit(CoinDaemon); % -> Call for work
+                        true ->
+                            ok
+                    end,
+                    {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
                 sendwork ->
                     check_work(Peer, Params, Subpool, Worker, WorkTbl, HashTbl, CoinDaemonModule, CoinDaemon, Responder),
-                    false
+                    {noreply, State}
             end;
-        _ ->
-            false
-    end,
-    case UpdateState of
-        false ->
-            {noreply, State};
-        {update_queue, NewWorkQueue, NewWorkQueueSize} ->
-            {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}}
+        {error, Type} ->
+            Responder({error, Type}),
+            {noreply, State}
     end;
 
 handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
     % Extract state variables
     #state{gw_method=GetworkMethod, sw_method=SendworkMethod, workertbl=WorkerTbl, lp_queue=LPQueue} = State,
     % Check the method and authentication
-    case parse_method_and_auth(Peer, GetworkMethod, [], Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) of
+    case parse_method_and_auth(Peer, GetworkMethod, [], Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
         {ok, Worker=#worker{name=User}, _} ->
             io:format("LP requested by ~s/~s!~n", [User, Peer]),
             case Responder(start) of
                 ok ->
-                    {noreply, State#state{lp_queue=[{Worker, Responder} | LPQueue]}};
+                    {noreply, State#state{lp_queue=queue:in({Worker, Responder}, LPQueue)}};
                 _ ->
                     io:format("But the connection was already dropped!~n"),
                     {noreply, State}
             end;
-        _ ->
+        {error, Type} ->
+            Responder({start_error, Type}),
             {noreply, State}
     end;
 
-handle_cast(new_block_detected, State=#state{cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue}) ->
-    io:format("--- New block! Discarding ~b assigned WUs, ~b queued WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, length(LPQueue)]),
+handle_cast(new_block_detected, State) ->
+    % Extract state variables
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue} = State,
+    io:format("--- New block! Discarding ~b assigned WUs, ~b cached WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, queue:len(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
     ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
-    % Spawn a process to handle longpolling
-    ServerPID = self(),
-    spawn(
-        fun () ->
-            lists:foreach(
-                fun ({#worker{id=WorkerId, name=User}, Responder}) ->
-                    case Responder(check) of
-                        ok ->
-                            case get_and_store_workunit(ServerPID, WorkerId, CoinDaemonModule, CoinDaemon) of
-                                {error, _} ->
-                                    Responder(cancel);
-                                Workunit ->
-                                    Responder({finish, CoinDaemonModule:encode_workunit(Workunit)})
-                            end;
-                        _ ->
-                            io:format("LP connection for ~s was dropped, skipping.~n", [User])
-                    end
-                end,
-                LPQueue
-            )
-        end
+    % Check if LP are still valid, then push onto the work queue
+    CheckedLPQueue = queue:filter(
+        fun ({#worker{name=User}, Responder}) ->
+            case Responder(check) of
+                ok ->
+                    true;
+                _ ->
+                    io:format("LP connection for ~s was dropped, skipping.~n", [User]),
+                    false
+            end
+        end,
+        LPQueue
     ),
-    {noreply, State#state{workq=queue:new(), workq_size=0, lp_queue=[]}};
-
-handle_cast({store_workunit, Workunit=#workunit{worker_id=undefined}}, State=#state{workq=WorkQueue, workq_size=WorkQueueSize}) ->
-    % Unassigned work -> queue
-    {noreply, State#state{workq=queue:in(Workunit, WorkQueue), workq_size=WorkQueueSize+1}};
-
-handle_cast({store_workunit, Workunit}, State=#state{worktbl=WorkTbl}) ->
-    % Assigned work -> store
-    case ets:insert_new(WorkTbl, Workunit) of
+    {NewWorkQueue, NewWorkQueueSize} = case queue:is_empty(CheckedLPQueue) of
+        true when WorkQueueSize < 0 ->
+            {WorkQueue, WorkQueueSize};
+        true -> % And WorkQueueSize >= 0
+            {queue:new(), 0};
+        false when WorkQueueSize < 0 -> % Join with existing requests (LP has priority)
+            {queue:join(CheckedLPQueue, WorkQueue), WorkQueueSize - queue:len(CheckedLPQueue)};
         false ->
-            io:format("store_workunit got a collision :/~n");
-        _ -> ok
+            {CheckedLPQueue, -queue:len(CheckedLPQueue)}
     end,
-    {noreply, State};
+    if
+        WorkQueueSize =:= MaxCacheSize, % Cache was max size
+        NewWorkQueueSize < MaxCacheSize -> % And now is below max size
+            CoinDaemonModule:post_workunit(CoinDaemon); % -> Call for work
+        true ->
+            ok
+    end,
+    {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize, lp_queue=queue:new()}};
+
+handle_cast({store_workunit, Workunit}, State) ->
+    % Extract state variables
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl} = State,
+    % Inspect the Cache/Queue
+    {NewWorkQueue, NewWorkQueueSize} = if
+        WorkQueueSize < 0 -> % We have connections waiting -> send out
+            {{value, {#worker{id=WorkerId, lp=LP}, Responder}}, NWQ} = queue:out(WorkQueue),
+            case ets:insert_new(WorkTbl, Workunit#workunit{worker_id=WorkerId}) of
+                false -> io:format("store_workunit got a collision :/~n");
+                _ -> ok
+            end,
+            Responder({ok, CoinDaemonModule:encode_workunit(Workunit), case LP of true -> [longpolling]; _ -> [] end}),
+            {NWQ, WorkQueueSize+1};
+        WorkQueueSize < MaxCacheSize -> % We are under the cache limit -> cache
+            {queue:in(Workunit, WorkQueue), WorkQueueSize+1};
+        true -> % Overflow -> ignore
+            {WorkQueue, WorkQueueSize}
+    end,
+    io:format(" Queue size: ~b/~b~n", [NewWorkQueueSize, MaxCacheSize]),
+    if
+        NewWorkQueueSize < MaxCacheSize -> % Cache is still below max size
+            CoinDaemonModule:post_workunit(CoinDaemon); % -> Call for more work
+        true ->
+            ok
+    end,
+    {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
 
 handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State=#state{workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     ets:match(WorkerTbl, #worker{id=WorkerId, _='_'}),
@@ -270,8 +313,7 @@ handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State
             io:format("Brand new: ~p~n", [Worker]),
             ets:insert(WorkerLookupTbl, {WorkerId, WorkerName});
         [{_, WorkerName}] -> % Existing and worker name matches
-            io:format("Existing and matches: ~p~n", [WorkerId]),
-            ok;
+            io:format("Existing and matches: ~p~n", [WorkerId]);
         [{_, OldWorkerName}] -> % Existing & name change
             io:format("Name change: ~p - ~p -> ~p~n", [WorkerId, OldWorkerName, WorkerName]),
             ets:delete(WorkerTbl, OldWorkerName),
@@ -295,16 +337,34 @@ handle_cast({remove_worker, WorkerId}, State=#state{workertbl=WorkerTbl, workerl
 handle_cast(_Message, State) ->
     {noreply, State}.
 
+handle_info(check_work_age, State=#state{workq_size=WorkQueueSize}) when WorkQueueSize =< 0 ->
+    {noreply, State}; % No dice
+
+handle_info(check_work_age, State) ->
+    % Extract state variables
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge}, cdaemon_mod=CoinDaemonModule, cdaemon_pid=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize} = State,
+    {NewWorkQueue, NewWorkQueueSize} = check_work_age(WorkQueue, WorkQueueSize, erlang:now(), MaxWorkAge),
+    if
+        WorkQueueSize =:= MaxCacheSize, % Cache was max size
+        NewWorkQueueSize < MaxCacheSize -> % And now is below max size
+            CoinDaemonModule:post_workunit(CoinDaemon); % -> Call for work
+        true ->
+            ok
+    end,
+    {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
+
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}}) ->
+terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, work_checker=WorkChecker}) ->
     % Stop the RPC
     ecoinpool_rpc:stop_rpc(Port),
     % Unregister notifications
     ecoinpool_worker_monitor:set_worker_notifications(Id, []),
     % We don't need to stop the CoinDaemon, because that will be handled by the supervisor
     io:format("Subpool ~p terminated.~n", [Id]),
+    % Kill the work check timer
+    timer:cancel(WorkChecker),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -314,7 +374,7 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod, Responder) ->
+parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) ->
     Action = case Method of
         GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
             if
@@ -332,63 +392,43 @@ parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, Send
     end,
     case Action of % First, match for validity
         unknown -> % Bail out
-            Responder({error, method_not_found}),
-            error;
+            {error, method_not_found};
         _ ->
             % Check authentication
             case Auth of
                 unauthorized ->
                     io:format("rpc_request: ~s: Unauthorized!~n", [Peer]),
-                    Responder({error, authorization_required}),
-                    error;
+                    {error, authorization_required};
                 {User, Password} ->
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
                             {ok, Worker, Action};
                         [] ->
                             io:format("rpc_request: ~s: Wrong password for username ~p!~n", [Peer, User]),
-                            Responder({error, authorization_required}),
-                            error
+                            {error, authorization_required}
                     end
             end
     end.
 
-assign_work(#worker{id=WorkerId, lp=LP}, WorkQueue, WorkTbl, CoinDaemonModule, CoinDaemon, Responder) ->
-    % Look if work is available in the queue/cache
-    case queue:peek(WorkQueue) of
-        {value, Workunit} -> % Cache hit
-            ets:insert(WorkTbl, Workunit#workunit{worker_id=WorkerId}),
-            Responder({ok, CoinDaemonModule:encode_workunit(Workunit), case LP of true -> [longpolling]; _ -> [] end}),
-            hit;
-        _ -> % Cache miss
-            % Spawn a process to get work
-            ServerPID = self(),
-            spawn(
-                fun () ->
-                    Responder(case get_and_store_workunit(ServerPID, WorkerId, CoinDaemonModule, CoinDaemon) of
-                        {error, Message} ->
-                            {error, {-1, Message}};
-                        Workunit ->
-                            {ok, CoinDaemonModule:encode_workunit(Workunit), case LP of true -> [longpolling]; _ -> [] end}
-                    end)
-                end
-            ),
-            miss
-    end.
-
-get_and_store_workunit(ServerPID, WorkerId, CoinDaemonModule, CoinDaemon) ->
-    case CoinDaemonModule:get_workunit(CoinDaemon) of
-        {error, Message} ->
-            {error, Message};
-        {Success, Workunit} ->
-            case Success of
-                newblock ->
-                    gen_server:cast(ServerPID, new_block_detected);
-                _ ->
-                    ok
-            end,
-            gen_server:cast(ServerPID, {store_workunit, Workunit#workunit{worker_id=WorkerId}}),
-            Workunit
+assign_work(Now, MaxWorkAge, Worker=#worker{id=WorkerId, lp=LP}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemonModule, Responder) ->
+    % Look if work is available in the Cache
+    if
+        WorkQueueSize > 0 -> % Cache hit
+            {{value, Workunit=#workunit{ts=WorkTS}}, NewWorkQueue} = queue:out(WorkQueue),
+            case timer:now_diff(Now, WorkTS) / 1000000 of
+                Diff when Diff =< MaxWorkAge -> % Check age
+                    case ets:insert_new(WorkTbl, Workunit#workunit{worker_id=WorkerId}) of
+                        false -> io:format("assign_work got a collision :/~n");
+                        _ -> ok
+                    end,
+                    Responder({ok, CoinDaemonModule:encode_workunit(Workunit), case LP of true -> [longpolling]; _ -> [] end}),
+                    {hit, NewWorkQueue, WorkQueueSize-1};
+                _ -> % Try again if too old (tail recursive)
+                    io:format("assign_work: discarded an old workunit.~n"),
+                    assign_work(Now, MaxWorkAge, Worker, NewWorkQueue, WorkQueueSize-1, WorkTbl, CoinDaemonModule, Responder)
+            end;
+        true -> % Cache miss, append to waiting queue
+            {miss, queue:in({Worker, Responder}, WorkQueue), WorkQueueSize-1}
     end.
 
 check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, CoinDaemonModule, CoinDaemon, Responder) ->
@@ -477,3 +517,16 @@ process_results(Peer, Results, Subpool, Worker=#worker{name=User, lp=LP}, CoinDa
         end,
         Candidates
     ).
+
+check_work_age(WorkQueue, WorkQueueSize, _, _) when WorkQueueSize =< 0 ->
+    {WorkQueue, WorkQueueSize}; % Done
+
+check_work_age(WorkQueue, WorkQueueSize, Now, MaxWorkAge) ->
+    {value, #workunit{ts=WorkTS}} = queue:peek(WorkQueue),
+    case timer:now_diff(Now, WorkTS) / 1000000 of
+        Diff when Diff > MaxWorkAge ->
+            io:format("check_work_age: discarded an old workunit.~n"),
+            check_work_age(queue:drop(WorkQueue), WorkQueueSize-1, Now, MaxWorkAge); % Check next (tail recursive)
+        _ ->
+            {WorkQueue, WorkQueueSize} % Done
+    end.

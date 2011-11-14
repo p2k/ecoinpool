@@ -397,11 +397,12 @@ class EcoinpoolClient
     
     private static function MakeTimeIntervalKeys($ts, $minutes_to_subtract)
     {
-        list($year, $month, $day, $hour, $minute) = self::SDateToArray(gmdate("Y-m-d-H-i", $ts));
-        $end_key = array($year, $month, $day, $hour, $minute, 59);
-        $ts = gmmktime($hour, $minute - $minutes_to_subtract + 1, 0, $month, $day, $year);
-        list($year, $month, $day, $hour, $minute) = self::SDateToArray(gmdate("Y-m-d-H-i", $ts));
-        $start_key = array($year, $month, $day, $hour, $minute, 0);
+        $end_key = self::SDateToArray(gmdate("Y-m-d-H-i", $ts));
+        $ts = gmmktime($end_key[3], $end_key[4], 0, $end_key[1], $end_key[2], $end_key[0]);
+        $end_key[5] = 59;
+        $ts -= $minutes_to_subtract * 60 - 60;
+        $start_key = self::SDateToArray(gmdate("Y-m-d-H-i", $ts));
+        $start_key[5] = 0;
         return array($ts, $start_key, $end_key);
     }
     

@@ -24,7 +24,7 @@
 
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, get_workunit/1, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2]).
+-export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, post_workunit/1, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -35,7 +35,8 @@
     auth,
     timer,
     last_getwork,
-    getwork_data
+    getwork_data,
+    extra_workunit
 }).
 
 -record(sc_data, {
@@ -68,8 +69,8 @@ sendwork_method() ->
 share_target() ->
     <<16#00007fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff:256>>.
 
-get_workunit(PID) ->
-    gen_server:call(PID, get_workunit).
+post_workunit(PID) ->
+    gen_server:cast(PID, post_workunit).
 
 encode_workunit(#workunit{target=Target, data=Data}) ->
     HexTarget = ecoinpool_util:bin_to_hexbin(Target),
@@ -126,10 +127,6 @@ init([SubpoolId, Config]) ->
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 
-handle_call(get_workunit, _From, State) ->
-    {Result, WorkunitOrMessage, NewState} = getwork_with_state(State, true),
-    {reply, {Result, WorkunitOrMessage}, NewState};
-
 handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth}) ->
     try
         {reply, sendwork(URL, Auth, BData), State}
@@ -139,6 +136,21 @@ handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth}) ->
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
+
+handle_cast(post_workunit, State=#state{subpool=SubpoolId}) ->
+    case getwork_with_state(State, true) of
+        {error, Message, NewState} ->
+            io:format("getwork returned error: ~p~n", [Message]),
+            timer:send_after(1000, retry_post_workunit), % Retry in one second
+            {noreply, NewState};
+        {Result, Workunit, NewState} ->
+            case Result of
+                newblock -> ecoinpool_server:new_block_detected(SubpoolId);
+                _ -> ok
+            end,
+            ecoinpool_server:store_workunit(SubpoolId, Workunit),
+            {noreply, NewState}
+    end;
 
 handle_cast(_Message, State) ->
     {noreply, State}.
@@ -156,9 +168,11 @@ handle_info(poll_daemon, State=#state{subpool=SubpoolId}) ->
                 newblock -> ecoinpool_server:new_block_detected(SubpoolId);
                 _ -> ok
             end,
-            ecoinpool_server:store_workunit(SubpoolId, Workunit),
-            {noreply, NState}
+            {noreply, NState#state{extra_workunit=Workunit}} % Keep extra workunit
     end;
+
+handle_info(retry_post_workunit, State) ->
+    handle_cast(post_workunit, State);
 
 handle_info(_Message, State) ->
     {noreply, State}.
@@ -213,7 +227,7 @@ check_getwork_now(Now, #state{url=URL, auth=Auth, last_getwork=LastGetwork, getw
             end
     end.
 
-getwork_with_state(State=#state{url=URL, auth=Auth, getwork_data=OldSCData}, Extrapolate) ->
+getwork_with_state(State=#state{url=URL, auth=Auth, getwork_data=OldSCData, extra_workunit=ExtraWorkunit}, Extrapolate) ->
     Now = erlang:now(),
     case check_getwork_now(Now, State) of
         true -> % Actually fetch work
@@ -242,9 +256,14 @@ getwork_with_state(State=#state{url=URL, auth=Auth, getwork_data=OldSCData}, Ext
         _ -> % Extrapolate work or report no new block
             case Extrapolate of
                 true ->
-                    SCData = OldSCData#sc_data{nonce2 = OldSCData#sc_data.nonce2 + 16#00001000}, % Increase Nonce2 (starting at bit 12)
-                    Workunit = make_workunit(SCData),
-                    {ok, Workunit, State#state{getwork_data=SCData}};
+                    case ExtraWorkunit of
+                        undefined ->
+                            SCData = OldSCData#sc_data{nonce2 = OldSCData#sc_data.nonce2 + 16#00001000}, % Increase Nonce2 (starting at bit 12)
+                            Workunit = make_workunit(SCData),
+                            {ok, Workunit, State#state{getwork_data=SCData}};
+                        _ -> % Got an extra work unit from last block change, return it
+                            {ok, ExtraWorkunit, State#state{extra_workunit=undefined}}
+                    end;
                 _ ->
                     {error, no_new_block, State}
             end
@@ -347,4 +366,4 @@ make_workunit(SCData=#sc_data{bits=Bits, block_num=BlockNum}) ->
     BData = encode_sc_data(SCData),
     WUId = workunit_id_from_sc_data(SCData),
     Target = ecoinpool_util:bits_to_target(Bits),
-    #workunit{id=WUId, target=Target, block_num=BlockNum, data=BData}.
+    #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BData}.

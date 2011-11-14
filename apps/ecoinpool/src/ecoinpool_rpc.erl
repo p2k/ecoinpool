@@ -137,7 +137,7 @@ respond_success(Req, ReqId, Result, Options) ->
         error
     end.
 
-respond_error(Req, ReqId, Type) ->
+compose_error(ReqId, Type) ->
     {HTTPCode, RPCCode, RPCMessage} = case Type of
         parse_error -> {500, -32700, <<"Parse error">>};
         invalid_request -> {400, -32600, <<"Invalid request">>};
@@ -164,6 +164,10 @@ respond_error(Req, ReqId, Type) ->
             {<<"id">>, ReqId}
         ]}
     ),
+    {HTTPCode, Body}.
+
+respond_error(Req, ReqId, Type) ->
+    {HTTPCode, Body} = compose_error(ReqId, Type),
     try % Protect against connection drops
         Req:respond({HTTPCode, [server_header(), {"Content-Type", "application/json"}], Body}),
         ok
@@ -176,7 +180,6 @@ respond_error(Req, Type) ->
 
 make_responder(Req, ReqId) ->
     fun
-        ({ok, Result}) -> respond_success(Req, ReqId, Result, []);
         ({ok, Result, Options}) -> respond_success(Req, ReqId, Result, Options);
         ({error, Type}) -> respond_error(Req, ReqId, Type)
     end.
@@ -186,6 +189,7 @@ make_responder(Req) ->
 
 make_lp_responder(Req) ->
     fun
+        % Extended Responder API for LP
         (start) ->
             try % Protect against connection drops
                 Req:start_response({200, [server_header(), {"Content-Type", "application/json"}]}),
@@ -193,6 +197,8 @@ make_lp_responder(Req) ->
             catch exit:_ ->
                 error
             end;
+        ({start_error, Type}) ->
+            respond_error(Req, Type);
         (check) ->
             % Explicitly check for connection drops
             case mochiweb_socket:peername(Req:get(socket)) of
@@ -201,7 +207,8 @@ make_lp_responder(Req) ->
             end;
         (cancel) ->
             mochiweb_socket:close(Req:get(socket));
-        ({finish, Result}) ->
+        % Default Responder API
+        ({ok, Result, _}) ->
             Body = ejson:encode(
                 {[
                     {<<"result">>, Result},
@@ -217,7 +224,14 @@ make_lp_responder(Req) ->
                 error
             end;
         ({error, Type}) ->
-            respond_error(Req, Type)
+            {_, Body} = compose_error(1, Type),
+            try % Protect against connection drops
+                Req:send(Body),
+                mochiweb_socket:close(Req:get(socket)),
+                ok
+            catch exit:_ ->
+                error
+            end
     end.
 
 % Valid methods are defined here
