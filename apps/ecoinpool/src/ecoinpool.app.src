@@ -25,5 +25,5 @@
   {registered, [ecoinpool_app]},
   {applications, [kernel, stdlib, sasl, crypto, ibrowse, couchbeam]},
   {mod, {ecoinpool_app, []}},
-  {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
+  {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}, {db_view_update_interval, 300}]}
  ]}.
