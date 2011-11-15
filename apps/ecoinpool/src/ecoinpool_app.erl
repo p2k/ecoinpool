@@ -37,8 +37,7 @@ start(_StartType, _StartArgs) ->
     {ok, DBPort} = application:get_env(ecoinpool, db_port),
     {ok, DBPrefix} = application:get_env(ecoinpool, db_prefix),
     {ok, DBOptions} = application:get_env(ecoinpool, db_options),
-    {ok, DBViewUpdateInterval} = application:get_env(ecoinpool, db_view_update_interval),
-    ecoinpool_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions, DBViewUpdateInterval}).
+    ecoinpool_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions}).
 
 stop(_State) ->
     ok.

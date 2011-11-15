@@ -24,7 +24,7 @@
 -include("ecoinpool_db_records.hrl").
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/1, get_configuration/0, get_subpool_record/1, get_worker_record/1, get_workers_for_subpools/1, setup_shares_db/1, store_share/5, store_invalid_share/4, store_invalid_share/6]).
+-export([start_link/1, get_configuration/0, get_subpool_record/1, get_worker_record/1, get_workers_for_subpools/1, setup_shares_db/1, store_share/5, store_invalid_share/4, store_invalid_share/6, set_view_update_interval/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -32,7 +32,7 @@
 -record(state, {
     srv_conn,
     conf_db,
-    view_update_interval,
+    view_update_interval = 0,
     view_update_timer,
     view_update_dbs,
     view_update_running = false
@@ -42,8 +42,8 @@
 %% API functions
 %% ===================================================================
 
-start_link({DBHost, DBPort, DBPrefix, DBOptions, DBViewUpdateInterval}) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [{DBHost, DBPort, DBPrefix, DBOptions, DBViewUpdateInterval}], []).
+start_link({DBHost, DBPort, DBPrefix, DBOptions}) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [{DBHost, DBPort, DBPrefix, DBOptions}], []).
 
 get_configuration() ->
     gen_server:call(?MODULE, get_configuration).
@@ -69,11 +69,14 @@ store_invalid_share(Subpool, IP, Worker, Reason) ->
 store_invalid_share(Subpool, IP, Worker, Workunit, Hash, Reason) ->
     gen_server:cast(?MODULE, {store_invalid_share, Subpool, IP, Worker, Workunit, Hash, Reason}).
 
+set_view_update_interval(Seconds) ->
+    gen_server:cast(?MODULE, {set_view_update_interval, Seconds}).
+
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
 
-init([{DBHost, DBPort, DBPrefix, DBOptions, DBViewUpdateInterval}]) ->
+init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
     % Connect to database
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
     % Open database
@@ -118,13 +121,8 @@ init([{DBHost, DBPort, DBPrefix, DBOptions, DBViewUpdateInterval}]) ->
     end,
     % Start config & worker monitor (asynchronously)
     gen_server:cast(?MODULE, start_monitors),
-    % Start view update timer
-    ViewUpdateTimer = if
-        DBViewUpdateInterval > 0 -> {ok, Timer} = timer:send_interval(DBViewUpdateInterval * 1000, update_views), Timer;
-        true -> undefined
-    end,
     % Return initial state
-    {ok, #state{srv_conn=S, conf_db=ConfDb, view_update_interval=DBViewUpdateInterval, view_update_timer=ViewUpdateTimer, view_update_dbs=dict:new()}}.
+    {ok, #state{srv_conn=S, conf_db=ConfDb}}.
 
 handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
     case couchbeam:open_doc(ConfDb, "configuration") of
@@ -132,13 +130,18 @@ handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
             % Unpack and parse data
             DocType = proplists:get_value(<<"type">>, DocProps),
             ActiveSubpoolIds = proplists:get_value(<<"active_subpools">>, DocProps, []),
+            ViewUpdateInterval = proplists:get_value(<<"view_update_interval">>, DocProps, 300),
             ActiveSubpoolIdsCheck = lists:all(fun is_binary/1, ActiveSubpoolIds),
             
             if % Validate data
                 DocType =:= <<"configuration">>,
+                is_integer(ViewUpdateInterval),
                 ActiveSubpoolIdsCheck ->
                     % Create record
-                    Configuration = #configuration{active_subpools=ActiveSubpoolIds},
+                    Configuration = #configuration{
+                        active_subpools=ActiveSubpoolIds,
+                        view_update_interval=if ViewUpdateInterval > 0 -> ViewUpdateInterval; true -> 0 end
+                    },
                     {reply, {ok, Configuration}, State};
                 true ->
                     {reply, {error, invalid}, State}
@@ -255,7 +258,12 @@ handle_call({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, u
                 couchbeam:save_doc(DB, make_share_document(WorkerId, UserId, IP, valid, Hash, Target, BlockNum)),
                 ok
         end,
-        {reply, Reply, State#state{view_update_dbs=dict:store(DB, erlang:now(), ViewUpdateDBS)}}
+        case ViewUpdateDBS of
+            undefined ->
+                {reply, Reply, State};
+            _ ->
+                {reply, Reply, State#state{view_update_dbs=dict:store(DB, erlang:now(), ViewUpdateDBS)}}
+        end
     catch error:_ ->
         {reply, error, State}
     end;
@@ -289,8 +297,32 @@ handle_cast({store_invalid_share, #subpool{name=SubpoolName}, IP, #worker{id=Wor
     end,
     {noreply, State};
 
+handle_cast({set_view_update_interval, Seconds}, State=#state{view_update_interval=OldViewUpdateInterval, view_update_timer=OldViewUpdateTimer, view_update_dbs=OldViewUpdateDBS}) ->
+    if
+        Seconds =:= OldViewUpdateInterval ->
+            {noreply, State}; % No change
+        true ->
+            timer:cancel(OldViewUpdateTimer),
+            case Seconds of
+                0 ->
+                    io:format("ecoinpool_db: view updates disabled.~n"),
+                    {noreply, State#state{view_update_interval=0, view_update_timer=undefined, view_update_dbs=undefined}};
+                _ ->
+                    io:format("ecoinpool_db: set view update timer to ~bs.~n", [Seconds]),
+                    {ok, Timer} = timer:send_interval(Seconds * 1000, update_views),
+                    ViewUpdateDBS = case OldViewUpdateDBS of
+                        undefined -> dict:new();
+                        _ -> OldViewUpdateDBS
+                    end,
+                    {noreply, State#state{view_update_interval=Seconds, view_update_timer=Timer, view_update_dbs=ViewUpdateDBS}}
+            end
+    end;
+
 handle_cast(_Message, State) ->
     {noreply, State}.
+
+handle_info(update_views, State=#state{view_update_dbs=undefined}) ->
+    {noreply, State};
 
 handle_info(update_views, State=#state{view_update_interval=ViewUpdateInterval, view_update_running=ViewUpdateRunning, view_update_dbs=ViewUpdateDBS}) ->
     case ViewUpdateRunning of

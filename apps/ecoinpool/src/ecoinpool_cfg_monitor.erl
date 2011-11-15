@@ -62,7 +62,10 @@ handle_call(_Message, _From, CurrentSubpools) ->
 
 handle_cast(reload_root_config, CurrentSubpools) ->
     % Load the root configuration, crash on error
-    {ok, #configuration{active_subpools=ActiveSubpoolIds}} = ecoinpool_db:get_configuration(),
+    {ok, #configuration{active_subpools=ActiveSubpoolIds, view_update_interval=ViewUpdateInterval}} = ecoinpool_db:get_configuration(),
+    
+    % Set the view update interval
+    ecoinpool_db:set_view_update_interval(ViewUpdateInterval),
     
     CurrentSubpoolIds = sets:to_list(CurrentSubpools),
     

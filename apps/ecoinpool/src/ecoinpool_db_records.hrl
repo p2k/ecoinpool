@@ -19,7 +19,8 @@
 %%
 
 -record(configuration, {
-    active_subpools :: [binary()]
+    active_subpools :: [binary()],
+    view_update_interval :: integer()
 }).
 
 -record(subpool, {
