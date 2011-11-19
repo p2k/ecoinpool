@@ -25,6 +25,7 @@
 /* Header files are for beginners. */
 extern void BlockHash_1(unsigned char *p512bytes, unsigned char *final_hash);
 extern void DoubleSha256(const unsigned char* in, unsigned char* out);
+extern void MidstateSha256(const unsigned char* in, unsigned char* out);
 
 static void reverse(unsigned char *hash)
 {
@@ -50,6 +51,19 @@ static ERL_NIF_TERM dsha256_hash_nif(ErlNifEnv* env, int argc, const ERL_NIF_TER
     return ret;
 }
 
+static ERL_NIF_TERM sha256_midstate_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) || bin.size < 64)
+        return enif_make_badarg(env);
+    
+    ERL_NIF_TERM ret;
+    unsigned char *midstate = enif_make_new_binary(env, 32, &ret);
+    MidstateSha256(bin.data, midstate);
+    
+    return ret;
+}
+
 static ERL_NIF_TERM rs_hash_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
     ErlNifBinary bin;
@@ -68,6 +82,7 @@ static ERL_NIF_TERM rs_hash_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM arg
 
 static ErlNifFunc nif_funcs[] = {
     {"dsha256_hash", 1, dsha256_hash_nif},
+    {"sha256_midstate", 1, sha256_midstate_nif},
     {"rs_hash", 1, rs_hash_nif}
 };
 

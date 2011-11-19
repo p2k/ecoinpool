@@ -315,7 +315,7 @@ decode_sc_data(SCData) ->
         Nonce3:64/unsigned-little,
         Nonce4:32/unsigned-little,
         MinerId:12/bytes,
-        Bits:32/little
+        Bits:32/unsigned-little
     >> = SCData,
     
     #sc_data{version=Version,
@@ -354,7 +354,7 @@ encode_sc_data(SCData) ->
         Nonce3:64/unsigned-little,
         Nonce4:32/unsigned-little,
         MinerId:12/bytes,
-        Bits:32/little
+        Bits:32/unsigned-little
     >>.
 
 workunit_id_from_sc_data(#sc_data{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, nonce2=Nonce2}) ->

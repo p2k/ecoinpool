@@ -171,6 +171,14 @@ void DoubleSha256(const unsigned char* in, unsigned char* out)
         outi[i] = EndianSwap(s[i]);
 }
 
+//assumes input is 64 bytes (or longer)
+void MidstateSha256(const unsigned char* in, unsigned char* out)
+{
+    uint32_t *outi = (uint32_t *)out;
+    Sha256_initialize(outi);
+    Sha256_round(outi, in);
+}
+
 uint8_t padding[64] = 
 {
     0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

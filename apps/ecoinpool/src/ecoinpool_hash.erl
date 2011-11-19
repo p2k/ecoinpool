@@ -20,7 +20,7 @@
 
 -module(ecoinpool_hash).
 
--export([init/0, dsha256_hash/1, rs_hash/1]).
+-export([init/0, dsha256_hash/1, sha256_midstate/1, rs_hash/1]).
 
 -on_load(module_init/0).
 
@@ -42,6 +42,9 @@ init() ->
     ok.
 
 dsha256_hash(_X) ->
+    exit(nif_library_not_loaded).
+
+sha256_midstate(_X) ->
     exit(nif_library_not_loaded).
 
 rs_hash(_X) ->
