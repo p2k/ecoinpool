@@ -22,8 +22,6 @@
 
 -export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, bn2mpi_le/1, mpi2bn_le/1]).
 
--define(LOG256, 5.545177444479562).
-
 hexbin_to_bin(BinHex) ->
     binary:list_to_bin(hexstr_to_list(binary:bin_to_list(BinHex))).
 
@@ -57,28 +55,20 @@ endian_swap(<<V:32/little, R/binary>>, Acc) ->
 bn2mpi_le(0) ->
     <<>>;
 bn2mpi_le(BN) when BN < 0 ->
-    MPI = bn2mpi_le(-BN),
+    MPI = binary:encode_unsigned(-BN, little),
     L = byte_size(MPI) - 1,
     <<H:L/bytes, LSB:8/unsigned>> = MPI,
-    <<H/bytes, (LSB bor 128):8/unsigned>>;
-bn2mpi_le(BN) when BN < 16#80 -> % Speed improvement for smaller numbers
-    <<BN:8/unsigned>>;
-bn2mpi_le(BN) when BN < 16#8000 ->
-    <<BN:16/unsigned-little>>;
-bn2mpi_le(BN) when BN < 16#800000 ->
-    <<BN:24/unsigned-little>>;
-bn2mpi_le(BN) when BN < 16#80000000 ->
-    <<BN:32/unsigned-little>>;
-bn2mpi_le(BN) ->
-    MinBits = trunc(math:log(BN) / ?LOG256) * 8,
-    Rest = BN bsr MinBits,
     if
-        Rest =:= 0 ->
-            <<BN:MinBits/unsigned-little>>;
-        Rest < 128 ->
-            <<BN:(MinBits+8)/unsigned-little>>;
-        true ->
-            <<BN:(MinBits+16)/unsigned-little>>
+        LSB < 128 -> <<H/bytes, (LSB bor 128):8/unsigned>>;
+        true -> <<MPI/binary, 128>>
+    end;
+bn2mpi_le(BN) ->
+    MPI = binary:encode_unsigned(BN, little),
+    L = byte_size(MPI) - 1,
+    <<_:L/bytes, LSB:8/unsigned>> = MPI,
+    if
+        LSB < 128 -> MPI;
+        true -> <<MPI/binary, 0>>
     end.
 
 mpi2bn_le(<<>>) ->
@@ -89,14 +79,11 @@ mpi2bn_le(<<LSB:8/unsigned>>) ->
         true -> -(LSB band 127)
     end;
 mpi2bn_le(MPI) ->
-    Bits = bit_size(MPI),
     L = byte_size(MPI) - 1,
     <<H:L/bytes, LSB:8/unsigned>> = MPI,
     if
         LSB < 128 ->
-            <<BN:Bits/unsigned-little>> = MPI,
-            BN;
+            binary:decode_unsigned(MPI, little);
         true ->
-            <<BN:Bits/unsigned-little>> = <<H:L/bytes, (LSB band 127):8/unsigned>>,
-            -BN
+            -binary:decode_unsigned(<<H:L/bytes, (LSB band 127):8/unsigned>>, little)
     end.

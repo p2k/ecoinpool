@@ -24,7 +24,7 @@
     hash_merkle_root :: binary(),
     timestamp :: integer(),
     bits :: integer(),
-    nonce :: integer()
+    nonce = 0 :: integer()
 }).
 -type btc_header() :: #btc_header{}.
 

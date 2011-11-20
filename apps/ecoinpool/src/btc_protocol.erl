@@ -22,7 +22,7 @@
 
 -include("btc_protocol_records.hrl").
 
--export([decode_btc_header/1, encode_btc_header/1, decode_btc_tx/1, encode_btc_tx/1, decode_script/1, encode_script/1]).
+-export([decode_header/1, encode_header/1, decode_tx/1, encode_tx/1, decode_script/1, encode_script/1, hash160_from_address/1]).
 
 -define(OP_TABLE, [
     % control
@@ -30,7 +30,7 @@
     op_endif, op_verify, op_return,
     % stack ops
     op_toaltstack, op_fromaltstack, op_2drop, op_2dup, op_3dup, op_2over,
-    op_2rot, op_2swap, p_ifdup, op_depth, op_drop, op_dup, op_nip, op_over,
+    op_2rot, op_2swap, op_ifdup, op_depth, op_drop, op_dup, op_nip, op_over,
     op_pick, op_roll, op_rot, op_swap, op_tuck,
     % splice ops
     op_cat, op_substr, op_left, op_right, op_size,
@@ -54,7 +54,7 @@
 
 %% Decoding %%
 
-decode_btc_header(BData) ->
+decode_header(BData) ->
     <<
         Version:32/little,
         HashPrevBlock:32/bytes,
@@ -95,20 +95,20 @@ decode_var_str(BData) ->
     <<Str:Length/bytes, T/binary>> = StrAndT,
     {Str, T}.
 
-decode_btc_tx(BData) ->
+decode_tx(BData) ->
     <<Version:32/unsigned-little, T1/binary>> = BData,
-    {TxIn, T2} = decode_var_list(T1, fun decode_btc_tx_in/1),
-    {TxOut, T3} = decode_var_list(T2, fun decode_btc_tx_out/1),
+    {TxIn, T2} = decode_var_list(T1, fun decode_tx_in/1),
+    {TxOut, T3} = decode_var_list(T2, fun decode_tx_out/1),
     <<LockTime:32/unsigned-little, T4/binary>> = T3,
     {#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}, T4}.
 
-decode_btc_tx_in(BData) ->
+decode_tx_in(BData) ->
     <<PrevOutputHash:32/bytes, PrevOutputIndex:32/unsigned-little, T1/binary>> = BData,
     {SignatureScript, T2} = decode_var_str(T1),
     <<Sequence:32/unsigned-little, T3/binary>> = T2,
     {#btc_tx_in{prev_output_hash=PrevOutputHash, prev_output_index=PrevOutputIndex, signature_script=SignatureScript, sequence=Sequence}, T3}.
 
-decode_btc_tx_out(BData) ->
+decode_tx_out(BData) ->
     <<Value:64/unsigned-little, T1/binary>> = BData,
     {PKScript, T2} = decode_var_str(T1),
     {#btc_tx_out{value=Value, pk_script=PKScript}, T2}.
@@ -143,7 +143,7 @@ decode_script(<<OPCode:8/unsigned, T/binary>>, Acc) ->
 
 %% Encoding %%
 
-encode_btc_header(BTCHeader) ->
+encode_header(BTCHeader) ->
     #btc_header{version=Version,
         hash_prev_block=HashPrevBlock,
         hash_merkle_root=HashMerkleRoot,
@@ -183,17 +183,27 @@ encode_var_str(Str) ->
     BLength = encode_var_int(byte_size(Str)),
     <<BLength/binary, Str/binary>>.
 
-encode_btc_tx(#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}) ->
-    BTxIn = encode_var_list(TxIn, fun encode_btc_tx_in/1),
-    BTxOut = encode_var_list(TxOut, fun encode_btc_tx_out/1),
+encode_tx(#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}) ->
+    BTxIn = encode_var_list(TxIn, fun encode_tx_in/1),
+    BTxOut = encode_var_list(TxOut, fun encode_tx_out/1),
     <<Version:32/unsigned-little, BTxIn/binary, BTxOut/binary, LockTime:32/unsigned-little>>.
 
-encode_btc_tx_in(#btc_tx_in{prev_output_hash=PrevOutputHash, prev_output_index=PrevOutputIndex, signature_script=SignatureScript, sequence=Sequence}) ->
-    BSignatureScript = encode_var_str(SignatureScript),
+encode_tx_in(#btc_tx_in{prev_output_hash=PrevOutputHash, prev_output_index=PrevOutputIndex, signature_script=SignatureScript, sequence=Sequence}) ->
+    BSignatureScript = encode_var_str(
+        if
+            is_binary(SignatureScript) -> SignatureScript;
+            is_list(SignatureScript) -> encode_script(SignatureScript)
+        end
+    ),
     <<PrevOutputHash:32/bytes, PrevOutputIndex:32/unsigned-little, BSignatureScript/binary, Sequence:32/unsigned-little>>.
 
-encode_btc_tx_out(#btc_tx_out{value=Value, pk_script=PKScript}) ->
-    BPKScript = encode_var_str(PKScript),
+encode_tx_out(#btc_tx_out{value=Value, pk_script=PKScript}) ->
+    BPKScript = encode_var_str(
+        if
+            is_binary(PKScript) -> PKScript;
+            is_list(PKScript) -> encode_script(PKScript)
+        end
+    ),
     <<Value:64/unsigned-little, BPKScript/binary>>.
 
 encode_script(Script) ->
@@ -232,3 +242,7 @@ lookup_op(OP) -> lookup_op(OP, ?OP_TABLE, 0).
 lookup_op(_, [], _)  -> 255;
 lookup_op(OP, [OP|_], Index) -> Index+97;
 lookup_op(OP, [_|T], Index) -> lookup_op(OP, T, Index+1).
+
+hash160_from_address(BTCAddress) ->
+    <<_Network:8/unsigned, Hash160:20/bytes, _Checksum:4/bytes>> = base58:decode(BTCAddress),
+    Hash160.

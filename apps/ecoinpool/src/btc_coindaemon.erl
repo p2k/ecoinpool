@@ -36,9 +36,19 @@
     auth,
     timer,
     block_num,
-    last_fetch,
-    prev_block_hash,
-    transactions
+    last_fetch
+    
+}).
+
+-record(memorypool, {
+    version,
+    hash_prev_block,
+    timestamp,
+    bits,
+    transactions,
+    transaction_hashes,
+    coinbase_value,
+    extra_nonce
 }).
 
 %% ===================================================================
@@ -139,3 +149,27 @@ code_change(_OldVersion, State, _Extra) ->
 workunit_id_from_btc_header(#btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot}) ->
     Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes>>,
     crypto:sha(Data).
+
+make_btc_header(#memorypool{version=Version, hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits}, HashMerkleRoot) ->
+    #btc_header{version=Version, hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
+
+make_coinbase_tx(Version, CoinbaseValue, Bits, ExtraNonce, PubkeyHash160, ScriptSigTrailer) ->
+    TxIn = #btc_tx_in{
+        prev_output_hash = <<0000000000000000000000000000000000000000000000000000000000000000>>,
+        prev_output_index = 16#ffffffff,
+        signature_script = [<<"ecp">>, Bits, ExtraNonce] ++ ScriptSigTrailer,
+        sequence = 16#ffffffff
+    },
+    TxOut = #btc_tx_out{
+        value = CoinbaseValue,
+        pk_script = [op_dup, op_hash160, PubkeyHash160, op_equalverify, op_checksig]
+    },
+    #btc_tx{version=1, tx_in=[TxIn], tx_out=[TxOut], lock_time=0}.
+
+update_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}, ExtraNonce) ->
+    #btc_tx_in{signature_script=ScriptSig} = TxIn,
+    {[Tag, Bits, _OldExtraNonce], ScriptSigTrailer} = lists:split(3, ScriptSig),
+    NewScriptSig = [Tag, Bits, ExtraNonce] ++ ScriptSigTrailer,
+    Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script=NewScriptSig}]}.
+
+%assemble_block()
