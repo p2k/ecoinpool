@@ -38,6 +38,7 @@
     pay_to,
     
     timer,
+    txtbl,
     block_num,
     last_fetch,
     
@@ -133,18 +134,28 @@ init([SubpoolId, Config]) ->
             <<"ecoinpool">>
     end,
     
+    TxTbl = ets:new(txtbl, [set, protected]),
+    
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
-    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, timer=Timer}}.
+    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, timer=Timer, txtbl=TxTbl}}.
+
+handle_call({send_result, _BData}, _From, State) ->
+    {reply, error, State}; %TODO
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
+handle_cast(post_workunit, State=#state{subpool=_SubpoolId}) ->
+    {noreply, State}; %TODO
+
 handle_cast(_Message, State) ->
     {noreply, State}.
 
-handle_info(poll_daemon, State=#state{subpool=SubpoolId}) ->
-    %getblocknumber
-    {noreply, State};
+handle_info(poll_daemon, State) ->
+    {noreply, fetch_work_with_state(State)};
+
+handle_info(retry_post_workunit, State) ->
+    handle_cast(post_workunit, State);
 
 handle_info(_Message, State) ->
     {noreply, State}.
@@ -189,6 +200,81 @@ get_default_payout_address(URL, Auth) ->
             {error, Reason}
     end.
 
+get_block_number(URL, Auth) ->
+    {ok, "200", _ResponseHeaders, ResponseBody} = send_req(URL, Auth, "{\"method\":\"getblocknumber\"}"),
+    {Body} = ejson:decode(ResponseBody),
+    proplists:get_value(<<"result">>, Body) + 1.
+
+get_memory_pool(URL, Auth) ->
+    {ok, "200", _ResponseHeaders, ResponseBody} = send_req(URL, Auth, "{\"method\":\"getmemorypool\"}"),
+    {Body} = ejson:decode(ResponseBody),
+    {Result} = proplists:get_value(<<"result">>, Body),
+    1 = proplists:get_value(<<"version">>, Result),
+    
+    HashPrevBlock = ecoinpool_util:byte_reverse(proplists:get_value(<<"previousblockhash">>, Result)),
+    CoinbaseValue = proplists:get_value(<<"coinbasevalue">>, Result),
+    Timestamp = proplists:get_value(<<"time">>, Result),
+    <<Bits:32/unsigned>> = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"bits">>, Result)),
+    Transactions = lists:map(fun ecoinpool_util:hexbin_to_bin/1, proplists:get_value(<<"transactions">>, Result)),
+    
+    [undefined|FT] = ecoinpool_hash:foldable_tree_dsha256_hash([undefined|Transactions]),
+    
+    #memorypool{
+        hash_prev_block = HashPrevBlock,
+        timestamp = Timestamp,
+        bits = Bits,
+        transactions = Transactions,
+        foldable_tree_hashes = FT,
+        coinbase_value = CoinbaseValue
+    }.
+
+check_fetch_now(_, #state{last_fetch=undefined}) ->
+    {true, starting};
+check_fetch_now(_, #state{block_num=undefined}) ->
+    {true, starting};
+check_fetch_now(Now, #state{url=URL, auth=Auth, block_num=BlockNum, last_fetch=LastFetch}) ->
+    case timer:now_diff(Now, LastFetch) of
+        Diff when Diff < 200000 -> % Prevent rpc call if less than 200ms passed
+            false;
+        Diff when Diff > 15000000 -> % Force data fetch every 15s
+            {true, timeout};
+        _ ->
+            try
+                case get_block_number(URL, Auth) of
+                    BlockNum ->
+                        false;
+                    NewBlockNum ->
+                        {true, {new_block, NewBlockNum}}
+                end
+            catch error:_ ->
+                {true, error}
+            end
+    end.
+
+fetch_work_with_state(State=#state{url=URL, auth=Auth, subpool=SubpoolId, txtbl=TxTbl}) ->
+    Now = erlang:now(),
+    case check_fetch_now(Now, State) of
+        false ->
+            State;
+        {true, Reason} ->
+            case Reason of
+                {new_block, _} ->
+                    ecoinpool_server:new_block_detected(SubpoolId),
+                    ets:delete_all_objects(TxTbl);
+                _ ->
+                    ok
+            end,
+            
+            Memorypool = get_memory_pool(URL, Auth),
+            
+            case Reason of
+                {new_block, BlockNum} ->
+                    State#state{block_num=BlockNum, last_fetch=Now, memorypool=Memorypool, coinbase_tx=undefined};
+                _ ->
+                    State#state{last_fetch=Now, memorypool=Memorypool, coinbase_tx=undefined}
+            end
+    end.
+
 workunit_id_from_btc_header(#btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot}) ->
     Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes>>,
     crypto:sha(Data).
@@ -208,8 +294,11 @@ make_coinbase_tx(Tag, Bits, CoinbaseValue, PubkeyHash160, ScriptSigTrailer) ->
     },
     #btc_tx{tx_in=[TxIn], tx_out=[TxOut]}.
 
+get_merkle_root(FoldableTreeHashes, CoinbaseTx) ->
+    EncTx = btc_protocol:encode_tx(CoinbaseTx),
+    HashedTx = ecoinpool_hash:dsha256_hash(EncTx),
+    ecoinpool_util:byte_reverse(ecoinpool_hash:tree_fold_dsha256_hash([HashedTx|FoldableTreeHashes])).
+
 increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
     #btc_tx_in{signature_script = [Tag, Bits, ExtraNonce | ScriptSigTrailer]} = TxIn,
     Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script = [Tag, Bits, ExtraNonce+1 | ScriptSigTrailer]}]}.
-
-%assemble_block()
