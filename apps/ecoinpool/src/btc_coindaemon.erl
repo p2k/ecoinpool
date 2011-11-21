@@ -145,8 +145,28 @@ handle_call({send_result, _BData}, _From, State) ->
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
-handle_cast(post_workunit, State=#state{subpool=_SubpoolId}) ->
-    {noreply, State}; %TODO
+handle_cast(post_workunit, OldState) ->
+    % Check if new work must be fetched
+    State = fetch_work_with_state(OldState),
+    % Extract state variables
+    #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, txtbl=TxTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx} = State,
+    % Create/update coinbase
+    CoinbaseTx = case OldCoinbaseTx of
+        undefined ->
+            make_coinbase_tx(Memorypool, Tag, PubkeyHash160, []);
+        _ ->
+            increment_coinbase_extra_nonce(OldCoinbaseTx)
+    end,
+    % Create the header
+    Header = make_btc_header(Memorypool, CoinbaseTx),
+    % Create the workunit
+    Workunit = make_workunit(Header, BlockNum),
+    % Store transactions for this workunit, including the coinbase transaction
+    ets:insert(TxTbl, {Workunit#workunit.id, [CoinbaseTx | Memorypool#memorypool.transactions]}),
+    % Send back
+    ecoinpool_server:store_workunit(SubpoolId, Workunit),
+    % Update state
+    {noreply, State#state{coinbase_tx=CoinbaseTx}};
 
 handle_cast(_Message, State) ->
     {noreply, State}.
@@ -279,10 +299,13 @@ workunit_id_from_btc_header(#btc_header{hash_prev_block=HashPrevBlock, hash_merk
     Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes>>,
     crypto:sha(Data).
 
-make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits}, HashMerkleRoot) ->
+make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits, foldable_tree_hashes=FoldableTreeHashes}, CoinbaseTx) ->
+    EncTx = btc_protocol:encode_tx(CoinbaseTx),
+    HashedTx = ecoinpool_hash:dsha256_hash(EncTx),
+    HashMerkleRoot = ecoinpool_util:byte_reverse(ecoinpool_hash:tree_fold_dsha256_hash([HashedTx|FoldableTreeHashes])),
     #btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
 
-make_coinbase_tx(Tag, Bits, CoinbaseValue, PubkeyHash160, ScriptSigTrailer) ->
+make_coinbase_tx(#memorypool{bits=Bits, coinbase_value=CoinbaseValue}, Tag, PubkeyHash160, ScriptSigTrailer) ->
     TxIn = #btc_tx_in{
         prev_output_hash = <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0>>,
         prev_output_index = 16#ffffffff,
@@ -294,11 +317,12 @@ make_coinbase_tx(Tag, Bits, CoinbaseValue, PubkeyHash160, ScriptSigTrailer) ->
     },
     #btc_tx{tx_in=[TxIn], tx_out=[TxOut]}.
 
-get_merkle_root(FoldableTreeHashes, CoinbaseTx) ->
-    EncTx = btc_protocol:encode_tx(CoinbaseTx),
-    HashedTx = ecoinpool_hash:dsha256_hash(EncTx),
-    ecoinpool_util:byte_reverse(ecoinpool_hash:tree_fold_dsha256_hash([HashedTx|FoldableTreeHashes])).
-
 increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
     #btc_tx_in{signature_script = [Tag, Bits, ExtraNonce | ScriptSigTrailer]} = TxIn,
     Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script = [Tag, Bits, ExtraNonce+1 | ScriptSigTrailer]}]}.
+
+make_workunit(Header=#btc_header{bits=Bits}, BlockNum) ->
+    BHeader = btc_protocol:encode_header(Header),
+    WUId = workunit_id_from_btc_header(Header),
+    Target = ecoinpool_util:bits_to_target(Bits),
+    #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BHeader}.
