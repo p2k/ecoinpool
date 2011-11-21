@@ -20,7 +20,9 @@
 
 -module(ecoinpool_hash).
 
--export([init/0, dsha256_hash/1, tree_dsha256_hash/1, tree_level_dsha256_hash/1, tree_pair_dsha256_hash/2, sha256_midstate/1, rs_hash/1]).
+-export([init/0, dsha256_hash/1, tree_pair_dsha256_hash/2, sha256_midstate/1, rs_hash/1]).
+
+-export([tree_dsha256_hash/1, tree_level_dsha256_hash/1, foldable_tree_dsha256_hash/1, tree_fold_dsha256_hash/1]).
 
 -on_load(module_init/0).
 
@@ -44,15 +46,22 @@ init() ->
 dsha256_hash(_) ->
     exit(nif_library_not_loaded).
 
-tree_dsha256_hash([]) ->
-    [];
-tree_dsha256_hash([Result]) ->
-    Result;
-tree_dsha256_hash(Level) ->
-    tree_dsha256_hash(tree_level_dsha256_hash(Level, [])).
+tree_pair_dsha256_hash(_, _) ->
+    exit(nif_library_not_loaded).
 
-tree_level_dsha256_hash([Result]) ->
-    [Result];
+sha256_midstate(_) ->
+    exit(nif_library_not_loaded).
+
+rs_hash(_) ->
+    exit(nif_library_not_loaded).
+
+tree_dsha256_hash([Hash]) ->
+    Hash;
+tree_dsha256_hash(Hashlist) ->
+    r_tree_dsha256(Hashlist, fullsize(Hashlist)).
+
+tree_level_dsha256_hash([Hash]) ->
+    [Hash];
 tree_level_dsha256_hash(Level) ->
     tree_level_dsha256_hash(Level, []).
 
@@ -63,11 +72,43 @@ tree_level_dsha256_hash([H1,H2,H3], Acc) ->
 tree_level_dsha256_hash([H1,H2|T], Acc) ->
     tree_level_dsha256_hash(T, Acc ++ [tree_pair_dsha256_hash(H1, H2)]).
 
-tree_pair_dsha256_hash(_, _) ->
-    exit(nif_library_not_loaded).
+foldable_tree_dsha256_hash([Hash]) ->
+    [Hash];
+foldable_tree_dsha256_hash(Hashlist) ->
+    l_tree_dsha256(Hashlist, fullsize(Hashlist)).
 
-sha256_midstate(_) ->
-    exit(nif_library_not_loaded).
+tree_fold_dsha256_hash([Hash]) ->
+    Hash;
+tree_fold_dsha256_hash([H|T]) ->
+    lists:foldl(fun (Hash, Acc) -> tree_pair_dsha256_hash(Acc, Hash) end, H, T).
 
-rs_hash(_) ->
-    exit(nif_library_not_loaded).
+fullsize(List) ->
+    fullsize(length(List), 2).
+
+fullsize(N, V) ->
+    if
+        N =< V -> V;
+        true -> fullsize(N, V*2)
+    end.
+
+l_tree_dsha256(Hashlist, 2) ->
+    Hashlist;
+l_tree_dsha256(Hashlist, Size) ->
+    HalfSize = Size div 2,
+    {L, R} = lists:split(HalfSize, Hashlist),
+    l_tree_dsha256(L, HalfSize) ++ [r_tree_dsha256(R, HalfSize)].
+
+r_tree_dsha256([H], 1) ->
+    H;
+r_tree_dsha256([H1,H2], 2) ->
+    tree_pair_dsha256_hash(H1, H2);
+r_tree_dsha256(Hashlist, Size) ->
+    HalfSize = Size div 2,
+    if
+        length(Hashlist) > HalfSize ->
+            {L, R} = lists:split(HalfSize, Hashlist),
+            tree_pair_dsha256_hash(r_tree_dsha256(L, HalfSize), r_tree_dsha256(R, HalfSize));
+        true ->
+            LResult = r_tree_dsha256(Hashlist, HalfSize),
+            tree_pair_dsha256_hash(LResult, LResult)
+    end.

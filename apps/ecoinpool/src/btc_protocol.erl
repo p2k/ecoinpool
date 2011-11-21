@@ -22,7 +22,7 @@
 
 -include("btc_protocol_records.hrl").
 
--export([decode_header/1, encode_header/1, decode_tx/1, encode_tx/1, decode_script/1, encode_script/1, hash160_from_address/1]).
+-export([decode_header/1, encode_header/1, decode_tx/1, encode_tx/1, decode_script/1, encode_script/1, decode_block/1, encode_block/1, hash160_from_address/1]).
 
 -define(OP_TABLE, [
     % control
@@ -141,6 +141,10 @@ decode_script(<<OPCode:8/unsigned, T/binary>>, Acc) ->
         true -> Acc ++ [op_invalidopcode]
     end).
 
+decode_block(<<BHeader:80/bytes, BData/binary>>) ->
+    {Txns, <<>>} = decode_var_list(BData, fun decode_tx/1),
+    #btc_block{header=decode_header(BHeader), txns=Txns}.
+
 %% Encoding %%
 
 encode_header(BTCHeader) ->
@@ -246,6 +250,16 @@ lookup_op(_, [], _)  -> 255;
 lookup_op(OP, [OP|_], Index) -> Index+97;
 lookup_op(OP, [_|T], Index) -> lookup_op(OP, T, Index+1).
 
+encode_block(#btc_block{header=Header, txns=Txns}) ->
+    BHeader = encode_header(Header),
+    BData = encode_var_list(Txns, fun encode_tx/1),
+    <<BHeader:80/bytes, BData/binary>>.
+
 hash160_from_address(BTCAddress) ->
-    <<_Network:8/unsigned, Hash160:20/bytes, _Checksum:4/bytes>> = base58:decode(BTCAddress),
-    Hash160.
+    try
+        <<Network:8/unsigned, Hash160:20/bytes, Checksum:32/unsigned>> = base58:decode(BTCAddress),
+        <<_:28/bytes, Checksum:32/unsigned-little>> = ecoinpool_hash:dsha256_hash(<<Network:8/unsigned, Hash160:20/bytes>>),
+        Hash160
+    catch error:_ ->
+        error(invalid_bitcoin_address)
+    end.

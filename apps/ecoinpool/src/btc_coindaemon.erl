@@ -34,6 +34,9 @@
     subpool,
     url,
     auth,
+    tag,
+    pay_to,
+    
     timer,
     block_num,
     last_fetch,
@@ -43,12 +46,11 @@
 }).
 
 -record(memorypool, {
-    version,
     hash_prev_block,
     timestamp,
     bits,
     transactions,
-    transaction_hashes,
+    foldable_tree_hashes,
     coinbase_value
 }).
 
@@ -117,10 +119,22 @@ init([SubpoolId, Config]) ->
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
     
-    %if no payout address: getaddressesbyaccount Generated & getnewaddress Generated
+    PayTo = btc_protocol:hash160_from_address(case proplists:get_value(pay_to, Config) of
+        undefined ->
+            get_default_payout_address(URL, {User, Pass});
+        Address ->
+            Address
+    end),
+    
+    FullTag = case proplists:get_value(tag, Config) of
+        Tag when is_binary(Tag), byte_size(Tag) > 0 ->
+            <<"ecoinpool|", Tag/binary>>;
+        _ ->
+            <<"ecoinpool">>
+    end,
     
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
-    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
+    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, timer=Timer}}.
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
@@ -147,25 +161,52 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
+send_req(URL, Auth, PostData) ->
+    {ok, VSN} = application:get_key(ecoinpool, vsn),
+    ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]).
+
+get_default_payout_address(URL, Auth) ->
+    case send_req(URL, Auth, "{\"method\":\"getaddressesbyaccount\",\"params\":[\"ecoinpool\"]}") of
+        {ok, "200", _ResponseHeaders, ResponseBody} ->
+            {Body} = ejson:decode(ResponseBody),
+            case proplists:get_value(<<"result">>, Body) of
+                [] ->
+                    case send_req(URL, Auth, "{\"method\":\"getnewaddress\",\"params\":[\"ecoinpool\"]}") of
+                        {ok, "200", _ResponseHeaders2, ResponseBody2} ->
+                            {Body2} = ejson:decode(ResponseBody2),
+                            {ok, proplists:get_value(<<"result">>, Body2)};
+                        {ok, Status, _ResponseHeaders, ResponseBody2} ->
+                            {error, binary:list_to_bin(io_lib:format("getnewaddress: Received HTTP ~s - Body: ~p", [Status, ResponseBody2]))};
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                List ->
+                    {ok, lists:last(List)}
+            end;
+        {ok, Status, _ResponseHeaders, ResponseBody} ->
+            {error, binary:list_to_bin(io_lib:format("getaddressesbyaccount: Received HTTP ~s - Body: ~p", [Status, ResponseBody]))};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
 workunit_id_from_btc_header(#btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot}) ->
     Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes>>,
     crypto:sha(Data).
 
-make_btc_header(#memorypool{version=Version, hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits}, HashMerkleRoot) ->
-    #btc_header{version=Version, hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
+make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits}, HashMerkleRoot) ->
+    #btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
 
-make_coinbase_tx(Version, CoinbaseValue, Bits, ExtraNonce, PubkeyHash160, ScriptSigTrailer) ->
+make_coinbase_tx(Tag, Bits, CoinbaseValue, PubkeyHash160, ScriptSigTrailer) ->
     TxIn = #btc_tx_in{
-        prev_output_hash = <<0000000000000000000000000000000000000000000000000000000000000000>>,
+        prev_output_hash = <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0>>,
         prev_output_index = 16#ffffffff,
-        signature_script = [<<"ecp">>, Bits, ExtraNonce | ScriptSigTrailer],
-        sequence = 16#ffffffff
+        signature_script = [Tag, Bits, 0 | ScriptSigTrailer]
     },
     TxOut = #btc_tx_out{
         value = CoinbaseValue,
         pk_script = [op_dup, op_hash160, PubkeyHash160, op_equalverify, op_checksig]
     },
-    #btc_tx{version=1, tx_in=[TxIn], tx_out=[TxOut], lock_time=0}.
+    #btc_tx{tx_in=[TxIn], tx_out=[TxOut]}.
 
 increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
     #btc_tx_in{signature_script = [Tag, Bits, ExtraNonce | ScriptSigTrailer]} = TxIn,

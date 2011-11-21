@@ -19,7 +19,7 @@
 %%
 
 -record(btc_header, {
-    version :: integer(),
+    version = 1 :: integer(),
     hash_prev_block :: binary(),
     hash_merkle_root :: binary(),
     timestamp :: integer(),
@@ -32,7 +32,7 @@
     prev_output_hash :: binary(),
     prev_output_index :: integer(),
     signature_script :: binary(),
-    sequence :: integer()
+    sequence = 16#ffffffff :: integer()
 }).
 -type btc_tx_in() :: #btc_tx_in{}.
 
@@ -43,10 +43,10 @@
 -type btc_tx_out() :: #btc_tx_out{}.
 
 -record(btc_tx, {
-    version :: integer(),
+    version = 1 :: integer(),
     tx_in :: [btc_tx_in()],
     tx_out :: [btc_tx_out()],
-    lock_time :: integer()
+    lock_time = 0 :: integer()
 }).
 -type btc_tx() :: #btc_tx{}.
 

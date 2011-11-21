@@ -20,7 +20,7 @@
 
 -module(ecoinpool_util).
 
--export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, bn2mpi_le/1, mpi2bn_le/1]).
+-export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, byte_reverse/1, bn2mpi_le/1, mpi2bn_le/1]).
 
 hexbin_to_bin(BinHex) ->
     binary:list_to_bin(hexstr_to_list(binary:bin_to_list(BinHex))).
@@ -51,6 +51,11 @@ endian_swap(<<>>, Acc) ->
     Acc;
 endian_swap(<<V:32/little, R/binary>>, Acc) ->
     endian_swap(R, <<Acc/binary, V:32/big>>).
+
+byte_reverse(B) ->
+    Bits = bit_size(B),
+    <<V:Bits/big>> = B,
+    <<V:Bits/little>>.
 
 bn2mpi_le(0) ->
     <<>>;
