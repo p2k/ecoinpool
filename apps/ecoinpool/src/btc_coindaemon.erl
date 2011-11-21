@@ -36,8 +36,10 @@
     auth,
     timer,
     block_num,
-    last_fetch
+    last_fetch,
     
+    memorypool,
+    coinbase_tx
 }).
 
 -record(memorypool, {
@@ -47,8 +49,7 @@
     bits,
     transactions,
     transaction_hashes,
-    coinbase_value,
-    extra_nonce
+    coinbase_value
 }).
 
 %% ===================================================================
@@ -157,7 +158,7 @@ make_coinbase_tx(Version, CoinbaseValue, Bits, ExtraNonce, PubkeyHash160, Script
     TxIn = #btc_tx_in{
         prev_output_hash = <<0000000000000000000000000000000000000000000000000000000000000000>>,
         prev_output_index = 16#ffffffff,
-        signature_script = [<<"ecp">>, Bits, ExtraNonce] ++ ScriptSigTrailer,
+        signature_script = [<<"ecp">>, Bits, ExtraNonce | ScriptSigTrailer],
         sequence = 16#ffffffff
     },
     TxOut = #btc_tx_out{
@@ -166,10 +167,8 @@ make_coinbase_tx(Version, CoinbaseValue, Bits, ExtraNonce, PubkeyHash160, Script
     },
     #btc_tx{version=1, tx_in=[TxIn], tx_out=[TxOut], lock_time=0}.
 
-update_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}, ExtraNonce) ->
-    #btc_tx_in{signature_script=ScriptSig} = TxIn,
-    {[Tag, Bits, _OldExtraNonce], ScriptSigTrailer} = lists:split(3, ScriptSig),
-    NewScriptSig = [Tag, Bits, ExtraNonce] ++ ScriptSigTrailer,
-    Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script=NewScriptSig}]}.
+increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
+    #btc_tx_in{signature_script = [Tag, Bits, ExtraNonce | ScriptSigTrailer]} = TxIn,
+    Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script = [Tag, Bits, ExtraNonce+1 | ScriptSigTrailer]}]}.
 
 %assemble_block()

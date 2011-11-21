@@ -1,5 +1,5 @@
 
-/* This code was stolen somewhere and modified by RealSolid and later slightly refurbished by me. */
+/* This code was stolen somewhere by RealSolid then modified by mtrlt and later refurbished and extended by me. */
 
 #include <string.h>
 #include <stdio.h>
@@ -25,6 +25,19 @@ uint32_t rotl(uint32_t x, uint32_t y)
 uint32_t EndianSwap(uint32_t n)
 {
     return ((n&0xFF)<<24) | ((n&0xFF00)<<8) | ((n&0xFF0000)>>8) | ((n&0xFF000000)>>24);
+}
+
+void Write64BigEndian(uint8_t *to, uint64_t v)
+{
+    uint8_t *from = (uint8_t *)&v;
+    to[0] = from[7];
+    to[1] = from[6];
+    to[2] = from[5];
+    to[3] = from[4];
+    to[4] = from[3];
+    to[5] = from[2];
+    to[6] = from[1];
+    to[7] = from[0];
 }
 
 #define Ch(x, y, z) (z ^ (x & (y ^ z)))
@@ -139,36 +152,102 @@ void Sha256_round(uint32_t* s, const unsigned char* data)
     s[7] += H;
 }
 
-//assumes input is 80 bytes
-void DoubleSha256(const unsigned char* in, unsigned char* out)
+void DoubleSha256(const unsigned char* in, size_t size, unsigned char* out)
 {
-    uint8_t padding[64];
-    memcpy(&padding[0], &in[64], 16);
-    memset(&padding[17], 0, 45);
-    padding[16] = 0x80;
-    padding[62] = 0x02;
-    padding[63] = 0x80;
-    
-    uint32_t i;
+    size_t i;
     uint32_t s[8];
-    Sha256_initialize(s);
-    Sha256_round(s, in);
-    Sha256_round(s, padding);
-    
-    uint32_t* paddingi = (uint32_t*)padding;
-    for (i=0; i<8; ++i)
-        paddingi[i] = EndianSwap(s[i]);
-    
-    padding[32] = 0x80;
-    padding[62] = 0x01;
-    padding[63] = 0x00;
+    union {
+        uint8_t chars[64];
+        uint32_t ints[16];
+    } padding;
     
     Sha256_initialize(s);
-    Sha256_round(s, padding);
+    
+    for (i = size; i >= 64; i -= 64, in += 64)
+        Sha256_round(s, in);
+    
+    if (i > 0) memcpy(&padding.chars[0], &in[0], i);
+    padding.chars[i] = 0x80;
+    if (i > 55) {
+        if (i < 63) memset(&padding.chars[i+1], 0, 63-i);
+        Sha256_round(s, &padding.chars[0]);
+        padding.chars[0] = 0;
+        i = 0;
+    }
+    if (i < 55) memset(&padding.chars[i+1], 0, 55-i);
+    
+    Write64BigEndian(&padding.chars[56], size << 3);
+    Sha256_round(s, &padding.chars[0]);
+    
+    padding.ints[0] = EndianSwap(s[0]);
+    padding.ints[1] = EndianSwap(s[1]);
+    padding.ints[2] = EndianSwap(s[2]);
+    padding.ints[3] = EndianSwap(s[3]);
+    padding.ints[4] = EndianSwap(s[4]);
+    padding.ints[5] = EndianSwap(s[5]);
+    padding.ints[6] = EndianSwap(s[6]);
+    padding.ints[7] = EndianSwap(s[7]);
+    
+    padding.chars[32] = 0x80;
+    memset(&padding.chars[33], 0, 31);
+    padding.chars[62] = 1;
+    
+    Sha256_initialize(s);
+    Sha256_round(s, &padding.chars[0]);
     
     uint32_t* outi = (uint32_t*)out;
-    for (i=0; i<8; ++i)
-        outi[i] = EndianSwap(s[i]);
+    outi[0] = EndianSwap(s[0]);
+    outi[1] = EndianSwap(s[1]);
+    outi[2] = EndianSwap(s[2]);
+    outi[3] = EndianSwap(s[3]);
+    outi[4] = EndianSwap(s[4]);
+    outi[5] = EndianSwap(s[5]);
+    outi[6] = EndianSwap(s[6]);
+    outi[7] = EndianSwap(s[7]);
+}
+
+// Quickly hashes the concatenation of two other hashes; input must be 64 bytes
+void TreeDoubleSha256(const unsigned char* in, unsigned char* out)
+{
+    union {
+        uint8_t chars[64];
+        uint32_t ints[16];
+    } padding;
+    uint32_t s[8];
+    
+    Sha256_initialize(s);
+    Sha256_round(s, in);
+    
+    padding.chars[0] = 0x80;
+    memset(&padding.chars[1], 0, 63);
+    padding.chars[62] = 2;
+    Sha256_round(s, &padding.chars[0]);
+    
+    padding.ints[0] = EndianSwap(s[0]);
+    padding.ints[1] = EndianSwap(s[1]);
+    padding.ints[2] = EndianSwap(s[2]);
+    padding.ints[3] = EndianSwap(s[3]);
+    padding.ints[4] = EndianSwap(s[4]);
+    padding.ints[5] = EndianSwap(s[5]);
+    padding.ints[6] = EndianSwap(s[6]);
+    padding.ints[7] = EndianSwap(s[7]);
+    
+    padding.chars[32] = 0x80;
+    memset(&padding.chars[33], 0, 31);
+    padding.chars[62] = 1;
+    
+    Sha256_initialize(s);
+    Sha256_round(s, &padding.chars[0]);
+    
+    uint32_t* outi = (uint32_t*)out;
+    outi[0] = EndianSwap(s[0]);
+    outi[1] = EndianSwap(s[1]);
+    outi[2] = EndianSwap(s[2]);
+    outi[3] = EndianSwap(s[3]);
+    outi[4] = EndianSwap(s[4]);
+    outi[5] = EndianSwap(s[5]);
+    outi[6] = EndianSwap(s[6]);
+    outi[7] = EndianSwap(s[7]);
 }
 
 //assumes input is 64 bytes (or longer)
@@ -194,7 +273,6 @@ uint8_t padding[64] =
 //assumes input is 512 bytes
 void Sha256(unsigned char* in, unsigned char* out)
 {
-    uint32_t i;
     uint32_t s[8];
     Sha256_initialize(s);
     Sha256_round(s, in);
@@ -208,6 +286,12 @@ void Sha256(unsigned char* in, unsigned char* out)
     Sha256_round(s, padding);
 
     uint32_t* outi = (uint32_t*)out;
-    for (i=0; i<8; ++i)
-        outi[i] = EndianSwap(s[i]);
+    outi[0] = EndianSwap(s[0]);
+    outi[1] = EndianSwap(s[1]);
+    outi[2] = EndianSwap(s[2]);
+    outi[3] = EndianSwap(s[3]);
+    outi[4] = EndianSwap(s[4]);
+    outi[5] = EndianSwap(s[5]);
+    outi[6] = EndianSwap(s[6]);
+    outi[7] = EndianSwap(s[7]);
 }

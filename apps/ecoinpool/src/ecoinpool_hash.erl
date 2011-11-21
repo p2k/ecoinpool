@@ -20,7 +20,7 @@
 
 -module(ecoinpool_hash).
 
--export([init/0, dsha256_hash/1, sha256_midstate/1, rs_hash/1]).
+-export([init/0, dsha256_hash/1, tree_dsha256_hash/1, tree_level_dsha256_hash/1, tree_pair_dsha256_hash/2, sha256_midstate/1, rs_hash/1]).
 
 -on_load(module_init/0).
 
@@ -41,11 +41,33 @@ module_init() ->
 init() ->
     ok.
 
-dsha256_hash(_X) ->
+dsha256_hash(_) ->
     exit(nif_library_not_loaded).
 
-sha256_midstate(_X) ->
+tree_dsha256_hash([]) ->
+    [];
+tree_dsha256_hash([Result]) ->
+    Result;
+tree_dsha256_hash(Level) ->
+    tree_dsha256_hash(tree_level_dsha256_hash(Level, [])).
+
+tree_level_dsha256_hash([Result]) ->
+    [Result];
+tree_level_dsha256_hash(Level) ->
+    tree_level_dsha256_hash(Level, []).
+
+tree_level_dsha256_hash([], Acc) ->
+    Acc;
+tree_level_dsha256_hash([H1,H2,H3], Acc) ->
+    Acc ++ [tree_pair_dsha256_hash(H1, H2), tree_pair_dsha256_hash(H3, H3)];
+tree_level_dsha256_hash([H1,H2|T], Acc) ->
+    tree_level_dsha256_hash(T, Acc ++ [tree_pair_dsha256_hash(H1, H2)]).
+
+tree_pair_dsha256_hash(_, _) ->
     exit(nif_library_not_loaded).
 
-rs_hash(_X) ->
+sha256_midstate(_) ->
+    exit(nif_library_not_loaded).
+
+rs_hash(_) ->
     exit(nif_library_not_loaded).

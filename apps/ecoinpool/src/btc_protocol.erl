@@ -176,7 +176,10 @@ encode_var_list(Elements, EncodeElementFun) ->
 encode_var_list([], _, Acc) ->
     Acc;
 encode_var_list([H|T], EncodeElementFun, Acc) ->
-    BElement = EncodeElementFun(H),
+    BElement = if % Skip already encoded parts
+        is_binary(H) -> H;
+        true -> EncodeElementFun(H)
+    end,
     encode_var_list(T, EncodeElementFun, <<Acc/binary, BElement/binary>>).
 
 encode_var_str(Str) ->
@@ -190,18 +193,18 @@ encode_tx(#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}
 
 encode_tx_in(#btc_tx_in{prev_output_hash=PrevOutputHash, prev_output_index=PrevOutputIndex, signature_script=SignatureScript, sequence=Sequence}) ->
     BSignatureScript = encode_var_str(
-        if
+        if % Skip already encoded script
             is_binary(SignatureScript) -> SignatureScript;
-            is_list(SignatureScript) -> encode_script(SignatureScript)
+            true -> encode_script(SignatureScript)
         end
     ),
     <<PrevOutputHash:32/bytes, PrevOutputIndex:32/unsigned-little, BSignatureScript/binary, Sequence:32/unsigned-little>>.
 
 encode_tx_out(#btc_tx_out{value=Value, pk_script=PKScript}) ->
     BPKScript = encode_var_str(
-        if
+        if % Skip already encoded script
             is_binary(PKScript) -> PKScript;
-            is_list(PKScript) -> encode_script(PKScript)
+            true -> encode_script(PKScript)
         end
     ),
     <<Value:64/unsigned-little, BPKScript/binary>>.
