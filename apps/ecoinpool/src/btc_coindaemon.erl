@@ -90,8 +90,8 @@ analyze_result([<<Data:160/bytes, _/binary>>]) ->
             error;
         BDataBigEndian ->
             BData = ecoinpool_util:endian_swap(BDataBigEndian),
-            BTCHeader = btc_protocol:decode_btc_header(BData),
-            WorkunitId = workunit_id_from_btc_header(BTCHeader),
+            Header = btc_protocol:decode_btc_header(BData),
+            WorkunitId = workunit_id_from_btc_header(Header),
             Hash = ecoinpool_hash:dsha256_hash(BData),
             [{WorkunitId, Hash, BData}]
     end;
@@ -139,8 +139,19 @@ init([SubpoolId, Config]) ->
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, timer=Timer, txtbl=TxTbl}}.
 
-handle_call({send_result, _BData}, _From, State) ->
-    {reply, error, State}; %TODO
+handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, txtbl=TxTbl}) ->
+    Header = btc_protocol:decode_btc_header(BData),
+    WorkunitId = workunit_id_from_btc_header(Header),
+    case ets:lookup(TxTbl, WorkunitId) of
+        [{_, Transactions}] ->
+            try
+                {reply, send_block(URL, Auth, Header, Transactions), State}
+            catch error:_ ->
+                {reply, {error, <<"exception in btc_coindaemon:send_block/3">>}, State}
+            end;
+        [] ->
+            {reply, rejected, State}
+    end;
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
@@ -293,6 +304,25 @@ fetch_work_with_state(State=#state{url=URL, auth=Auth, subpool=SubpoolId, txtbl=
                 _ ->
                     State#state{last_fetch=Now, memorypool=Memorypool, coinbase_tx=undefined}
             end
+    end.
+
+send_block(URL, Auth, Header, Transactions) ->
+    BData = btc_protocol:encode_block(#btc_block{header=Header, txns=Transactions}),
+    HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
+    PostData = "{\"method\":\"getmemorypool\",\"params\":[\"" ++ HexData ++ "\"]}",
+    case send_req(URL, Auth, PostData) of
+        {ok, "200", _ResponseHeaders, ResponseBody} ->
+            {Body} = ejson:decode(ResponseBody),
+            case proplists:get_value(<<"result">>, Body) of
+                true ->
+                    accepted;
+                _ ->
+                    rejected
+            end;
+        {ok, Status, _ResponseHeaders, ResponseBody} ->
+            {error, binary:list_to_bin(io_lib:format("send_block: Received HTTP ~s - Body: ~p", [Status, ResponseBody]))};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 workunit_id_from_btc_header(#btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot}) ->
