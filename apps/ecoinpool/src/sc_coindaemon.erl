@@ -160,7 +160,7 @@ handle_info(poll_daemon, State=#state{subpool=SubpoolId}) ->
         {error, Reason, NState} ->
             case Reason of
                 no_new_block -> ok;
-                _ -> io:format("exception in sc_coindaemon-poll_daemon: ~p~n", Reason)
+                _ -> io:format("exception in sc_coindaemon-poll_daemon: ~p~n", [Reason])
             end,
             {noreply, NState};
         {Result, Workunit, NState} ->

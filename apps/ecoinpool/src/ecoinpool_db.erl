@@ -61,7 +61,7 @@ setup_shares_db(Subpool) ->
     gen_server:call(?MODULE, {setup_shares_db, Subpool}).
 
 store_share(Subpool, IP, Worker, Workunit, Hash) ->
-    gen_server:call(?MODULE, {store_share, Subpool, IP, Worker, Workunit, Hash}).
+    gen_server:cast(?MODULE, {store_share, Subpool, IP, Worker, Workunit, Hash}).
 
 store_invalid_share(Subpool, IP, Worker, Reason) ->
     store_invalid_share(Subpool, IP, Worker, undefined, undefined, Reason).
@@ -247,27 +247,6 @@ handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{s
             end
     end;
 
-handle_call({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, _From, State=#state{srv_conn=S, view_update_dbs=ViewUpdateDBS}) ->
-    try
-        {ok, DB} = couchbeam:open_db(S, SubpoolName),
-        Reply = if
-            Hash =< Target ->
-                couchbeam:save_doc(DB, make_share_document(WorkerId, UserId, IP, candidate, Hash, Target, BlockNum, BData)),
-                candidate;
-            true ->
-                couchbeam:save_doc(DB, make_share_document(WorkerId, UserId, IP, valid, Hash, Target, BlockNum)),
-                ok
-        end,
-        case ViewUpdateDBS of
-            undefined ->
-                {reply, Reply, State};
-            _ ->
-                {reply, Reply, State#state{view_update_dbs=dict:store(DB, erlang:now(), ViewUpdateDBS)}}
-        end
-    catch error:_ ->
-        {reply, error, State}
-    end;
-
 handle_call(_Message, _From, State=#state{}) ->
     {reply, error, State}.
 
@@ -282,6 +261,27 @@ handle_cast(start_monitors, State=#state{conf_db=ConfDb}) ->
     end,
     {noreply, State};
 
+handle_cast({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, State=#state{srv_conn=S, view_update_dbs=ViewUpdateDBS}) ->
+    Document = if
+        Hash =< Target ->
+            make_share_document(WorkerId, UserId, IP, candidate, Hash, Target, BlockNum, BData);
+        true ->
+            make_share_document(WorkerId, UserId, IP, valid, Hash, Target, BlockNum)
+    end,
+    try
+        {ok, DB} = couchbeam:open_db(S, SubpoolName),
+        couchbeam:save_doc(DB, Document),
+        case ViewUpdateDBS of
+            undefined ->
+                {noreply, State};
+            _ ->
+                {noreply, State#state{view_update_dbs=dict:store(DB, erlang:now(), ViewUpdateDBS)}}
+        end
+    catch error:Reason ->
+        io:format("ecoinpool_db:store_share: ignored error: ~p~n", [Reason]),
+        {noreply, State}
+    end;
+
 handle_cast({store_invalid_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
     Document = case Workunit of
         undefined ->
@@ -292,8 +292,8 @@ handle_cast({store_invalid_share, #subpool{name=SubpoolName}, IP, #worker{id=Wor
     try
         {ok, DB} = couchbeam:open_db(S, SubpoolName),
         couchbeam:save_doc(DB, Document)
-    catch error:_ ->
-        ok
+    catch error:Reason ->
+        io:format("ecoinpool_db:store_invalid_share: ignored error: ~p~n", [Reason])
     end,
     {noreply, State};
 

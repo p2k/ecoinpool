@@ -468,10 +468,6 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
 
 process_results(Peer, Results, Subpool, Worker=#worker{name=User, lp=LP}, CoinDaemonModule, CoinDaemon, Responder) ->
     % Process all results
-    case length(Results) of
-        1 -> ok;
-        N -> io:format("Multi-result (~b):~n", [N])
-    end,
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
             (stale, {AccReplyItems, _, AccCandidates}) ->
@@ -483,12 +479,13 @@ process_results(Peer, Results, Subpool, Worker=#worker{name=User, lp=LP}, CoinDa
             ({target, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
                 {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
-            ({valid, Workunit, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
-                case ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash) of
-                    candidate -> % We got a winner (?)
+            ({valid, Workunit=#workunit{target=Target}, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
+                ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash),
+                if
+                    Hash =< Target -> % We got a winner (?)
                         io:format("+++ Candidate share from ~s/~s! +++~n", [User, Peer]),
                         {[Hash | AccReplyItems], AccRejectReason, [BData | AccCandidates]};
-                    ok -> % Normal share
+                    true -> % Normal share
                         {[Hash | AccReplyItems], AccRejectReason, AccCandidates}
                 end
         end,

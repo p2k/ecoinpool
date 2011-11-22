@@ -90,7 +90,7 @@ analyze_result([<<Data:160/bytes, _/binary>>]) ->
             error;
         BDataBigEndian ->
             BData = ecoinpool_util:endian_swap(BDataBigEndian),
-            Header = btc_protocol:decode_btc_header(BData),
+            Header = btc_protocol:decode_header(BData),
             WorkunitId = workunit_id_from_btc_header(Header),
             Hash = ecoinpool_hash:dsha256_hash(BData),
             [{WorkunitId, Hash, BData}]
@@ -122,7 +122,8 @@ init([SubpoolId, Config]) ->
     
     PayTo = btc_protocol:hash160_from_address(case proplists:get_value(pay_to, Config) of
         undefined ->
-            get_default_payout_address(URL, {User, Pass});
+            {ok, Address} = get_default_payout_address(URL, {User, Pass}),
+            Address;
         Address ->
             Address
     end),
@@ -140,7 +141,7 @@ init([SubpoolId, Config]) ->
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, timer=Timer, txtbl=TxTbl}}.
 
 handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, txtbl=TxTbl}) ->
-    Header = btc_protocol:decode_btc_header(BData),
+    Header = btc_protocol:decode_header(BData),
     WorkunitId = workunit_id_from_btc_header(Header),
     case ets:lookup(TxTbl, WorkunitId) of
         [{_, Transactions}] ->
@@ -158,7 +159,9 @@ handle_call(_Message, _From, State) ->
 
 handle_cast(post_workunit, OldState) ->
     % Check if new work must be fetched
+    TS1 = os:timestamp(),
     State = fetch_work_with_state(OldState),
+    TS2 = os:timestamp(),
     % Extract state variables
     #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, txtbl=TxTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx} = State,
     % Create/update coinbase
@@ -172,6 +175,7 @@ handle_cast(post_workunit, OldState) ->
     Header = make_btc_header(Memorypool, CoinbaseTx),
     % Create the workunit
     Workunit = make_workunit(Header, BlockNum),
+    io:format("post_workunit: work fetch: ~bms - work creation: ~bus~n", [timer:now_diff(TS2, TS1) div 1000, timer:now_diff(os:timestamp(), TS2)]),
     % Store transactions for this workunit, including the coinbase transaction
     ets:insert(TxTbl, {Workunit#workunit.id, [CoinbaseTx | Memorypool#memorypool.transactions]}),
     % Send back
@@ -237,18 +241,23 @@ get_block_number(URL, Auth) ->
     proplists:get_value(<<"result">>, Body) + 1.
 
 get_memory_pool(URL, Auth) ->
+    TS1 = os:timestamp(),
     {ok, "200", _ResponseHeaders, ResponseBody} = send_req(URL, Auth, "{\"method\":\"getmemorypool\"}"),
+    TS2 = os:timestamp(),
     {Body} = ejson:decode(ResponseBody),
     {Result} = proplists:get_value(<<"result">>, Body),
     1 = proplists:get_value(<<"version">>, Result),
     
-    HashPrevBlock = ecoinpool_util:byte_reverse(proplists:get_value(<<"previousblockhash">>, Result)),
+    HashPrevBlock = ecoinpool_util:byte_reverse(ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"previousblockhash">>, Result))),
     CoinbaseValue = proplists:get_value(<<"coinbasevalue">>, Result),
     Timestamp = proplists:get_value(<<"time">>, Result),
     <<Bits:32/unsigned>> = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"bits">>, Result)),
     Transactions = lists:map(fun ecoinpool_util:hexbin_to_bin/1, proplists:get_value(<<"transactions">>, Result)),
     
-    [undefined|FT] = ecoinpool_hash:foldable_tree_dsha256_hash([undefined|Transactions]),
+    TS3 = os:timestamp(),
+    TransactionHashes = lists:map(fun ecoinpool_hash:dsha256_hash/1, Transactions),
+    [undefined|FT] = ecoinpool_hash:foldable_tree_dsha256_hash([undefined|TransactionHashes]),
+    io:format("get_memory_pool: rpc call: ~bms - parsing: ~bus (~b txns) - hashing: ~bus~n", [timer:now_diff(TS2, TS1) div 1000, timer:now_diff(TS3, TS2), length(Transactions), timer:now_diff(os:timestamp(), TS3)]),
     
     #memorypool{
         hash_prev_block = HashPrevBlock,
@@ -282,7 +291,7 @@ check_fetch_now(Now, #state{url=URL, auth=Auth, block_num=BlockNum, last_fetch=L
             end
     end.
 
-fetch_work_with_state(State=#state{url=URL, auth=Auth, subpool=SubpoolId, txtbl=TxTbl}) ->
+fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=TxTbl, memorypool=OldMemorypool, coinbase_tx=OldCoinbaseTx}) ->
     Now = erlang:now(),
     case check_fetch_now(Now, State) of
         false ->
@@ -297,12 +306,21 @@ fetch_work_with_state(State=#state{url=URL, auth=Auth, subpool=SubpoolId, txtbl=
             end,
             
             Memorypool = get_memory_pool(URL, Auth),
+            CoinbaseTx = case memorypools_equivalent(OldMemorypool, Memorypool) of
+                true ->
+                    OldCoinbaseTx;
+                _ ->
+                    io:format("btc_coindaemon: fetch_work_with_state: memory pool changed!~n"),
+                    undefined
+            end,
             
             case Reason of
                 {new_block, BlockNum} ->
-                    State#state{block_num=BlockNum, last_fetch=Now, memorypool=Memorypool, coinbase_tx=undefined};
+                    State#state{block_num=BlockNum, last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx};
+                starting ->
+                    State#state{block_num=get_block_number(URL, Auth), last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx};
                 _ ->
-                    State#state{last_fetch=Now, memorypool=Memorypool, coinbase_tx=undefined}
+                    State#state{last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx}
             end
     end.
 
@@ -335,11 +353,11 @@ make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, 
     HashMerkleRoot = ecoinpool_util:byte_reverse(ecoinpool_hash:tree_fold_dsha256_hash([HashedTx|FoldableTreeHashes])),
     #btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
 
-make_coinbase_tx(#memorypool{bits=Bits, coinbase_value=CoinbaseValue}, Tag, PubkeyHash160, ScriptSigTrailer) ->
+make_coinbase_tx(#memorypool{timestamp=Timestamp, coinbase_value=CoinbaseValue}, Tag, PubkeyHash160, ScriptSigTrailer) ->
     TxIn = #btc_tx_in{
         prev_output_hash = <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0>>,
         prev_output_index = 16#ffffffff,
-        signature_script = [Tag, Bits, 0 | ScriptSigTrailer]
+        signature_script = [Tag, Timestamp, 0 | ScriptSigTrailer]
     },
     TxOut = #btc_tx_out{
         value = CoinbaseValue,
@@ -348,11 +366,19 @@ make_coinbase_tx(#memorypool{bits=Bits, coinbase_value=CoinbaseValue}, Tag, Pubk
     #btc_tx{tx_in=[TxIn], tx_out=[TxOut]}.
 
 increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
-    #btc_tx_in{signature_script = [Tag, Bits, ExtraNonce | ScriptSigTrailer]} = TxIn,
-    Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script = [Tag, Bits, ExtraNonce+1 | ScriptSigTrailer]}]}.
+    #btc_tx_in{signature_script = [Tag, Timestamp, ExtraNonce | ScriptSigTrailer]} = TxIn,
+    Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script = [Tag, Timestamp, ExtraNonce+1 | ScriptSigTrailer]}]}.
 
 make_workunit(Header=#btc_header{bits=Bits}, BlockNum) ->
     BHeader = btc_protocol:encode_header(Header),
     WUId = workunit_id_from_btc_header(Header),
     Target = ecoinpool_util:bits_to_target(Bits),
     #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BHeader}.
+
+memorypools_equivalent(
+            #memorypool{hash_prev_block=A, bits=B, foldable_tree_hashes=C, coinbase_value=D},
+            #memorypool{hash_prev_block=A, bits=B, foldable_tree_hashes=C, coinbase_value=D}
+        ) ->
+    true;
+memorypools_equivalent(_, _) ->
+    false.
