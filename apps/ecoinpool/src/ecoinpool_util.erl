@@ -22,6 +22,22 @@
 
 -export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, byte_reverse/1, bn2mpi_le/1, mpi2bn_le/1]).
 
+-on_load(module_init/0).
+
+module_init() ->
+    SoName = case code:priv_dir(ecoinpool) of
+        {error, bad_name} ->
+            case filelib:is_dir(filename:join(["..", priv])) of
+                true ->
+                    filename:join(["..", priv, ?MODULE]);
+                false ->
+                    filename:join([priv, ?MODULE])
+            end;
+        Dir ->
+            filename:join(Dir, ?MODULE)
+    end,
+    ok = erlang:load_nif(SoName, 0).
+
 hexbin_to_bin(BinHex) ->
     binary:list_to_bin(hexstr_to_list(binary:bin_to_list(BinHex))).
 
