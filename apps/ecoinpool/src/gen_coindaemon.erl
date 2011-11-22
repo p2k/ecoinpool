@@ -43,15 +43,8 @@ behaviour_info(callbacks) ->
         
         % share_target()
         %   Should return the target which satisfies a share as 256 bit binary
-        %   in big endian.
+        %   in big endian (static).
         {share_target, 0},
-        
-        % post_workunit(PID)
-        %   Post an unassigned workunit asynchronously. Also check for a new block.
-        %   Should use ecoinpool_server:store_workunit/2 and new_block_detected/1
-        %   to return a work unit. It must be guaranteed that store_workunit/2
-        %   gets called at some point or the workflow might deadlock!
-        {post_workunit, 1},
         
         % encode_workunit(Workunit)
         %   Encodes a workunit so it can be sent as result to a getwork call.
@@ -77,6 +70,13 @@ behaviour_info(callbacks) ->
         %   hashes and/or the atom "invalid"; for daemons which don't support
         %   multi-results, Items always contains a single item.
         {make_reply, 1},
+        
+        % post_workunit(PID)
+        %   Post an unassigned workunit asynchronously. Also check for a new block.
+        %   Should use ecoinpool_server:store_workunit/2 and new_block_detected/1
+        %   to return a work unit. It must be guaranteed that store_workunit/2
+        %   gets called at some point or the workflow might deadlock!
+        {post_workunit, 1},
         
         % send_result(PID, BData)
         %   Sends in a (single) result to the CoinDaemon.
