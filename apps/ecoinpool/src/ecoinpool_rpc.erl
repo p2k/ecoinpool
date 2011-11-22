@@ -124,6 +124,8 @@ respond_success(Req, ReqId, Result, Options) ->
                 [{"X-Long-Polling", "/LP"} | AccHeaders];
             ({reject_reason, Reason}, AccHeaders) ->
                 [{"X-Reject-Reason", Reason} | AccHeaders];
+            ({block_num, BlockNum}, AccHeaders) ->
+                [{"X-Blocknum", BlockNum} | AccHeaders];
             (_, AccHeaders) ->
                 AccHeaders
         end,

@@ -288,12 +288,12 @@ handle_cast({store_workunit, Workunit}, State) ->
     % Inspect the Cache/Queue
     {NewWorkQueue, NewWorkQueueSize} = if
         WorkQueueSize < 0 -> % We have connections waiting -> send out
-            {{value, {#worker{id=WorkerId, lp=LP}, Responder}}, NWQ} = queue:out(WorkQueue),
+            {{value, {Worker=#worker{id=WorkerId}, Responder}}, NWQ} = queue:out(WorkQueue),
             case ets:insert_new(WorkTbl, Workunit#workunit{worker_id=WorkerId}) of
                 false -> io:format("store_workunit got a collision :/~n");
                 _ -> ok
             end,
-            Responder({ok, CoinDaemon:encode_workunit(Workunit), case LP of true -> [longpolling]; _ -> [] end}),
+            Responder({ok, CoinDaemon:encode_workunit(Workunit), make_responder_options(Worker, Workunit)}),
             {NWQ, WorkQueueSize+1};
         WorkQueueSize < MaxCacheSize -> % We are under the cache limit -> cache
             {queue:in(Workunit, WorkQueue), WorkQueueSize+1};
@@ -415,7 +415,7 @@ parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, Send
             end
     end.
 
-assign_work(Now, MaxWorkAge, Worker=#worker{id=WorkerId, lp=LP}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder) ->
+assign_work(Now, MaxWorkAge, Worker=#worker{id=WorkerId}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder) ->
     % Look if work is available in the Cache
     if
         WorkQueueSize > 0 -> % Cache hit
@@ -426,7 +426,7 @@ assign_work(Now, MaxWorkAge, Worker=#worker{id=WorkerId, lp=LP}, WorkQueue, Work
                         false -> io:format("assign_work got a collision :/~n");
                         _ -> ok
                     end,
-                    Responder({ok, CoinDaemon:encode_workunit(Workunit), case LP of true -> [longpolling]; _ -> [] end}),
+                    Responder({ok, CoinDaemon:encode_workunit(Workunit), make_responder_options(Worker, Workunit)}),
                     {hit, NewWorkQueue, WorkQueueSize-1};
                 _ -> % Try again if too old (tail recursive)
                     io:format("assign_work: discarded an old workunit.~n"),
@@ -470,7 +470,7 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
             spawn(fun () -> process_results(Peer, ResultsWithWU, Subpool, Worker, CoinDaemon, Responder) end)
     end.
 
-process_results(Peer, Results, Subpool, Worker=#worker{name=User, lp=LP}, CoinDaemon, Responder) ->
+process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, Responder) ->
     % Process all results
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
@@ -497,7 +497,7 @@ process_results(Peer, Results, Subpool, Worker=#worker{name=User, lp=LP}, CoinDa
         Results 
     ),
     % Send reply
-    Options = case LP of true -> [longpolling]; _ -> [] end,
+    Options = make_responder_options(Worker),
     case RejectReason of
         undefined ->
             Responder({ok, CoinDaemon:make_reply(ReplyItems), Options});
@@ -531,3 +531,12 @@ check_work_age(WorkQueue, WorkQueueSize, Now, MaxWorkAge) ->
         _ ->
             {WorkQueue, WorkQueueSize} % Done
     end.
+
+make_responder_options(#worker{lp=LP}) ->
+    case LP of
+        true -> [longpolling];
+        _ -> []
+    end.
+
+make_responder_options(Worker, #workunit{block_num=BlockNum}) ->
+    [{block_num, BlockNum} | make_responder_options(Worker)].
