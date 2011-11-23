@@ -233,14 +233,14 @@ handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
         {ok, Worker=#worker{name=User}, _} ->
             io:format("LP requested by ~s/~s!~n", [User, Peer]),
             case Responder(start) of
-                ok ->
-                    {noreply, State#state{lp_queue=queue:in({Worker, Responder}, LPQueue)}};
+                {ok, LateResponder} ->
+                    {noreply, State#state{lp_queue=queue:in({Worker, LateResponder}, LPQueue)}};
                 _ ->
                     io:format("But the connection was already dropped!~n"),
                     {noreply, State}
             end;
         {error, Type} ->
-            Responder({start_error, Type}),
+            Responder({error, Type}),
             {noreply, State}
     end;
 
