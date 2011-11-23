@@ -217,7 +217,7 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
                     end,
                     {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
                 sendwork ->
-                    check_work(Peer, Params, Subpool, Worker, WorkTbl, HashTbl, CoinDaemon, ShareTarget, Responder),
+                    check_new_round(Subpool, check_work(Peer, Params, Subpool, Worker, WorkTbl, HashTbl, CoinDaemon, ShareTarget, Responder)),
                     {noreply, State}
             end;
         {error, Type} ->
@@ -442,18 +442,22 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
         error ->
             io:format("Wrong data from ~s/~s!~n~p~n", [User, Peer, Params]),
             ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
-            Responder({error, invalid_request});
+            Responder({error, invalid_request}),
+            false;
         Results ->
             % Lookup workunits, check hash target and check duplicates
             ResultsWithWU = lists:map(
                 fun ({WorkId, Hash, BData}) ->
                     case ets:lookup(WorkTbl, WorkId) of
-                        [Workunit] -> % Found
+                        [Workunit=#workunit{target=Target}] -> % Found
                             if
                                 Hash > ShareTarget ->
                                     {target, Workunit, Hash};
                                 true ->
                                     case ets:insert_new(HashTbl, {Hash}) of % Also stores the new hash
+                                        true when Hash =< Target -> % We got a winner (?)
+                                            io:format("+++ Candidate share from ~s/~s! +++~n", [User, Peer]),
+                                            {candidate, Workunit, Hash, BData};
                                         true ->
                                             {valid, Workunit, Hash, BData};
                                         _ ->
@@ -467,7 +471,8 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
                 Results
             ),
             % Process results in new process
-            spawn(fun () -> process_results(Peer, ResultsWithWU, Subpool, Worker, CoinDaemon, Responder) end)
+            spawn(fun () -> process_results(Peer, ResultsWithWU, Subpool, Worker, CoinDaemon, Responder) end),
+            lists:any(fun ({candidate, _, _, _}) -> true; (_) -> false end, ResultsWithWU)
     end.
 
 process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, Responder) ->
@@ -483,14 +488,11 @@ process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, R
             ({target, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
                 {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
-            ({valid, Workunit=#workunit{target=Target}, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
+            ({Quality, Workunit, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
                 ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash),
-                if
-                    Hash =< Target -> % We got a winner (?)
-                        io:format("+++ Candidate share from ~s/~s! +++~n", [User, Peer]),
-                        {[Hash | AccReplyItems], AccRejectReason, [BData | AccCandidates]};
-                    true -> % Normal share
-                        {[Hash | AccReplyItems], AccRejectReason, AccCandidates}
+                case Quality of
+                    valid -> {[Hash | AccReplyItems], AccRejectReason, AccCandidates};
+                    candidate -> {[Hash | AccReplyItems], AccRejectReason, [BData | AccCandidates]}
                 end
         end,
         {[], undefined, []},
@@ -540,3 +542,10 @@ make_responder_options(#worker{lp=LP}) ->
 
 make_responder_options(Worker, #workunit{block_num=BlockNum}) ->
     [{block_num, BlockNum} | make_responder_options(Worker)].
+
+check_new_round(_, false) ->
+    ok;
+check_new_round(#subpool{round=undefined}, true) ->
+    ok;
+check_new_round(Subpool=#subpool{round=Round}, true) ->
+    ecoinpool_db:set_subpool_round(Subpool, Round+1).

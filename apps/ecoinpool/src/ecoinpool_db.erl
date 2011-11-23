@@ -24,7 +24,7 @@
 -include("ecoinpool_db_records.hrl").
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/1, get_configuration/0, get_subpool_record/1, get_worker_record/1, get_workers_for_subpools/1, setup_shares_db/1, store_share/5, store_invalid_share/4, store_invalid_share/6, set_view_update_interval/1]).
+-export([start_link/1, get_configuration/0, get_subpool_record/1, get_worker_record/1, get_workers_for_subpools/1, set_subpool_round/2, setup_shares_db/1, store_share/5, store_invalid_share/4, store_invalid_share/6, set_view_update_interval/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -56,6 +56,9 @@ get_worker_record(WorkerId) ->
 
 get_workers_for_subpools(SubpoolIds) ->
     gen_server:call(?MODULE, {get_workers_for_subpools, SubpoolIds}).
+
+set_subpool_round(Subpool, Round) ->
+    gen_server:cast(?MODULE, {set_subpool_round, Subpool, Round}).
 
 setup_shares_db(Subpool) ->
     gen_server:call(?MODULE, {setup_shares_db, Subpool}).
@@ -261,12 +264,23 @@ handle_cast(start_monitors, State=#state{conf_db=ConfDb}) ->
     end,
     {noreply, State};
 
-handle_cast({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, State=#state{srv_conn=S, view_update_dbs=ViewUpdateDBS}) ->
+handle_cast({set_subpool_round, #subpool{id=SubpoolId}, Round}, State=#state{conf_db=ConfDb}) ->
+    % Retrieve document
+    case couchbeam:open_doc(ConfDb, SubpoolId) of
+        {ok, Doc} ->
+            UpdatedDoc = couchbeam_doc:set_value(<<"round">>, Round, Doc),
+            couchbeam:save_doc(ConfDb, UpdatedDoc);
+        _ -> % Ignore if missing
+            ok
+    end,
+    {noreply, State};
+
+handle_cast({store_share, #subpool{name=SubpoolName, round=Round}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, State=#state{srv_conn=S, view_update_dbs=ViewUpdateDBS}) ->
     Document = if
         Hash =< Target ->
-            make_share_document(WorkerId, UserId, IP, candidate, Hash, Target, BlockNum, BData);
+            make_share_document(WorkerId, UserId, IP, candidate, Hash, Target, BlockNum, BData, Round);
         true ->
-            make_share_document(WorkerId, UserId, IP, valid, Hash, Target, BlockNum)
+            make_share_document(WorkerId, UserId, IP, valid, Hash, Target, BlockNum, Round)
     end,
     try
         {ok, DB} = couchbeam:open_db(S, SubpoolName),
@@ -282,12 +296,12 @@ handle_cast({store_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, u
         {noreply, State}
     end;
 
-handle_cast({store_invalid_share, #subpool{name=SubpoolName}, IP, #worker{id=WorkerId, user_id=UserId}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
+handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round}, IP, #worker{id=WorkerId, user_id=UserId}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
     Document = case Workunit of
         undefined ->
-            make_reject_share_document(WorkerId, UserId, IP, Reason);
+            make_reject_share_document(WorkerId, UserId, IP, Reason, Round);
         #workunit{target=Target, block_num=BlockNum} ->
-            make_reject_share_document(WorkerId, UserId, IP, Reason, Hash, Target, BlockNum)
+            make_reject_share_document(WorkerId, UserId, IP, Reason, Hash, Target, BlockNum, Round)
     end,
     try
         {ok, DB} = couchbeam:open_db(S, SubpoolName),
@@ -393,6 +407,7 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
     end,
     MaxCacheSize = proplists:get_value(<<"max_cache_size">>, DocProps, 300),
     MaxWorkAge = proplists:get_value(<<"max_work_age">>, DocProps, 20),
+    Round = proplists:get_value(<<"round">>, DocProps),
     CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
         {CDP} ->
             lists:map(
@@ -420,6 +435,7 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
                 pool_type=PoolType,
                 max_cache_size=if MaxCacheSize > 0 -> MaxCacheSize; true -> 0 end,
                 max_work_age=if MaxWorkAge > 1 -> MaxWorkAge; true -> 1 end,
+                round=if is_integer(Round) -> Round; true -> undefined end,
                 coin_daemon_config=CoinDaemonConfig
             },
             {ok, Subpool};
@@ -460,7 +476,7 @@ parse_worker_document(WorkerId, {DocProps}) ->
             {error, invalid}
     end.
 
-make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum) ->
+make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum, Round) ->
     {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
     {[
         {<<"worker_id">>, WorkerId},
@@ -471,13 +487,13 @@ make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum) ->
         {<<"hash">>, ecoinpool_util:bin_to_hexbin(Hash)},
         {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
         {<<"block_num">>, BlockNum}
-    ]}.
+    ] ++ maybe_add_round(Round)}.
 
-make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum, BData) ->
-    {Doc} = make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum),
+make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum, BData, Round) ->
+    {Doc} = make_share_document(WorkerId, UserId, IP, State, Hash, Target, BlockNum, Round),
     {Doc ++ [{<<"data">>, base64:encode(BData)}]}.
 
-make_reject_share_document(WorkerId, UserId, IP, Reason) ->
+make_reject_share_document(WorkerId, UserId, IP, Reason, Round) ->
     {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
     {[
         {<<"worker_id">>, WorkerId},
@@ -486,12 +502,17 @@ make_reject_share_document(WorkerId, UserId, IP, Reason) ->
         {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
         {<<"state">>, <<"invalid">>},
         {<<"reject_reason">>, atom_to_binary(Reason, latin1)}
-    ]}.
+    ] ++ maybe_add_round(Round)}.
 
-make_reject_share_document(WorkerId, UserId, IP, Reason, Hash, Target, BlockNum) ->
-    {Doc} = make_reject_share_document(WorkerId, UserId, IP, Reason),
+make_reject_share_document(WorkerId, UserId, IP, Reason, Hash, Target, BlockNum, Round) ->
+    {Doc} = make_reject_share_document(WorkerId, UserId, IP, Reason, Round),
     {Doc ++ [
         {<<"hash">>, ecoinpool_util:bin_to_hexbin(Hash)},
         {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
         {<<"block_num">>, BlockNum}
     ]}.
+
+maybe_add_round(undefined) ->
+    [];
+maybe_add_round(Round) ->
+    [{<<"round">>, Round}].
