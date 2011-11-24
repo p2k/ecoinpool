@@ -32,6 +32,15 @@
     max_work_age :: integer(),
     round :: integer() | undefined,
     worker_share_subpools :: [binary()],
+    coin_daemon_config :: [tuple()],
+    aux_pools :: [binary()]
+}).
+
+-record(auxpool, {
+    id :: binary(),
+    name :: binary(),
+    pool_type :: atom(),
+    round :: integer() | undefined,
     coin_daemon_config :: [tuple()]
 }).
 

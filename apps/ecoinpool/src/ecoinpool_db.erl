@@ -24,7 +24,20 @@
 -include("ecoinpool_db_records.hrl").
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/1, get_configuration/0, get_subpool_record/1, get_worker_record/1, get_workers_for_subpools/1, set_subpool_round/2, setup_shares_db/1, store_share/5, store_invalid_share/4, store_invalid_share/6, set_view_update_interval/1]).
+-export([
+    start_link/1,
+    get_configuration/0,
+    get_subpool_record/1,
+    get_auxpool_record/1,
+    get_worker_record/1,
+    get_workers_for_subpools/1,
+    set_subpool_round/2,
+    setup_shares_db/1,
+    store_share/5,
+    store_invalid_share/4,
+    store_invalid_share/6,
+    set_view_update_interval/1
+]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -50,6 +63,9 @@ get_configuration() ->
 
 get_subpool_record(SubpoolId) ->
     gen_server:call(?MODULE, {get_subpool_record, SubpoolId}).
+
+get_auxpool_record(AuxpoolId) ->
+    gen_server:call(?MODULE, {get_auxpool_record, AuxpoolId}).
 
 get_worker_record(WorkerId) ->
     gen_server:call(?MODULE, {get_worker_record, WorkerId}).
@@ -155,10 +171,17 @@ handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
     end;
 
 handle_call({get_subpool_record, SubpoolId}, _From, State=#state{conf_db=ConfDb}) ->
-    % Retrieve document
     case couchbeam:open_doc(ConfDb, SubpoolId) of
         {ok, Doc} ->
             {reply, parse_subpool_document(SubpoolId, Doc), State};
+        _ ->
+            {reply, {error, missing}, State}
+    end;
+
+handle_call({get_auxpool_record, AuxpoolId}, _From, State=#state{conf_db=ConfDb}) ->
+    case couchbeam:open_doc(ConfDb, AuxpoolId) of
+        {ok, Doc} ->
+            {reply, parse_auxpool_document(AuxpoolId, Doc), State};
         _ ->
             {reply, {error, missing}, State}
     end;
@@ -408,15 +431,8 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
     MaxCacheSize = proplists:get_value(<<"max_cache_size">>, DocProps, 300),
     MaxWorkAge = proplists:get_value(<<"max_work_age">>, DocProps, 20),
     Round = proplists:get_value(<<"round">>, DocProps),
-    WorkerShareSubpools = case proplists:get_value(<<"worker_share_subpools">>, DocProps, []) of
-        WSSP when is_list(WSSP) ->
-            case lists:all(fun erlang:is_binary/1, WSSP) of
-                true -> WSSP;
-                _ -> undefined
-            end;
-        _ ->
-            undefined
-    end,
+    WorkerShareSubpools = proplists:get_value(<<"worker_share_subpools">>, DocProps, []),
+    WorkerShareSubpoolsOk = is_binary_list(WorkerShareSubpools),
     CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
         {CDP} ->
             lists:map(
@@ -426,6 +442,8 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
         _ ->
             []
     end,
+    AuxPools = proplists:get_value(<<"aux_pools">>, DocProps, []),
+    AuxPoolsOk = is_binary_list(AuxPools),
     
     if
         DocType =:= <<"sub-pool">>,
@@ -435,7 +453,8 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
         PoolType =/= undefined,
         is_integer(MaxCacheSize),
         is_integer(MaxWorkAge),
-        is_list(WorkerShareSubpools) ->
+        WorkerShareSubpoolsOk,
+        AuxPoolsOk ->
             
             % Create record
             Subpool = #subpool{
@@ -447,9 +466,50 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
                 max_work_age=if MaxWorkAge > 1 -> MaxWorkAge; true -> 1 end,
                 round=if is_integer(Round) -> Round; true -> undefined end,
                 worker_share_subpools=WorkerShareSubpools,
-                coin_daemon_config=CoinDaemonConfig
+                coin_daemon_config=CoinDaemonConfig,
+                aux_pools=AuxPools
             },
             {ok, Subpool};
+        
+        true ->
+            {error, invalid}
+    end.
+
+parse_auxpool_document(AuxpoolId, {DocProps}) ->
+    DocType = proplists:get_value(<<"type">>, DocProps),
+    Name = proplists:get_value(<<"name">>, DocProps),
+    PoolType = case proplists:get_value(<<"pool_type">>, DocProps) of
+        <<"btc">> -> btc;
+        <<"nmc">> -> nmc;
+        <<"sc">> -> sc;
+        _ -> undefined
+    end,
+    Round = proplists:get_value(<<"round">>, DocProps),
+    CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
+        {CDP} ->
+            lists:map(
+                fun ({BinName, Value}) -> {binary_to_atom(BinName, utf8), Value} end,
+                CDP
+            );
+        _ ->
+            []
+    end,
+    
+    if
+        DocType =:= <<"aux-pool">>,
+        is_binary(Name),
+        Name =/= <<>>,
+        PoolType =/= undefined ->
+            
+            % Create record
+            Auxpool = #auxpool{
+                id=AuxpoolId,
+                name=Name,
+                pool_type=PoolType,
+                round=if is_integer(Round) -> Round; true -> undefined end,
+                coin_daemon_config=CoinDaemonConfig
+            },
+            {ok, Auxpool};
         
         true ->
             {error, invalid}
@@ -527,3 +587,8 @@ maybe_add_round(undefined) ->
     [];
 maybe_add_round(Round) ->
     [{<<"round">>, Round}].
+
+is_binary_list(List) when is_list(List) ->
+    lists:all(fun erlang:is_binary/1, List);
+is_binary_list(_) ->
+    false.
