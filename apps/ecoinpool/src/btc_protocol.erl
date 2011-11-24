@@ -22,7 +22,7 @@
 
 -include("btc_protocol_records.hrl").
 
--export([decode_header/1, encode_header/1, decode_tx/1, encode_tx/1, decode_script/1, encode_script/1, decode_block/1, encode_block/1, hash160_from_address/1]).
+-export([decode_header/1, encode_header/1, decode_tx/1, encode_tx/1, decode_script/1, encode_script/1, decode_block/1, encode_block/1, encode_auxpow/1, hash160_from_address/1]).
 
 -define(OP_TABLE, [
     % control
@@ -254,6 +254,19 @@ encode_block(#btc_block{header=Header, txns=Txns}) ->
     BHeader = encode_header(Header),
     BData = encode_var_list(Txns, fun encode_tx/1),
     <<BHeader:80/bytes, BData/binary>>.
+
+encode_auxpow(#btc_auxpow{coinbase_tx=CoinbaseTx, block_hash=BlockHash, tx_tree_branches=TxTreeBranches, tx_index=TxIndex, aux_tree_branches=AuxTreeBranches, aux_index=AuxIndex, parent_header=ParentHeader}) ->
+    BCoinbaseTx = if
+        is_binary(CoinbaseTx) -> CoinbaseTx;
+        true -> encode_tx(CoinbaseTx)
+    end,
+    BTxTreeBranches = encode_var_list(TxTreeBranches, undefined),
+    BAuxTreeBranches = encode_var_list(AuxTreeBranches, undefined),
+    BParentHeader = if
+        is_binary(ParentHeader) -> ParentHeader;
+        true -> encode_header(ParentHeader)
+    end,
+    <<BCoinbaseTx/binary, BlockHash/binary, BTxTreeBranches/binary, TxIndex:32/unsigned-little, BAuxTreeBranches/binary, AuxIndex:32/unsigned-little, BParentHeader/binary>>.
 
 hash160_from_address(BTCAddress) ->
     try

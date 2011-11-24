@@ -119,7 +119,7 @@ get_first_tx_with_branches(_, _) ->
 
 init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
-    io:format("SC CoinDaemin starting~n"),
+    io:format("SC CoinDaemon starting~n"),
     
     Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
     Port = proplists:get_value(port, Config, 8555),
@@ -205,10 +205,6 @@ analyze_result(<<Data:256/bytes, Remainder/bytes>>, Acc) ->
             analyze_result(Remainder, Acc ++ [{WorkunitId, Hash, BData}])
     end.
 
-send_req(URL, Auth, PostData) ->
-    {ok, VSN} = application:get_key(ecoinpool, vsn),
-    ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]).
-
 check_getwork_now(_, #state{last_getwork=undefined}) ->
     true;
 check_getwork_now(_, #state{getwork_data=undefined}) ->
@@ -220,7 +216,7 @@ check_getwork_now(Now, #state{url=URL, auth=Auth, last_getwork=LastGetwork, getw
         Diff when Diff > 20000000 -> % Force block load every 20s
             true;
         _ ->
-            case send_req(URL, Auth, "{\"method\":\"getblocknumber\"}") of
+            case ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getblocknumber\"}") of
                 {ok, "200", _ResponseHeaders, ResponseBody} ->
                     {Body} = ejson:decode(ResponseBody),
                     BlockNum = proplists:get_value(<<"result">>, Body) + 1,
@@ -273,7 +269,7 @@ getwork_with_state(State=#state{url=URL, auth=Auth, getwork_data=OldSCData, extr
     end.
 
 getwork(URL, Auth) ->
-    case send_req(URL, Auth, "{\"method\":\"sc_getwork\"}") of
+    case ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"sc_getwork\"}") of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
             {Result} = proplists:get_value(<<"result">>, Body),
@@ -289,7 +285,7 @@ getwork(URL, Auth) ->
 sendwork(URL, Auth, BData) ->
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"sc_testwork\",\"params\":[\"" ++ HexData ++ "\"]}",
-    case send_req(URL, Auth, PostData) of
+    case ecoinpool_util:send_http_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
             {Reply} = proplists:get_value(<<"result">>, Body),

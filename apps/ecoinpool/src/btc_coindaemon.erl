@@ -115,7 +115,7 @@ get_first_tx_with_branches(PID, Workunit) ->
 
 init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
-    io:format("BTC CoinDaemin starting~n"),
+    io:format("BTC CoinDaemon starting~n"),
     
     Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
     Port = proplists:get_value(port, Config, 8332),
@@ -216,17 +216,13 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-send_req(URL, Auth, PostData) ->
-    {ok, VSN} = application:get_key(ecoinpool, vsn),
-    ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]).
-
 get_default_payout_address(URL, Auth) ->
-    case send_req(URL, Auth, "{\"method\":\"getaddressesbyaccount\",\"params\":[\"ecoinpool\"]}") of
+    case ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getaddressesbyaccount\",\"params\":[\"ecoinpool\"]}") of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
             case proplists:get_value(<<"result">>, Body) of
                 [] ->
-                    case send_req(URL, Auth, "{\"method\":\"getnewaddress\",\"params\":[\"ecoinpool\"]}") of
+                    case ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getnewaddress\",\"params\":[\"ecoinpool\"]}") of
                         {ok, "200", _ResponseHeaders2, ResponseBody2} ->
                             {Body2} = ejson:decode(ResponseBody2),
                             {ok, proplists:get_value(<<"result">>, Body2)};
@@ -245,12 +241,12 @@ get_default_payout_address(URL, Auth) ->
     end.
 
 get_block_number(URL, Auth) ->
-    {ok, "200", _ResponseHeaders, ResponseBody} = send_req(URL, Auth, "{\"method\":\"getblocknumber\"}"),
+    {ok, "200", _ResponseHeaders, ResponseBody} = ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getblocknumber\"}"),
     {Body} = ejson:decode(ResponseBody),
     proplists:get_value(<<"result">>, Body) + 1.
 
 get_memory_pool(URL, Auth) ->
-    {ok, "200", _ResponseHeaders, ResponseBody} = send_req(URL, Auth, "{\"method\":\"getmemorypool\"}"),
+    {ok, "200", _ResponseHeaders, ResponseBody} = ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getmemorypool\"}"),
     {Body} = ejson:decode(ResponseBody),
     {Result} = proplists:get_value(<<"result">>, Body),
     1 = proplists:get_value(<<"version">>, Result),
@@ -333,7 +329,7 @@ send_block(URL, Auth, Header, Transactions) ->
     BData = btc_protocol:encode_block(#btc_block{header=Header, txns=Transactions}),
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"getmemorypool\",\"params\":[\"" ++ HexData ++ "\"]}",
-    case send_req(URL, Auth, PostData) of
+    case ecoinpool_util:send_http_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
             case proplists:get_value(<<"result">>, Body) of

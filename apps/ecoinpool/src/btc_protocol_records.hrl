@@ -55,3 +55,14 @@
     txns :: [btc_tx()]
 }).
 -type btc_block() :: #btc_block{}.
+
+-record(btc_auxpow, {
+    coinbase_tx :: btc_tx(),
+    block_hash :: binary(),
+    tx_tree_branches :: [binary()],
+    tx_index = 0 :: integer(),
+    aux_tree_branches = [] :: [binary()],
+    aux_index = 0 :: integer(),
+    parent_header :: btc_header()
+}).
+-type btc_auxpow() :: #btc_auxpow{}.

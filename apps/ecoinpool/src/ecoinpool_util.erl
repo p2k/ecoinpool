@@ -20,7 +20,7 @@
 
 -module(ecoinpool_util).
 
--export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, byte_reverse/1, bn2mpi_le/1, mpi2bn_le/1]).
+-export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, byte_reverse/1, bn2mpi_le/1, mpi2bn_le/1, send_http_req/3]).
 
 -on_load(module_init/0).
 
@@ -108,3 +108,7 @@ mpi2bn_le(MPI) ->
         true ->
             -binary:decode_unsigned(<<H:L/bytes, (LSB band 127):8/unsigned>>, little)
     end.
+
+send_http_req(URL, Auth, PostData) ->
+    {ok, VSN} = application:get_key(ecoinpool, vsn),
+    ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]).
