@@ -31,6 +31,7 @@
     max_cache_size = 0 :: integer(),
     max_work_age :: integer(),
     round :: integer() | undefined,
+    worker_share_subpools :: [binary()],
     coin_daemon_config :: [tuple()]
 }).
 

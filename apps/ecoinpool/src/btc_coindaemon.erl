@@ -130,9 +130,9 @@ init([SubpoolId, Config]) ->
     
     FullTag = case proplists:get_value(tag, Config) of
         Tag when is_binary(Tag), byte_size(Tag) > 0 ->
-            <<"ecoinpool|", Tag/binary>>;
+            <<"ecoinpool@", Tag/binary>>;
         _ ->
-            <<"ecoinpool">>
+            <<"ecoinpool@anonymous">>
     end,
     
     TxTbl = ets:new(txtbl, [set, protected]),
@@ -159,9 +159,7 @@ handle_call(_Message, _From, State) ->
 
 handle_cast(post_workunit, OldState) ->
     % Check if new work must be fetched
-    TS1 = os:timestamp(),
     State = fetch_work_with_state(OldState),
-    TS2 = os:timestamp(),
     % Extract state variables
     #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, txtbl=TxTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx} = State,
     % Create/update coinbase
@@ -175,7 +173,6 @@ handle_cast(post_workunit, OldState) ->
     Header = make_btc_header(Memorypool, CoinbaseTx),
     % Create the workunit
     Workunit = make_workunit(Header, BlockNum),
-    io:format("post_workunit: work fetch: ~bms - work creation: ~bus~n", [timer:now_diff(TS2, TS1) div 1000, timer:now_diff(os:timestamp(), TS2)]),
     % Store transactions for this workunit, including the coinbase transaction
     ets:insert(TxTbl, {Workunit#workunit.id, [CoinbaseTx | Memorypool#memorypool.transactions]}),
     % Send back
@@ -241,9 +238,7 @@ get_block_number(URL, Auth) ->
     proplists:get_value(<<"result">>, Body) + 1.
 
 get_memory_pool(URL, Auth) ->
-    TS1 = os:timestamp(),
     {ok, "200", _ResponseHeaders, ResponseBody} = send_req(URL, Auth, "{\"method\":\"getmemorypool\"}"),
-    TS2 = os:timestamp(),
     {Body} = ejson:decode(ResponseBody),
     {Result} = proplists:get_value(<<"result">>, Body),
     1 = proplists:get_value(<<"version">>, Result),
@@ -254,10 +249,8 @@ get_memory_pool(URL, Auth) ->
     <<Bits:32/unsigned>> = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"bits">>, Result)),
     Transactions = lists:map(fun ecoinpool_util:hexbin_to_bin/1, proplists:get_value(<<"transactions">>, Result)),
     
-    TS3 = os:timestamp(),
     TransactionHashes = lists:map(fun ecoinpool_hash:dsha256_hash/1, Transactions),
     [undefined|FT] = ecoinpool_hash:foldable_tree_dsha256_hash([undefined|TransactionHashes]),
-    io:format("get_memory_pool: rpc call: ~bms - parsing: ~bus (~b txns) - hashing: ~bus~n", [timer:now_diff(TS2, TS1) div 1000, timer:now_diff(TS3, TS2), length(Transactions), timer:now_diff(os:timestamp(), TS3)]),
     
     #memorypool{
         hash_prev_block = HashPrevBlock,

@@ -57,20 +57,20 @@ get_worker_record(WorkerId) ->
 get_workers_for_subpools(SubpoolIds) ->
     gen_server:call(?MODULE, {get_workers_for_subpools, SubpoolIds}).
 
-set_subpool_round(Subpool, Round) ->
-    gen_server:cast(?MODULE, {set_subpool_round, Subpool, Round}).
+set_subpool_round(#subpool{id=SubpoolId}, Round) ->
+    gen_server:cast(?MODULE, {set_subpool_round, SubpoolId, Round}).
 
-setup_shares_db(Subpool) ->
-    gen_server:call(?MODULE, {setup_shares_db, Subpool}).
+setup_shares_db(#subpool{name=SubpoolName}) ->
+    gen_server:call(?MODULE, {setup_shares_db, SubpoolName}).
 
-store_share(Subpool, IP, Worker, Workunit, Hash) ->
-    gen_server:cast(?MODULE, {store_share, Subpool, IP, Worker, Workunit, Hash}).
+store_share(#subpool{name=SubpoolName, round=Round}, IP, Worker, Workunit, Hash) ->
+    gen_server:cast(?MODULE, {store_share, SubpoolName, Round, IP, Worker, Workunit, Hash}).
 
 store_invalid_share(Subpool, IP, Worker, Reason) ->
     store_invalid_share(Subpool, IP, Worker, undefined, undefined, Reason).
 
-store_invalid_share(Subpool, IP, Worker, Workunit, Hash, Reason) ->
-    gen_server:cast(?MODULE, {store_invalid_share, Subpool, IP, Worker, Workunit, Hash, Reason}).
+store_invalid_share(#subpool{name=SubpoolName, round=Round}, IP, Worker, Workunit, Hash, Reason) ->
+    gen_server:cast(?MODULE, {store_invalid_share, SubpoolName, Round, IP, Worker, Workunit, Hash, Reason}).
 
 set_view_update_interval(Seconds) ->
     gen_server:cast(?MODULE, {set_view_update_interval, Seconds}).
@@ -190,7 +190,7 @@ handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=
     ),
     {reply, Workers, State};
 
-handle_call({setup_shares_db, #subpool{name=SubpoolName}}, _From, State=#state{srv_conn=S}) ->
+handle_call({setup_shares_db, SubpoolName}, _From, State=#state{srv_conn=S}) ->
     case couchbeam:db_exists(S, SubpoolName) of
         true ->
             {reply, ok, State};
@@ -264,7 +264,7 @@ handle_cast(start_monitors, State=#state{conf_db=ConfDb}) ->
     end,
     {noreply, State};
 
-handle_cast({set_subpool_round, #subpool{id=SubpoolId}, Round}, State=#state{conf_db=ConfDb}) ->
+handle_cast({set_subpool_round, SubpoolId, Round}, State=#state{conf_db=ConfDb}) ->
     % Retrieve document
     case couchbeam:open_doc(ConfDb, SubpoolId) of
         {ok, Doc} ->
@@ -275,7 +275,7 @@ handle_cast({set_subpool_round, #subpool{id=SubpoolId}, Round}, State=#state{con
     end,
     {noreply, State};
 
-handle_cast({store_share, #subpool{name=SubpoolName, round=Round}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, State=#state{srv_conn=S, view_update_dbs=ViewUpdateDBS}) ->
+handle_cast({store_share, SubpoolName, Round, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData}, Hash}, State=#state{srv_conn=S, view_update_dbs=ViewUpdateDBS}) ->
     Document = if
         Hash =< Target ->
             make_share_document(WorkerId, UserId, IP, candidate, Hash, Target, BlockNum, BData, Round);
@@ -296,7 +296,7 @@ handle_cast({store_share, #subpool{name=SubpoolName, round=Round}, IP, #worker{i
         {noreply, State}
     end;
 
-handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round}, IP, #worker{id=WorkerId, user_id=UserId}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
+handle_cast({store_invalid_share, SubpoolName, Round, IP, #worker{id=WorkerId, user_id=UserId}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
     Document = case Workunit of
         undefined ->
             make_reject_share_document(WorkerId, UserId, IP, Reason, Round);
@@ -408,6 +408,15 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
     MaxCacheSize = proplists:get_value(<<"max_cache_size">>, DocProps, 300),
     MaxWorkAge = proplists:get_value(<<"max_work_age">>, DocProps, 20),
     Round = proplists:get_value(<<"round">>, DocProps),
+    WorkerShareSubpools = case proplists:get_value(<<"worker_share_subpools">>, DocProps, []) of
+        WSSP when is_list(WSSP) ->
+            case lists:all(fun erlang:is_binary/1, WSSP) of
+                true -> WSSP;
+                _ -> undefined
+            end;
+        _ ->
+            undefined
+    end,
     CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
         {CDP} ->
             lists:map(
@@ -425,7 +434,8 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
         is_integer(Port),
         PoolType =/= undefined,
         is_integer(MaxCacheSize),
-        is_integer(MaxWorkAge) ->
+        is_integer(MaxWorkAge),
+        is_list(WorkerShareSubpools) ->
             
             % Create record
             Subpool = #subpool{
@@ -436,6 +446,7 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
                 max_cache_size=if MaxCacheSize > 0 -> MaxCacheSize; true -> 0 end,
                 max_work_age=if MaxWorkAge > 1 -> MaxWorkAge; true -> 1 end,
                 round=if is_integer(Round) -> Round; true -> undefined end,
+                worker_share_subpools=WorkerShareSubpools,
                 coin_daemon_config=CoinDaemonConfig
             },
             {ok, Subpool};

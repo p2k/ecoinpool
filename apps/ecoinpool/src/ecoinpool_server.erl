@@ -100,8 +100,6 @@ init([SubpoolId]) ->
     {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
     % Schedule config reload
     gen_server:cast(self(), {reload_config, Subpool}),
-    % Schedule workers reload (TODO: move this to reload_config if worker configuration changed)
-    gen_server:cast(self(), reload_workers),
     % Create work check timer
     {ok, WorkChecker} = timer:send_interval(500, check_work_age), % Fixed to twice per second
     {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=queue:new(), work_checker=WorkChecker}}.
@@ -117,13 +115,23 @@ handle_call(_Message, _From, State) ->
 
 handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_size=WorkQueueSize, cdaemon=OldCoinDaemon}) ->
     % Extract config
-    #subpool{id=SubpoolId, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, coin_daemon_config=CoinDaemonConfig} = Subpool,
-    #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, coin_daemon_config=OldCoinDaemonConfig} = OldSubpool,
+    #subpool{id=SubpoolId, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig} = Subpool,
+    #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig} = OldSubpool,
     % Derive the CoinDaemon module name from PoolType + "_coindaemon"
     CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
     
     % Setup the shares database
     ok = ecoinpool_db:setup_shares_db(Subpool),
+    
+    % Schedule workers reload if worker_share_subpools changed
+    % Note: this includes an initial load, because even if no share subpools
+    %   are specified, this will at least be an empty list =/= undefined.
+    if
+        WorkerShareSubpools =/= OldWorkerShareSubpools ->
+            gen_server:cast(self(), reload_workers);
+        true ->
+            ok
+    end,
     
     % Check the RPC settings; if anything goes wrong, terminate
     StartRPC = if
@@ -173,22 +181,26 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     
     {noreply, State#state{subpool=Subpool, cdaemon=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget}};
 
-handle_cast(reload_workers, State=#state{subpool=#subpool{id=SubpoolId}, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
+handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
+    #subpool{id=SubpoolId, worker_share_subpools=WorkerShareSubpools} = Subpool,
+    
     ets:delete_all_objects(WorkerLookupTbl),
     ets:delete_all_objects(WorkerTbl),
     
-    % Note: Currently only retrieves the own sub-pool workers
     lists:foreach(
-        fun (Worker=#worker{id=WorkerId, name=WorkerName}) ->
-            ets:insert(WorkerLookupTbl, {WorkerId, WorkerName}),
-            ets:insert(WorkerTbl, Worker)
+        fun (Worker=#worker{id=WorkerId, sub_pool_id=WorkerSubpoolId, name=WorkerName}) ->
+            case ets:insert_new(WorkerTbl, Worker) of
+                true ->
+                    ets:insert(WorkerLookupTbl, {WorkerId, WorkerName});
+                _ ->
+                    io:format("reload_workers: Warning for sub-pool '~s': Worker name '~s' already taken, ignoring worker '~s' of sub-pool '~s'!~n", [SubpoolId, WorkerName, WorkerId, WorkerSubpoolId])
+            end
         end,
-        ecoinpool_db:get_workers_for_subpools([SubpoolId])
+        ecoinpool_db:get_workers_for_subpools([SubpoolId|WorkerShareSubpools])
     ),
     
     % Register for worker change notifications
-    % Note: Currently only sets the own sub-pool ID
-    ecoinpool_worker_monitor:set_worker_notifications(SubpoolId, [SubpoolId]),
+    ecoinpool_worker_monitor:set_worker_notifications(SubpoolId, [SubpoolId|WorkerShareSubpools]),
     
     {noreply, State};
 
