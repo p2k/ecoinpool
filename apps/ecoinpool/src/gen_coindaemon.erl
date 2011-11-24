@@ -82,7 +82,15 @@ behaviour_info(callbacks) ->
         %   Sends in a (single) result to the CoinDaemon.
         %   Should return one of the atoms "accepted", "rejected" or a tuple
         %   {error, Message} on any error.
-        {send_result, 2}
+        {send_result, 2},
+        
+        % get_first_tx_with_branches(PID, Workunit)
+        %   Should return a tuple {ok, first_transaction, merkle_tree_branches}
+        %   where merkle_tree_branches are all required tree hashes to get from
+        %   the first transaction's hash up to the merkle root of the workunit.
+        %   On error, should return a tuple {error, Message}.
+        %   This call is useful for merged mining.
+        {get_first_tx_with_branches, 2}
     ];
 
 behaviour_info(_Other) ->

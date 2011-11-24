@@ -25,7 +25,7 @@
 -include("ecoinpool_workunit.hrl").
 -include("btc_protocol_records.hrl").
 
--export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, post_workunit/1, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2]).
+-export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, post_workunit/1, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2, get_first_tx_with_branches/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -106,6 +106,9 @@ make_reply([_]) ->
 send_result(PID, BData) ->
     gen_server:call(PID, {send_result, BData}).
 
+get_first_tx_with_branches(PID, Workunit) ->
+    gen_server:call(PID, {get_first_tx_with_branches, Workunit}).
+
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
@@ -144,7 +147,7 @@ handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, txtbl=
     Header = btc_protocol:decode_header(BData),
     WorkunitId = workunit_id_from_btc_header(Header),
     case ets:lookup(TxTbl, WorkunitId) of
-        [{_, Transactions}] ->
+        [{_, Transactions, _}] ->
             try
                 {reply, send_block(URL, Auth, Header, Transactions), State}
             catch error:_ ->
@@ -152,6 +155,14 @@ handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, txtbl=
             end;
         [] ->
             {reply, rejected, State}
+    end;
+
+handle_call({get_first_tx_with_branches, #workunit{id=WorkunitId}}, _From, State=#state{txtbl=TxTbl}) ->
+    case ets:lookup(TxTbl, WorkunitId) of
+        [{_, [CoinbaseTx|_], FirstTreeBranches}] ->
+            {reply, {ok, CoinbaseTx, FirstTreeBranches}, State};
+        [] ->
+            {reply, {error, <<"unknown work">>}, State}
     end;
 
 handle_call(_Message, _From, State) ->
@@ -162,6 +173,7 @@ handle_cast(post_workunit, OldState) ->
     State = fetch_work_with_state(OldState),
     % Extract state variables
     #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, txtbl=TxTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx} = State,
+    #memorypool{transactions=Transactions, first_tree_branches=FirstTreeBranches} = Memorypool,
     % Create/update coinbase
     CoinbaseTx = case OldCoinbaseTx of
         undefined ->
@@ -174,7 +186,7 @@ handle_cast(post_workunit, OldState) ->
     % Create the workunit
     Workunit = make_workunit(Header, BlockNum),
     % Store transactions for this workunit, including the coinbase transaction
-    ets:insert(TxTbl, {Workunit#workunit.id, [CoinbaseTx | Memorypool#memorypool.transactions]}),
+    ets:insert(TxTbl, {Workunit#workunit.id, [CoinbaseTx | Transactions], FirstTreeBranches}),
     % Send back
     ecoinpool_server:store_workunit(SubpoolId, Workunit),
     % Update state
