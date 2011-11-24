@@ -22,7 +22,7 @@
 
 -export([init/0, dsha256_hash/1, tree_pair_dsha256_hash/2, sha256_midstate/1, rs_hash/1]).
 
--export([tree_dsha256_hash/1, tree_level_dsha256_hash/1, foldable_tree_dsha256_hash/1, tree_fold_dsha256_hash/1]).
+-export([tree_dsha256_hash/1, tree_level_dsha256_hash/1, first_tree_branches_dsha256_hash/1, fold_tree_branches_dsha256_hash/2]).
 
 -on_load(module_init/0).
 
@@ -58,7 +58,7 @@ rs_hash(_) ->
 tree_dsha256_hash([Hash]) ->
     Hash;
 tree_dsha256_hash(Hashlist) ->
-    r_tree_dsha256(Hashlist, fullsize(Hashlist)).
+    r_tree_dsha256(Hashlist, fullsize(length(Hashlist), 2)).
 
 tree_level_dsha256_hash([Hash]) ->
     [Hash];
@@ -72,18 +72,17 @@ tree_level_dsha256_hash([H1,H2,H3], Acc) ->
 tree_level_dsha256_hash([H1,H2|T], Acc) ->
     tree_level_dsha256_hash(T, Acc ++ [tree_pair_dsha256_hash(H1, H2)]).
 
-foldable_tree_dsha256_hash([Hash]) ->
+first_tree_branches_dsha256_hash([]) ->
+    [];
+first_tree_branches_dsha256_hash([Hash]) ->
     [Hash];
-foldable_tree_dsha256_hash(Hashlist) ->
-    l_tree_dsha256(Hashlist, fullsize(Hashlist)).
+first_tree_branches_dsha256_hash(Hashlist) ->
+    l_tree_dsha256([dummy|Hashlist], fullsize(length(Hashlist)+1, 2)).
 
-tree_fold_dsha256_hash([Hash]) ->
-    Hash;
-tree_fold_dsha256_hash([H|T]) ->
-    lists:foldl(fun (Hash, Acc) -> tree_pair_dsha256_hash(Acc, Hash) end, H, T).
-
-fullsize(List) ->
-    fullsize(length(List), 2).
+fold_tree_branches_dsha256_hash(TopHash, []) ->
+    TopHash;
+fold_tree_branches_dsha256_hash(TopHash, Hashes) ->
+    lists:foldl(fun (Hash, Acc) -> tree_pair_dsha256_hash(Acc, Hash) end, TopHash, Hashes).
 
 fullsize(N, V) ->
     if
@@ -91,8 +90,8 @@ fullsize(N, V) ->
         true -> fullsize(N, V*2)
     end.
 
-l_tree_dsha256(Hashlist, 2) ->
-    Hashlist;
+l_tree_dsha256([_, Hash], 2) ->
+    [Hash];
 l_tree_dsha256(Hashlist, Size) ->
     HalfSize = Size div 2,
     {L, R} = lists:split(HalfSize, Hashlist),

@@ -51,7 +51,7 @@
     timestamp,
     bits,
     transactions,
-    foldable_tree_hashes,
+    first_tree_branches,
     coinbase_value
 }).
 
@@ -250,14 +250,14 @@ get_memory_pool(URL, Auth) ->
     Transactions = lists:map(fun ecoinpool_util:hexbin_to_bin/1, proplists:get_value(<<"transactions">>, Result)),
     
     TransactionHashes = lists:map(fun ecoinpool_hash:dsha256_hash/1, Transactions),
-    [undefined|FT] = ecoinpool_hash:foldable_tree_dsha256_hash([undefined|TransactionHashes]),
+    FT = ecoinpool_hash:first_tree_branches_dsha256_hash(TransactionHashes),
     
     #memorypool{
         hash_prev_block = HashPrevBlock,
         timestamp = Timestamp,
         bits = Bits,
         transactions = Transactions,
-        foldable_tree_hashes = FT,
+        first_tree_branches = FT,
         coinbase_value = CoinbaseValue
     }.
 
@@ -340,10 +340,10 @@ workunit_id_from_btc_header(#btc_header{hash_prev_block=HashPrevBlock, hash_merk
     Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes>>,
     crypto:sha(Data).
 
-make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits, foldable_tree_hashes=FoldableTreeHashes}, CoinbaseTx) ->
+make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits, first_tree_branches=FT}, CoinbaseTx) ->
     EncTx = btc_protocol:encode_tx(CoinbaseTx),
     HashedTx = ecoinpool_hash:dsha256_hash(EncTx),
-    HashMerkleRoot = ecoinpool_util:byte_reverse(ecoinpool_hash:tree_fold_dsha256_hash([HashedTx|FoldableTreeHashes])),
+    HashMerkleRoot = ecoinpool_util:byte_reverse(ecoinpool_hash:fold_tree_branches_dsha256_hash(HashedTx, FT)),
     #btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
 
 make_coinbase_tx(#memorypool{timestamp=Timestamp, coinbase_value=CoinbaseValue}, Tag, PubkeyHash160, ScriptSigTrailer) ->
@@ -369,8 +369,8 @@ make_workunit(Header=#btc_header{bits=Bits}, BlockNum) ->
     #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BHeader}.
 
 memorypools_equivalent(
-            #memorypool{hash_prev_block=A, bits=B, foldable_tree_hashes=C, coinbase_value=D},
-            #memorypool{hash_prev_block=A, bits=B, foldable_tree_hashes=C, coinbase_value=D}
+            #memorypool{hash_prev_block=A, bits=B, first_tree_branches=C, coinbase_value=D},
+            #memorypool{hash_prev_block=A, bits=B, first_tree_branches=C, coinbase_value=D}
         ) ->
     true;
 memorypools_equivalent(_, _) ->
