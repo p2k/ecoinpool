@@ -24,7 +24,7 @@
 
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, post_workunit/1, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2, get_first_tx_with_branches/2]).
+-export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, post_workunit/1, post_workunit/2, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2, get_first_tx_with_branches/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -71,6 +71,9 @@ share_target() ->
 
 post_workunit(PID) ->
     gen_server:cast(PID, post_workunit).
+
+post_workunit(PID, _) ->
+    post_workunit(PID).
 
 encode_workunit(#workunit{target=Target, data=Data}) ->
     HexTarget = ecoinpool_util:bin_to_hexbin(Target),

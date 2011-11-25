@@ -22,7 +22,18 @@
 
 -include("btc_protocol_records.hrl").
 
--export([decode_header/1, encode_header/1, decode_tx/1, encode_tx/1, decode_script/1, encode_script/1, decode_block/1, encode_block/1, encode_auxpow/1, hash160_from_address/1]).
+-export([
+    decode_header/1,
+    encode_header/1,
+    decode_tx/1,
+    encode_tx/1,
+    decode_script/1,
+    encode_script/1,
+    decode_block/1,
+    encode_block/1,
+    encode_auxpow/1,
+    hash160_from_address/1
+]).
 
 -define(OP_TABLE, [
     % control

@@ -23,6 +23,7 @@
 -behaviour(gen_server).
 
 -include("btc_protocol_records.hrl").
+-include("ecoinpool_workunit.hrl").
 
 -export([start_link/2, get_aux_block/1, send_aux_pow/3]).
 
@@ -79,7 +80,7 @@ handle_call(get_aux_block, _From, OldState) ->
     % Send reply
     case AuxblockData of
         {AuxHash, Target, ChainId} ->
-            {reply, {ok, AuxHash, Target, ChainId, BlockNum}, State};
+            {reply, #auxwork{aux_hash=AuxHash, target=Target, chain_id=ChainId, block_num=BlockNum}, State};
         undefined ->
             {reply, {error, <<"aux block could not be created">>}, State}
     end;

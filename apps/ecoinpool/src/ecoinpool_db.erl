@@ -28,10 +28,10 @@
     start_link/1,
     get_configuration/0,
     get_subpool_record/1,
-    get_auxpool_record/1,
     get_worker_record/1,
     get_workers_for_subpools/1,
     set_subpool_round/2,
+    set_auxpool_round/2,
     setup_shares_db/1,
     store_share/5,
     store_invalid_share/4,
@@ -64,9 +64,6 @@ get_configuration() ->
 get_subpool_record(SubpoolId) ->
     gen_server:call(?MODULE, {get_subpool_record, SubpoolId}).
 
-get_auxpool_record(AuxpoolId) ->
-    gen_server:call(?MODULE, {get_auxpool_record, AuxpoolId}).
-
 get_worker_record(WorkerId) ->
     gen_server:call(?MODULE, {get_worker_record, WorkerId}).
 
@@ -76,17 +73,26 @@ get_workers_for_subpools(SubpoolIds) ->
 set_subpool_round(#subpool{id=SubpoolId}, Round) ->
     gen_server:cast(?MODULE, {set_subpool_round, SubpoolId, Round}).
 
+set_auxpool_round(#subpool{id=SubpoolId}, Round) ->
+    gen_server:cast(?MODULE, {set_auxpool_round, SubpoolId, Round}).
+
 setup_shares_db(#subpool{name=SubpoolName}) ->
-    gen_server:call(?MODULE, {setup_shares_db, SubpoolName}).
+    gen_server:call(?MODULE, {setup_shares_db, SubpoolName});
+setup_shares_db(#auxpool{name=AuxpoolName}) ->
+    gen_server:call(?MODULE, {setup_shares_db, AuxpoolName}).
 
 store_share(#subpool{name=SubpoolName, round=Round}, IP, Worker, Workunit, Hash) ->
-    gen_server:cast(?MODULE, {store_share, SubpoolName, Round, IP, Worker, Workunit, Hash}).
+    gen_server:cast(?MODULE, {store_share, SubpoolName, Round, IP, Worker, Workunit, Hash});
+store_share(#auxpool{name=AuxpoolName, round=Round}, IP, Worker, Workunit, Hash) ->
+    gen_server:cast(?MODULE, {store_share, AuxpoolName, Round, IP, Worker, Workunit, Hash}).
 
-store_invalid_share(Subpool, IP, Worker, Reason) ->
-    store_invalid_share(Subpool, IP, Worker, undefined, undefined, Reason).
+store_invalid_share(SubOrAuxpool, IP, Worker, Reason) ->
+    store_invalid_share(SubOrAuxpool, IP, Worker, undefined, undefined, Reason).
 
 store_invalid_share(#subpool{name=SubpoolName, round=Round}, IP, Worker, Workunit, Hash, Reason) ->
-    gen_server:cast(?MODULE, {store_invalid_share, SubpoolName, Round, IP, Worker, Workunit, Hash, Reason}).
+    gen_server:cast(?MODULE, {store_invalid_share, SubpoolName, Round, IP, Worker, Workunit, Hash, Reason});
+store_invalid_share(#auxpool{name=AuxpoolName, round=Round}, IP, Worker, Workunit, Hash, Reason) ->
+    gen_server:cast(?MODULE, {store_invalid_share, AuxpoolName, Round, IP, Worker, Workunit, Hash, Reason}).
 
 set_view_update_interval(Seconds) ->
     gen_server:cast(?MODULE, {set_view_update_interval, Seconds}).
@@ -174,14 +180,6 @@ handle_call({get_subpool_record, SubpoolId}, _From, State=#state{conf_db=ConfDb}
     case couchbeam:open_doc(ConfDb, SubpoolId) of
         {ok, Doc} ->
             {reply, parse_subpool_document(SubpoolId, Doc), State};
-        _ ->
-            {reply, {error, missing}, State}
-    end;
-
-handle_call({get_auxpool_record, AuxpoolId}, _From, State=#state{conf_db=ConfDb}) ->
-    case couchbeam:open_doc(ConfDb, AuxpoolId) of
-        {ok, Doc} ->
-            {reply, parse_auxpool_document(AuxpoolId, Doc), State};
         _ ->
             {reply, {error, missing}, State}
     end;
@@ -288,10 +286,21 @@ handle_cast(start_monitors, State=#state{conf_db=ConfDb}) ->
     {noreply, State};
 
 handle_cast({set_subpool_round, SubpoolId, Round}, State=#state{conf_db=ConfDb}) ->
-    % Retrieve document
     case couchbeam:open_doc(ConfDb, SubpoolId) of
         {ok, Doc} ->
             UpdatedDoc = couchbeam_doc:set_value(<<"round">>, Round, Doc),
+            couchbeam:save_doc(ConfDb, UpdatedDoc);
+        _ -> % Ignore if missing
+            ok
+    end,
+    {noreply, State};
+
+handle_cast({set_auxpool_round, SubpoolId, Round}, State=#state{conf_db=ConfDb}) ->
+    case couchbeam:open_doc(ConfDb, SubpoolId) of
+        {ok, Doc} ->
+            AuxpoolObj = couchbeam_doc:get_value(<<"aux_pool">>, Doc, {[]}),
+            UpdatedAuxpoolObj = couchbeam_doc:set_value(<<"round">>, Round, AuxpoolObj),
+            UpdatedDoc = couchbeam_doc:set_value(<<"aux_pool">>, UpdatedAuxpoolObj, Doc),
             couchbeam:save_doc(ConfDb, UpdatedDoc);
         _ -> % Ignore if missing
             ok
@@ -442,8 +451,15 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
         _ ->
             []
     end,
-    AuxPools = proplists:get_value(<<"aux_pools">>, DocProps, []),
-    AuxPoolsOk = is_binary_list(AuxPools),
+    {AuxPool, AuxPoolOk} = case proplists:get_value(<<"aux_pool">>, DocProps) of
+        undefined ->
+            {undefined, true};
+        AuxPoolDoc ->
+            case parse_auxpool_document(AuxPoolDoc) of
+                {error, _} -> {undefined, false};
+                {ok, AP} -> {AP, true}
+            end
+    end,
     
     if
         DocType =:= <<"sub-pool">>,
@@ -454,7 +470,7 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
         is_integer(MaxCacheSize),
         is_integer(MaxWorkAge),
         WorkerShareSubpoolsOk,
-        AuxPoolsOk ->
+        AuxPoolOk ->
             
             % Create record
             Subpool = #subpool{
@@ -467,7 +483,7 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
                 round=if is_integer(Round) -> Round; true -> undefined end,
                 worker_share_subpools=WorkerShareSubpools,
                 coin_daemon_config=CoinDaemonConfig,
-                aux_pools=AuxPools
+                aux_pool=AuxPool
             },
             {ok, Subpool};
         
@@ -475,8 +491,8 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
             {error, invalid}
     end.
 
-parse_auxpool_document(AuxpoolId, {DocProps}) ->
-    DocType = proplists:get_value(<<"type">>, DocProps),
+parse_auxpool_document({DocProps}) ->
+    % % DocType = proplists:get_value(<<"type">>, DocProps),
     Name = proplists:get_value(<<"name">>, DocProps),
     PoolType = case proplists:get_value(<<"pool_type">>, DocProps) of
         <<"btc">> -> btc;
@@ -485,7 +501,7 @@ parse_auxpool_document(AuxpoolId, {DocProps}) ->
         _ -> undefined
     end,
     Round = proplists:get_value(<<"round">>, DocProps),
-    CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
+    AuxDaemonConfig = case proplists:get_value(<<"aux_daemon">>, DocProps) of
         {CDP} ->
             lists:map(
                 fun ({BinName, Value}) -> {binary_to_atom(BinName, utf8), Value} end,
@@ -496,18 +512,18 @@ parse_auxpool_document(AuxpoolId, {DocProps}) ->
     end,
     
     if
-        DocType =:= <<"aux-pool">>,
+        % % DocType =:= <<"aux-pool">>,
         is_binary(Name),
         Name =/= <<>>,
         PoolType =/= undefined ->
             
             % Create record
             Auxpool = #auxpool{
-                id=AuxpoolId,
+                % % id=AuxpoolId,
                 name=Name,
                 pool_type=PoolType,
                 round=if is_integer(Round) -> Round; true -> undefined end,
-                coin_daemon_config=CoinDaemonConfig
+                aux_daemon_config=AuxDaemonConfig
             },
             {ok, Auxpool};
         

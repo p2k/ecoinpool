@@ -78,6 +78,11 @@ behaviour_info(callbacks) ->
         %   gets called at some point or the workflow might deadlock!
         {post_workunit, 1},
         
+        % post_workunit(PID, {M,F,A})
+        %   Like post_workunit/1 but must call {M,F,A} via apply/3 to retrieve
+        %   an aux work record and integrate it into the block (if supported).
+        {post_workunit, 2},
+        
         % send_result(PID, BData)
         %   Sends in a (single) result to the CoinDaemon.
         %   Should return one of the atoms "accepted", "rejected" or a tuple

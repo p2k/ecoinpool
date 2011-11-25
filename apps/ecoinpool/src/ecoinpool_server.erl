@@ -36,6 +36,7 @@
 -record(state, {
     subpool,
     cdaemon,
+    auxdaemon,
     gw_method,
     sw_method,
     share_target,
@@ -113,10 +114,10 @@ handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
-handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_size=WorkQueueSize, cdaemon=OldCoinDaemon}) ->
+handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_size=WorkQueueSize, cdaemon=OldCoinDaemon, auxdaemon=OldAuxDaemon}) ->
     % Extract config
-    #subpool{id=SubpoolId, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig} = Subpool,
-    #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig} = OldSubpool,
+    #subpool{id=SubpoolId, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig, aux_pool=Auxpool} = Subpool,
+    #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig, aux_pool=OldAuxpool} = OldSubpool,
     % Derive the CoinDaemon module name from PoolType + "_coindaemon"
     CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
     
@@ -167,19 +168,22 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     SendworkMethod = CoinDaemon:sendwork_method(),
     ShareTarget = CoinDaemon:share_target(),
     
+    % Check the AuxDaemon
+    AuxDaemon = check_aux_pool_config(SubpoolId, OldAuxpool, OldAuxDaemon, Auxpool),
+    
     % Check caching
     if
         WorkQueueSize =:= OldMaxCacheSize, % Cache was full
         WorkQueueSize < MaxCacheSize -> % But too few entries on new setting
             io:format("reload_config: cache size changed from ~b to ~b requesting more work.~n", [OldMaxCacheSize, MaxCacheSize]),
-            CoinDaemon:post_workunit();
+            call_post_workunit(CoinDaemon, AuxDaemon);
         StartCoinDaemon -> % If the coin daemon was restarted, always do a post_workunit call
-            CoinDaemon:post_workunit();
+            call_post_workunit(CoinDaemon, AuxDaemon);
         true ->
             ok
     end,
     
-    {noreply, State#state{subpool=Subpool, cdaemon=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget}};
+    {noreply, State#state{subpool=Subpool, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget}};
 
 handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     #subpool{id=SubpoolId, worker_share_subpools=WorkerShareSubpools} = Subpool,
@@ -206,7 +210,7 @@ handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, w
 
 handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
     % Extract state variables
-    #state{subpool=Subpool, cdaemon=CoinDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl} = State,
+    #state{subpool=Subpool, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl} = State,
     #subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
     % Check the method and authentication
     case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
@@ -223,7 +227,7 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
                     if
                         WorkQueueSize =:= MaxCacheSize, % Cache was max size
                         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
-                            CoinDaemon:post_workunit(); % -> Call for work
+                            call_post_workunit(CoinDaemon, AuxDaemon); % -> Call for work
                         true ->
                             ok
                     end,
@@ -258,7 +262,7 @@ handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
 
 handle_cast(new_block_detected, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue} = State,
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue} = State,
     io:format("--- New block! Discarding ~b assigned WUs, ~b cached WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, queue:len(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
     ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
@@ -288,7 +292,7 @@ handle_cast(new_block_detected, State) ->
     if
         WorkQueueSize =:= MaxCacheSize, % Cache was max size
         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
-            CoinDaemon:post_workunit(); % -> Call for work
+            call_post_workunit(CoinDaemon, AuxDaemon); % -> Call for work
         true ->
             ok
     end,
@@ -296,7 +300,7 @@ handle_cast(new_block_detected, State) ->
 
 handle_cast({store_workunit, Workunit}, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl} = State,
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl} = State,
     % Inspect the Cache/Queue
     {NewWorkQueue, NewWorkQueueSize} = if
         WorkQueueSize < 0 -> % We have connections waiting -> send out
@@ -315,7 +319,7 @@ handle_cast({store_workunit, Workunit}, State) ->
     io:format(" Queue size: ~b/~b~n", [NewWorkQueueSize, MaxCacheSize]),
     if
         NewWorkQueueSize < MaxCacheSize -> % Cache is still below max size
-            CoinDaemon:post_workunit(); % -> Call for more work
+            call_post_workunit(CoinDaemon, AuxDaemon); % -> Call for more work
         true ->
             ok
     end,
@@ -359,12 +363,12 @@ handle_info(check_work_age, State=#state{workq_size=WorkQueueSize}) when WorkQue
 
 handle_info(check_work_age, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize} = State,
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge}, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, workq=WorkQueue, workq_size=WorkQueueSize} = State,
     {NewWorkQueue, NewWorkQueueSize} = check_work_age(WorkQueue, WorkQueueSize, erlang:now(), MaxWorkAge),
     if
         WorkQueueSize =:= MaxCacheSize, % Cache was max size
         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
-            CoinDaemon:post_workunit(); % -> Call for work
+            call_post_workunit(CoinDaemon, AuxDaemon); % -> Call for work
         true ->
             ok
     end,
@@ -561,3 +565,48 @@ check_new_round(#subpool{round=undefined}, true) ->
     ok;
 check_new_round(Subpool=#subpool{round=Round}, true) ->
     ecoinpool_db:set_subpool_round(Subpool, Round+1).
+
+check_aux_pool_config(_, undefined, undefined, undefined) ->
+    undefined;
+check_aux_pool_config(SubpoolId, _, _, undefined) ->
+    ecoinpool_server_sup:stop_auxdaemon(SubpoolId),
+    undefined;
+check_aux_pool_config(SubpoolId, OldAuxpool, OldAuxDaemon, Auxpool) ->
+    #auxpool{pool_type=PoolType, aux_daemon_config=AuxDaemonConfig} = Auxpool,
+    OldAuxDaemonConfig = case OldAuxpool of
+        undefined ->
+            undefined;
+        #auxpool{aux_daemon_config=OADC} ->
+            OADC
+    end,
+    % Derive the AuxDaemon module name from PoolType + "_auxdaemon"
+    AuxDaemonModule = list_to_atom(lists:concat([PoolType, "_auxdaemon"])),
+    
+    % Setup the shares database
+    ok = ecoinpool_db:setup_shares_db(Auxpool),
+    
+    OldAuxDaemonModule = case OldAuxDaemon of
+        undefined -> undefined;
+        _ -> OldAuxDaemon:auxdaemon_module()
+    end,
+    StartAuxDaemon = if
+        OldAuxDaemonModule =:= AuxDaemonModule, OldAuxDaemonConfig =:= AuxDaemonConfig -> false;
+        OldAuxDaemonModule =:= undefined -> true;
+        true -> ecoinpool_server_sup:stop_auxdaemon(SubpoolId), true
+    end,
+    AuxDaemon = if
+        StartAuxDaemon ->
+            case ecoinpool_server_sup:start_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig) of
+                {ok, NewAuxDaemon, _} -> NewAuxDaemon;
+                {ok, NewAuxDaemon} -> NewAuxDaemon;
+                _Error -> io:format("ecoinpool_server:check_aux_pool_config: Warning: could not start aux daemon!~n"), undefined
+            end;
+        true -> OldAuxDaemon
+    end,
+    
+    AuxDaemon.
+
+call_post_workunit(CoinDaemon, undefined) ->
+    CoinDaemon:post_workunit();
+call_post_workunit(CoinDaemon, AuxDaemon) ->
+    CoinDaemon:post_workunit(AuxDaemon:coindaemon_mfargs()).

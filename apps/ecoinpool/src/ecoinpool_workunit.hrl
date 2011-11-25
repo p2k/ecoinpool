@@ -18,12 +18,19 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
-% Workunit record
+-record(auxwork, {
+    aux_hash :: binary(),
+    target :: binary(),
+    chain_id :: integer(),
+    block_num :: integer()
+}).
+
 -record(workunit, {
     id :: binary(),
     ts :: tuple(),
     target :: binary(),
     block_num :: integer(),
     data :: binary(),
-    worker_id :: binary()
+    worker_id :: binary(),
+    aux_work :: #auxwork{} | undefined
 }).

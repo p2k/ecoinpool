@@ -30,8 +30,7 @@ behaviour_info(callbacks) ->
         {start_link, 2},
         
         % get_aux_block(PID)
-        %   Should return a tuple {ok, AuxHash, Target, ChainId, BlockNum} which
-        %   holds information about an aux block or {error, Message} on any error.
+        %   Should return an auxwork record or {error, Message} on any error.
         {get_aux_block, 1},
         
         % send_aux_pow(PID, AuxHash, AuxPOW)

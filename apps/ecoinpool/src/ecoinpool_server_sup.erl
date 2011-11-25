@@ -21,7 +21,7 @@
 -module(ecoinpool_server_sup).
 -behaviour(supervisor).
 
--export([start_link/1, start_coindaemon/3, stop_coindaemon/1]).
+-export([start_link/1, start_coindaemon/3, stop_coindaemon/1, start_auxdaemon/3, stop_auxdaemon/1]).
 
 % Callbacks from supervisor
 -export([init/1]).
@@ -44,6 +44,20 @@ start_coindaemon(SubpoolId, CoinDaemonModule, CoinDaemonConfig) ->
 stop_coindaemon(SubpoolId) ->
     case supervisor:terminate_child({global, {?MODULE, SubpoolId}}, coindaemon) of
         ok -> supervisor:delete_child({global, {?MODULE, SubpoolId}}, coindaemon);
+        Error -> Error
+    end.
+
+start_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig) ->
+    case supervisor:start_child({global, {?MODULE, SubpoolId}}, {auxdaemon, {AuxDaemonModule, start_link, [SubpoolId, AuxDaemonConfig]}, permanent, 5000, worker, [AuxDaemonModule]}) of
+        {ok, PID} -> {ok, abstract_auxdaemon:new(AuxDaemonModule, PID)};
+        {ok, PID, _} -> {ok, abstract_auxdaemon:new(AuxDaemonModule, PID)};
+        {error, {already_started, PID}} -> {ok, abstract_auxdaemon:new(AuxDaemonModule, PID)};
+        Other -> Other
+    end.
+
+stop_auxdaemon(SubpoolId) ->
+    case supervisor:terminate_child({global, {?MODULE, SubpoolId}}, auxdaemon) of
+        ok -> supervisor:delete_child({global, {?MODULE, SubpoolId}}, auxdaemon);
         Error -> Error
     end.
 

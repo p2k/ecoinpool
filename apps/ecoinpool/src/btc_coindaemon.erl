@@ -25,7 +25,7 @@
 -include("ecoinpool_workunit.hrl").
 -include("btc_protocol_records.hrl").
 
--export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, post_workunit/1, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2, get_first_tx_with_branches/2]).
+-export([start_link/2, getwork_method/0, sendwork_method/0, share_target/0, post_workunit/1, post_workunit/2, encode_workunit/1, analyze_result/1, make_reply/1, send_result/2, get_first_tx_with_branches/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -43,7 +43,8 @@
     last_fetch,
     
     memorypool,
-    coinbase_tx
+    coinbase_tx,
+    auxwork
 }).
 
 -record(memorypool, {
@@ -72,7 +73,10 @@ share_target() ->
     <<16#00000000ffff0000000000000000000000000000000000000000000000000000:256>>.
 
 post_workunit(PID) ->
-    gen_server:cast(PID, post_workunit).
+    post_workunit(PID, undefined).
+
+post_workunit(PID, AuxWorkMFA) ->
+    gen_server:cast(PID, {post_workunit, AuxWorkMFA}).
 
 encode_workunit(#workunit{data=Data}) ->
     HexData = ecoinpool_util:bin_to_hexbin(ecoinpool_util:endian_swap(Data)),
@@ -168,16 +172,16 @@ handle_call({get_first_tx_with_branches, #workunit{id=WorkunitId}}, _From, State
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
-handle_cast(post_workunit, OldState) ->
+handle_cast({post_workunit, AuxWorkMFA}, OldState) ->
     % Check if new work must be fetched
-    State = fetch_work_with_state(OldState),
+    State = fetch_work_with_state(OldState, AuxWorkMFA),
     % Extract state variables
-    #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, txtbl=TxTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx} = State,
+    #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, txtbl=TxTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx, auxwork=AuxWork} = State,
     #memorypool{transactions=Transactions, first_tree_branches=FirstTreeBranches} = Memorypool,
     % Create/update coinbase
     CoinbaseTx = case OldCoinbaseTx of
         undefined ->
-            make_coinbase_tx(Memorypool, Tag, PubkeyHash160, []);
+            make_coinbase_tx(Memorypool, Tag, PubkeyHash160, make_script_sig_trailer(AuxWork));
         _ ->
             increment_coinbase_extra_nonce(OldCoinbaseTx)
     end,
@@ -196,7 +200,7 @@ handle_cast(_Message, State) ->
     {noreply, State}.
 
 handle_info(poll_daemon, State) ->
-    {noreply, fetch_work_with_state(State)};
+    {noreply, fetch_work_with_state(State, keep_old)};
 
 handle_info(retry_post_workunit, State) ->
     handle_cast(post_workunit, State);
@@ -292,11 +296,28 @@ check_fetch_now(Now, #state{url=URL, auth=Auth, block_num=BlockNum, last_fetch=L
             end
     end.
 
-fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=TxTbl, memorypool=OldMemorypool, coinbase_tx=OldCoinbaseTx}) ->
+fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=TxTbl, memorypool=OldMemorypool, coinbase_tx=OldCoinbaseTx, auxwork=AuxWork}, AuxWorkMFA) ->
     Now = erlang:now(),
+    NewAuxWork = case AuxWorkMFA of
+        undefined -> 
+            undefined;
+        keep_old ->
+            AuxWork;
+        {M,F,A} ->
+            TS = os:timestamp(),
+            W = apply(M, F, A), %TODO: error check
+            io:format("Aux work fetch: ~bus~n", [timer:now_diff(os:timestamp(), TS)]),
+            W
+    end,
     case check_fetch_now(Now, State) of
         false ->
-            State;
+            if
+                AuxWork =:= NewAuxWork ->
+                    State;
+                true ->
+                    io:format("btc_coindaemon: fetch_work_with_state: aux work changed!~n"),
+                    State#state{coinbase_tx=undefined, auxwork=NewAuxWork}
+            end;
         {true, Reason} ->
             case Reason of
                 {new_block, _} ->
@@ -309,7 +330,13 @@ fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=
             Memorypool = get_memory_pool(URL, Auth),
             CoinbaseTx = case memorypools_equivalent(OldMemorypool, Memorypool) of
                 true ->
-                    OldCoinbaseTx;
+                    if
+                        AuxWork =:= NewAuxWork ->
+                            OldCoinbaseTx;
+                        true ->
+                            io:format("btc_coindaemon: fetch_work_with_state: aux work changed!~n"),
+                            undefined
+                    end;
                 _ ->
                     io:format("btc_coindaemon: fetch_work_with_state: memory pool changed!~n"),
                     undefined
@@ -317,11 +344,11 @@ fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=
             
             case Reason of
                 {new_block, BlockNum} ->
-                    State#state{block_num=BlockNum, last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx};
+                    State#state{block_num=BlockNum, last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx, auxwork=NewAuxWork};
                 starting ->
-                    State#state{block_num=get_block_number(URL, Auth), last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx};
+                    State#state{block_num=get_block_number(URL, Auth), last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx, auxwork=NewAuxWork};
                 _ ->
-                    State#state{last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx}
+                    State#state{last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx, auxwork=NewAuxWork}
             end
     end.
 
@@ -383,3 +410,8 @@ memorypools_equivalent(
     true;
 memorypools_equivalent(_, _) ->
     false.
+
+make_script_sig_trailer(undefined) ->
+    [];
+make_script_sig_trailer(#auxwork{aux_hash=AuxHash}) ->
+    [<<250,190,109,109, AuxHash/binary, 1,0,0,0,0,0,0,0>>].

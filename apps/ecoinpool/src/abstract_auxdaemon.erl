@@ -27,13 +27,16 @@
 
 -export([get_aux_block/0, send_aux_pow/2]).
 
--export([auxdaemon_module/0]).
+-export([coindaemon_mfargs/0, auxdaemon_module/0]).
 
 get_aux_block() ->
     M:get_aux_block(PID).
 
 send_aux_pow(AuxHash, AuxPOW) ->
     M:send_aux_pow(PID, AuxHash, AuxPOW).
+
+coindaemon_mfargs() ->
+    {M, get_aux_block, [PID]}.
 
 auxdaemon_module() ->
     M.
