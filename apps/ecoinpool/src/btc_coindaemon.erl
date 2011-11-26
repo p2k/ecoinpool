@@ -207,7 +207,7 @@ handle_cast(post_workunit, OldState) ->
     % Create the header
     Header = make_btc_header(Memorypool, CoinbaseTx),
     % Create the workunit
-    Workunit = make_workunit(Header, BlockNum),
+    Workunit = make_workunit(Header, BlockNum, AuxWork),
     % Store transactions for this workunit, including the coinbase transaction
     ets:insert(TxTbl, {Workunit#workunit.id, [CoinbaseTx | Transactions], FirstTreeBranches}),
     % Send back
@@ -410,11 +410,11 @@ increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
     #btc_tx_in{signature_script = [Tag, Timestamp, ExtraNonce | ScriptSigTrailer]} = TxIn,
     Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script = [Tag, Timestamp, ExtraNonce+1 | ScriptSigTrailer]}]}.
 
-make_workunit(Header=#btc_header{bits=Bits}, BlockNum) ->
+make_workunit(Header=#btc_header{bits=Bits}, BlockNum, AuxWork) ->
     BHeader = btc_protocol:encode_header(Header),
     WUId = workunit_id_from_btc_header(Header),
     Target = ecoinpool_util:bits_to_target(Bits),
-    #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BHeader}.
+    #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BHeader, aux_work=AuxWork}.
 
 memorypools_equivalent(
             #memorypool{hash_prev_block=A, bits=B, first_tree_branches=C, coinbase_value=D},
