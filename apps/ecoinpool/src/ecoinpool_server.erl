@@ -649,7 +649,7 @@ send_candidate({main, _, _, BData}, CoinDaemon, _) ->
 send_candidate({aux, _, _, _}, _, undefined) ->
     {error, <<"Merged mining manager is missing!">>};
 send_candidate({aux, Workunit=#workunit{aux_work=AuxWork}, Hash, BData}, CoinDaemon, MMM) ->
-    case CoinDaemon:get_first_transaction_branches(Workunit) of
+    case CoinDaemon:get_first_tx_with_branches(Workunit) of
         {ok, FirstTransaction, MerkleTreeBranches} ->
             MMM:send_aux_pow(AuxWork, FirstTransaction, Hash, MerkleTreeBranches, BData);
         Error ->

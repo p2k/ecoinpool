@@ -35,7 +35,7 @@
     set_mmm/1,
     post_workunit/0,
     send_result/1,
-    get_first_transaction_branches/1
+    get_first_tx_with_branches/1
 ]).
 
 -export([coindaemon_module/0]).
@@ -67,8 +67,8 @@ post_workunit() ->
 send_result(BData) ->
     M:send_result(PID, BData).
 
-get_first_transaction_branches(Workunit) ->
-    M:get_first_transaction_branches(PID, Workunit).
+get_first_tx_with_branches(Workunit) ->
+    M:get_first_tx_with_branches(PID, Workunit).
 
 coindaemon_module() ->
     M.
