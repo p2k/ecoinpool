@@ -37,7 +37,7 @@
 
 get_new_aux_work(OldAuxWork) ->
     % This code will change if multi aux chains are supported
-    [Module, PID] = AuxDaemons,
+    [{Module, PID}] = AuxDaemons,
     
     AuxWork = Module:get_aux_work(PID),
     
@@ -50,11 +50,11 @@ get_new_aux_work(OldAuxWork) ->
 
 send_aux_pow(#auxwork{aux_hash=AuxHash}, CoinbaseTx, BlockHash, TxTreeBranches, ParentHeader) ->
     % This code will change if multi aux chains are supported
-    [Module, PID] = AuxDaemons,
+    [{Module, PID}] = AuxDaemons,
     
     AuxPOW = #btc_auxpow{
         coinbase_tx = CoinbaseTx,
-        block_hash = BlockHash,
+        block_hash = ecoinpool_util:byte_reverse(BlockHash),
         tx_tree_branches = TxTreeBranches,
         parent_header = ParentHeader
     },

@@ -181,9 +181,11 @@ fetch_block_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth}) ->
     end.
 
 do_send_aux_pow(URL, Auth, AuxHash, AuxPOW) ->
+    io:format("Unencoded AuxPOW: ~p~n", [AuxPOW]),
     BData = btc_protocol:encode_auxpow(AuxPOW),
     HexHash = ecoinpool_util:list_to_hexstr(binary:bin_to_list(AuxHash)),
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
+    io:format("Encoded AuxPOW: ~s~n", [HexData]),
     PostData = "{\"method\":\"getauxblock\",\"params\":[\"" ++ HexHash ++ "\",\"" ++ HexData ++ "\"]}",
     case ecoinpool_util:send_http_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->

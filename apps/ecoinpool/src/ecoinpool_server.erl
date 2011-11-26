@@ -170,6 +170,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     
     % Check the aux pool configuration
     MMM = check_aux_pool_config(SubpoolId, OldAuxpool, OldMMM, Auxpool),
+    CoinDaemon:set_mmm(MMM),
     
     % Check caching
     if

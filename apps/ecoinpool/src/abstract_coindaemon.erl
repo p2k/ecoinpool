@@ -25,7 +25,18 @@
 
 -module(abstract_coindaemon, [M, PID]).
 
--export([getwork_method/0, sendwork_method/0, share_target/0, encode_workunit/1, analyze_result/1, make_reply/1, post_workunit/0, post_workunit/1, send_result/1, get_first_transaction_branches/1]).
+-export([
+    getwork_method/0,
+    sendwork_method/0,
+    share_target/0,
+    encode_workunit/1,
+    analyze_result/1,
+    make_reply/1,
+    set_mmm/1,
+    post_workunit/0,
+    send_result/1,
+    get_first_transaction_branches/1
+]).
 
 -export([coindaemon_module/0]).
 
@@ -47,11 +58,11 @@ analyze_result(Result) ->
 make_reply(Items) ->
     M:make_reply(Items).
 
+set_mmm(MMM) ->
+    M:set_mmm(PID, MMM).
+
 post_workunit() ->
     M:post_workunit(PID).
-
-post_workunit(AuxWorkMFA) ->
-    M:post_workunit(PID, AuxWorkMFA).
 
 send_result(BData) ->
     M:send_result(PID, BData).

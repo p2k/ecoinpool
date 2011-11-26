@@ -179,7 +179,8 @@ handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, txtbl=
 handle_call({get_first_tx_with_branches, #workunit{id=WorkunitId}}, _From, State=#state{txtbl=TxTbl}) ->
     case ets:lookup(TxTbl, WorkunitId) of
         [{_, [CoinbaseTx|_], FirstTreeBranches}] ->
-            {reply, {ok, CoinbaseTx, FirstTreeBranches}, State};
+            FirstTreeBranchesLE = lists:map(fun ecoinpool_util:byte_reverse/1, FirstTreeBranches),
+            {reply, {ok, CoinbaseTx, FirstTreeBranchesLE}, State};
         [] ->
             {reply, {error, <<"unknown work">>}, State}
     end;

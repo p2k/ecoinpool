@@ -95,6 +95,7 @@ behaviour_info(callbacks) ->
         %   Should return a tuple {ok, first_transaction, merkle_tree_branches}
         %   where merkle_tree_branches are all required tree hashes to get from
         %   the first transaction's hash up to the merkle root of the workunit.
+        %   The hashes have to be returned in little-endian form.
         %   On error, should return a tuple {error, Message}.
         %   This call is useful for merged mining.
         {get_first_tx_with_branches, 2}
