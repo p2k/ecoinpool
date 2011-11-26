@@ -21,7 +21,7 @@
 -module(ecoinpool_server_sup).
 -behaviour(supervisor).
 
--export([start_link/1, start_coindaemon/3, stop_coindaemon/1, start_auxdaemon/3, stop_auxdaemon/1]).
+-export([start_link/1, start_coindaemon/3, stop_coindaemon/1, add_auxdaemon/4, remove_auxdaemon/3]).
 
 % Callbacks from supervisor
 -export([init/1]).
@@ -47,18 +47,32 @@ stop_coindaemon(SubpoolId) ->
         Error -> Error
     end.
 
-start_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig) ->
-    case supervisor:start_child({global, {?MODULE, SubpoolId}}, {auxdaemon, {AuxDaemonModule, start_link, [SubpoolId, AuxDaemonConfig]}, permanent, 5000, worker, [AuxDaemonModule]}) of
-        {ok, PID} -> {ok, abstract_auxdaemon:new(AuxDaemonModule, PID)};
-        {ok, PID, _} -> {ok, abstract_auxdaemon:new(AuxDaemonModule, PID)};
-        {error, {already_started, PID}} -> {ok, abstract_auxdaemon:new(AuxDaemonModule, PID)};
+add_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig, MMM) ->
+    Result = case supervisor:start_child({global, {?MODULE, SubpoolId}}, {{auxdaemon, AuxDaemonModule}, {AuxDaemonModule, start_link, [SubpoolId, AuxDaemonConfig]}, permanent, 5000, worker, [AuxDaemonModule]}) of
+        {ok, PID} -> {ok, PID};
+        {ok, PID, _} -> {ok, PID};
+        {error, {already_started, PID}} -> {ok, PID};
         Other -> Other
+    end,
+    case Result of
+        {ok, ThePID} ->
+            case MMM of
+                undefined ->
+                    {ok, ecoinpool_mmm:new([{AuxDaemonModule, ThePID}])};
+                _ ->
+                    {ok, MMM:add_aux_daemon(AuxDaemonModule, ThePID)}
+            end;
+        _ ->
+            Result
     end.
 
-stop_auxdaemon(SubpoolId) ->
-    case supervisor:terminate_child({global, {?MODULE, SubpoolId}}, auxdaemon) of
-        ok -> supervisor:delete_child({global, {?MODULE, SubpoolId}}, auxdaemon);
-        Error -> Error
+remove_auxdaemon(SubpoolId, AuxDaemonModule, MMM) ->
+    case supervisor:terminate_child({global, {?MODULE, SubpoolId}}, {auxdaemon, AuxDaemonModule}) of
+        ok ->
+            supervisor:delete_child({global, {?MODULE, SubpoolId}}, {auxdaemon, AuxDaemonModule}),
+            {ok, MMM:remove_aux_daemon(AuxDaemonModule)};
+        Error ->
+            Error
     end.
 
 %% ===================================================================

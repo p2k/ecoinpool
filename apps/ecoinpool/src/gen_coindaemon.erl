@@ -71,17 +71,19 @@ behaviour_info(callbacks) ->
         %   multi-results, Items always contains a single item.
         {make_reply, 1},
         
+        % set_mmm(PID, MMM)
+        %   Sets up a merged mining manager for this CoinDaemon. It should be
+        %   used to retrieve auxwork records which must be integrated into the
+        %   blocks and workunits (if supported). If MMM is undefined, this
+        %   should unset the merged mining manager.
+        {set_mmm, 2},
+        
         % post_workunit(PID)
         %   Post an unassigned workunit asynchronously. Also check for a new block.
         %   Should use ecoinpool_server:store_workunit/2 and new_block_detected/1
         %   to return a work unit. It must be guaranteed that store_workunit/2
         %   gets called at some point or the workflow might deadlock!
         {post_workunit, 1},
-        
-        % post_workunit(PID, {M,F,A})
-        %   Like post_workunit/1 but must call {M,F,A} via apply/3 to retrieve
-        %   an aux work record and integrate it into the block (if supported).
-        {post_workunit, 2},
         
         % send_result(PID, BData)
         %   Sends in a (single) result to the CoinDaemon.

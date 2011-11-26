@@ -57,12 +57,12 @@
 -type btc_block() :: #btc_block{}.
 
 -record(btc_auxpow, {
-    coinbase_tx :: btc_tx(),
+    coinbase_tx :: btc_tx() | binary(),
     block_hash :: binary(),
     tx_tree_branches :: [binary()],
     tx_index = 0 :: integer(),
     aux_tree_branches = [] :: [binary()],
     aux_index = 0 :: integer(),
-    parent_header :: btc_header()
+    parent_header :: btc_header() | binary()
 }).
 -type btc_auxpow() :: #btc_auxpow{}.

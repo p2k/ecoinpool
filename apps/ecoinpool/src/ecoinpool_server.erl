@@ -36,7 +36,7 @@
 -record(state, {
     subpool,
     cdaemon,
-    auxdaemon,
+    mmm,
     gw_method,
     sw_method,
     share_target,
@@ -114,7 +114,7 @@ handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
-handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_size=WorkQueueSize, cdaemon=OldCoinDaemon, auxdaemon=OldAuxDaemon}) ->
+handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_size=WorkQueueSize, cdaemon=OldCoinDaemon, mmm=OldMMM}) ->
     % Extract config
     #subpool{id=SubpoolId, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig, aux_pool=Auxpool} = Subpool,
     #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig, aux_pool=OldAuxpool} = OldSubpool,
@@ -168,22 +168,22 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     SendworkMethod = CoinDaemon:sendwork_method(),
     ShareTarget = CoinDaemon:share_target(),
     
-    % Check the AuxDaemon
-    AuxDaemon = check_aux_pool_config(SubpoolId, OldAuxpool, OldAuxDaemon, Auxpool),
+    % Check the aux pool configuration
+    MMM = check_aux_pool_config(SubpoolId, OldAuxpool, OldMMM, Auxpool),
     
     % Check caching
     if
         WorkQueueSize =:= OldMaxCacheSize, % Cache was full
         WorkQueueSize < MaxCacheSize -> % But too few entries on new setting
             io:format("reload_config: cache size changed from ~b to ~b requesting more work.~n", [OldMaxCacheSize, MaxCacheSize]),
-            call_post_workunit(CoinDaemon, AuxDaemon);
+            CoinDaemon:post_workunit();
         StartCoinDaemon -> % If the coin daemon was restarted, always do a post_workunit call
-            call_post_workunit(CoinDaemon, AuxDaemon);
+            CoinDaemon:post_workunit();
         true ->
             ok
     end,
     
-    {noreply, State#state{subpool=Subpool, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget}};
+    {noreply, State#state{subpool=Subpool, cdaemon=CoinDaemon, mmm=MMM, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget}};
 
 handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     #subpool{id=SubpoolId, worker_share_subpools=WorkerShareSubpools} = Subpool,
@@ -210,7 +210,7 @@ handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, w
 
 handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
     % Extract state variables
-    #state{subpool=Subpool, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl} = State,
+    #state{subpool=Subpool, cdaemon=CoinDaemon, mmm=MMM, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl} = State,
     #subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
     % Check the method and authentication
     case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
@@ -227,13 +227,13 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
                     if
                         WorkQueueSize =:= MaxCacheSize, % Cache was max size
                         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
-                            call_post_workunit(CoinDaemon, AuxDaemon); % -> Call for work
+                            CoinDaemon:post_workunit(); % -> Call for work
                         true ->
                             ok
                     end,
                     {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
                 sendwork ->
-                    check_new_round(Subpool, check_work(Peer, Params, Subpool, Worker, WorkTbl, HashTbl, CoinDaemon, ShareTarget, Responder)),
+                    check_new_round(Subpool, check_work(Peer, Params, Subpool, Worker, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget, Responder)),
                     {noreply, State}
             end;
         {error, Type} ->
@@ -262,7 +262,7 @@ handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
 
 handle_cast(new_block_detected, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue} = State,
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue} = State,
     io:format("--- New block! Discarding ~b assigned WUs, ~b cached WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, queue:len(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
     ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
@@ -292,7 +292,7 @@ handle_cast(new_block_detected, State) ->
     if
         WorkQueueSize =:= MaxCacheSize, % Cache was max size
         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
-            call_post_workunit(CoinDaemon, AuxDaemon); % -> Call for work
+            CoinDaemon:post_workunit(); % -> Call for work
         true ->
             ok
     end,
@@ -300,7 +300,7 @@ handle_cast(new_block_detected, State) ->
 
 handle_cast({store_workunit, Workunit}, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl} = State,
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl} = State,
     % Inspect the Cache/Queue
     {NewWorkQueue, NewWorkQueueSize} = if
         WorkQueueSize < 0 -> % We have connections waiting -> send out
@@ -319,7 +319,7 @@ handle_cast({store_workunit, Workunit}, State) ->
     io:format(" Queue size: ~b/~b~n", [NewWorkQueueSize, MaxCacheSize]),
     if
         NewWorkQueueSize < MaxCacheSize -> % Cache is still below max size
-            call_post_workunit(CoinDaemon, AuxDaemon); % -> Call for more work
+            CoinDaemon:post_workunit(); % -> Call for more work
         true ->
             ok
     end,
@@ -363,12 +363,12 @@ handle_info(check_work_age, State=#state{workq_size=WorkQueueSize}) when WorkQue
 
 handle_info(check_work_age, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge}, cdaemon=CoinDaemon, auxdaemon=AuxDaemon, workq=WorkQueue, workq_size=WorkQueueSize} = State,
+    #state{subpool=#subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize} = State,
     {NewWorkQueue, NewWorkQueueSize} = check_work_age(WorkQueue, WorkQueueSize, erlang:now(), MaxWorkAge),
     if
         WorkQueueSize =:= MaxCacheSize, % Cache was max size
         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
-            call_post_workunit(CoinDaemon, AuxDaemon); % -> Call for work
+            CoinDaemon:post_workunit(); % -> Call for work
         true ->
             ok
     end,
@@ -452,30 +452,27 @@ assign_work(Now, MaxWorkAge, Worker=#worker{id=WorkerId}, WorkQueue, WorkQueueSi
             {miss, queue:in({Worker, Responder}, WorkQueue), WorkQueueSize-1}
     end.
 
-check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, CoinDaemon, ShareTarget, Responder) ->
+check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget, Responder) ->
     % Analyze results
     case CoinDaemon:analyze_result(Params) of
         error ->
             io:format("Wrong data from ~s/~s!~n~p~n", [User, Peer, Params]),
             ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
             Responder({error, invalid_request}),
-            false;
+            [];
         Results ->
             % Lookup workunits, check hash target and check duplicates
             ResultsWithWU = lists:map(
                 fun ({WorkId, Hash, BData}) ->
                     case ets:lookup(WorkTbl, WorkId) of
-                        [Workunit=#workunit{target=Target}] -> % Found
+                        [Workunit] -> % Found
                             if
                                 Hash > ShareTarget ->
                                     {target, Workunit, Hash};
                                 true ->
                                     case ets:insert_new(HashTbl, {Hash}) of % Also stores the new hash
-                                        true when Hash =< Target -> % We got a winner (?)
-                                            io:format("+++ Candidate share from ~s/~s! +++~n", [User, Peer]),
-                                            {candidate, Workunit, Hash, BData};
                                         true ->
-                                            {valid, Workunit, Hash, BData};
+                                            check_for_candidate(Workunit, Hash, BData, User, Peer);
                                         _ ->
                                             {duplicate, Workunit, Hash}
                                     end
@@ -487,11 +484,21 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
                 Results
             ),
             % Process results in new process
-            spawn(fun () -> process_results(Peer, ResultsWithWU, Subpool, Worker, CoinDaemon, Responder) end),
-            lists:any(fun ({candidate, _, _, _}) -> true; (_) -> false end, ResultsWithWU)
+            spawn(fun () -> process_results(Peer, ResultsWithWU, Subpool, Worker, CoinDaemon, MMM, Responder) end),
+            % Combine candidate announcements (used by check_new_round)
+            lists:foldl(
+                fun
+                    ({ok, _, _, _, Candidates}, Acc) ->
+                        lists:umerge(Candidates, Acc);
+                    (_, Acc) ->
+                        Acc
+                end,
+                [],
+                ResultsWithWU
+            )
     end.
 
-process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, Responder) ->
+process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, MMM, Responder) ->
     % Process all results
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
@@ -504,12 +511,14 @@ process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, R
             ({target, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
                 {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
-            ({Quality, Workunit, Hash, BData}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
-                ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash),
-                case Quality of
-                    valid -> {[Hash | AccReplyItems], AccRejectReason, AccCandidates};
-                    candidate -> {[Hash | AccReplyItems], AccRejectReason, [BData | AccCandidates]}
-                end
+            ({ok, Workunit, Hash, BData, TheCandidates}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
+                ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash, TheCandidates),
+                NewCandidates = lists:foldl(
+                    fun (Chain, Acc) -> [{Chain, Workunit, Hash, BData} | Acc] end,
+                    AccCandidates,
+                    TheCandidates
+                ),
+                {[Hash | AccReplyItems], AccRejectReason, NewCandidates}
         end,
         {[], undefined, []},
         Results 
@@ -524,14 +533,14 @@ process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, R
     end,
     % Send candidates
     lists:foreach(
-        fun (BData) ->
-            case CoinDaemon:send_result(BData) of
+        fun (C={Chain, _, _, _}) ->
+            case send_candidate(C, CoinDaemon, MMM) of
                 accepted ->
-                    io:format("Data sent upstream from ~s/~s got accepted!~n", [User, Peer]);
+                    io:format("Data sent upstream from ~s/~s to ~p chain got accepted!~n", [User, Peer, Chain]);
                 rejected ->
-                    io:format("Data sent upstream from ~s/~s got rejected!~n", [User, Peer]);
+                    io:format("Data sent upstream from ~s/~s to ~p chain got rejected!~n", [User, Peer, Chain]);
                 {error, Message} ->
-                    io:format("Upstream error from ~s/~s! Message: ~p~n", [User, Peer, Message])
+                    io:format("Upstream error from ~s/~s to ~p chain! Message: ~p~n", [User, Peer, Chain, Message])
             end
         end,
         Candidates
@@ -559,19 +568,31 @@ make_responder_options(#worker{lp=LP}) ->
 make_responder_options(Worker, #workunit{block_num=BlockNum}) ->
     [{block_num, BlockNum} | make_responder_options(Worker)].
 
-check_new_round(_, false) ->
+check_new_round(_, []) ->
     ok;
-check_new_round(#subpool{round=undefined}, true) ->
-    ok;
-check_new_round(Subpool=#subpool{round=Round}, true) ->
-    ecoinpool_db:set_subpool_round(Subpool, Round+1).
+check_new_round(Subpool=#subpool{round=Round}, [main|T]) ->
+    case Round of
+        undefined -> ok;
+        _ -> ecoinpool_db:set_subpool_round(Subpool, Round+1)
+    end,
+    check_new_round(Subpool, T);
+check_new_round(Subpool=#subpool{aux_pool=#auxpool{round=Round}}, [aux|T]) ->
+    case Round of
+        undefined -> ok;
+        _ -> ecoinpool_db:set_auxpool_round(Subpool, Round+1)
+    end,
+    check_new_round(Subpool, T);
+check_new_round(Subpool, [_|T]) ->
+    check_new_round(Subpool, T).
 
 check_aux_pool_config(_, undefined, undefined, undefined) ->
     undefined;
-check_aux_pool_config(SubpoolId, _, _, undefined) ->
-    ecoinpool_server_sup:stop_auxdaemon(SubpoolId),
-    undefined;
-check_aux_pool_config(SubpoolId, OldAuxpool, OldAuxDaemon, Auxpool) ->
+check_aux_pool_config(SubpoolId, _, OldMMM, undefined) ->
+    % This code will change if multi aux chains are supported
+    [AuxDaemonModule] = OldMMM:aux_daemon_modules(),
+    ecoinpool_server_sup:remove_auxdaemon(SubpoolId, AuxDaemonModule, OldMMM);
+check_aux_pool_config(SubpoolId, OldAuxpool, OldMMM, Auxpool) ->
+    % This code will change if multi aux chains are supported
     #auxpool{pool_type=PoolType, aux_daemon_config=AuxDaemonConfig} = Auxpool,
     OldAuxDaemonConfig = case OldAuxpool of
         undefined ->
@@ -585,28 +606,51 @@ check_aux_pool_config(SubpoolId, OldAuxpool, OldAuxDaemon, Auxpool) ->
     % Setup the shares database
     ok = ecoinpool_db:setup_shares_db(Auxpool),
     
-    OldAuxDaemonModule = case OldAuxDaemon of
+    OldAuxDaemonModule = case OldMMM of
         undefined -> undefined;
-        _ -> OldAuxDaemon:auxdaemon_module()
+        _ -> [M] = OldMMM:aux_daemon_modules(), M
     end,
     StartAuxDaemon = if
         OldAuxDaemonModule =:= AuxDaemonModule, OldAuxDaemonConfig =:= AuxDaemonConfig -> false;
         OldAuxDaemonModule =:= undefined -> true;
-        true -> ecoinpool_server_sup:stop_auxdaemon(SubpoolId), true
+        true -> ecoinpool_server_sup:remove_auxdaemon(SubpoolId, OldAuxDaemonModule, OldMMM), true
     end,
-    AuxDaemon = if
+    if
         StartAuxDaemon ->
-            case ecoinpool_server_sup:start_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig) of
-                {ok, NewAuxDaemon, _} -> NewAuxDaemon;
-                {ok, NewAuxDaemon} -> NewAuxDaemon;
+            case ecoinpool_server_sup:add_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig, undefined) of
+                {ok, NewMMM} -> NewMMM;
                 _Error -> io:format("ecoinpool_server:check_aux_pool_config: Warning: could not start aux daemon!~n"), undefined
             end;
-        true -> OldAuxDaemon
-    end,
-    
-    AuxDaemon.
+        true ->
+            OldMMM
+    end.
 
-call_post_workunit(CoinDaemon, undefined) ->
-    CoinDaemon:post_workunit();
-call_post_workunit(CoinDaemon, AuxDaemon) ->
-    CoinDaemon:post_workunit(AuxDaemon:coindaemon_mfargs()).
+check_for_candidate(Workunit=#workunit{aux_work=AuxWork}, Hash, BData, User, Peer) ->
+    MainCandidate = case hash_is_below_target(Hash, Workunit) of
+        true -> io:format("+++ Main candidate share from ~s/~s! +++~n", [User, Peer]), [main];
+        _ -> []
+    end,
+    AuxCandidate = case hash_is_below_target(Hash, AuxWork) of
+        true -> io:format("+++ Aux candidate share from ~s/~s! +++~n", [User, Peer]), [aux];
+        _ -> []
+    end,
+    {ok, Workunit, Hash, BData, lists:merge(MainCandidate, AuxCandidate)}.
+
+hash_is_below_target(_, undefined) ->
+    false;
+hash_is_below_target(Hash, #workunit{target=Target}) ->
+    Hash =< Target;
+hash_is_below_target(Hash, #auxwork{target=Target}) ->
+    Hash =< Target.
+
+send_candidate({main, _, _, BData}, CoinDaemon, _) ->
+    CoinDaemon:send_result(BData);
+send_candidate({aux, _, _, _}, _, undefined) ->
+    {error, <<"Merged mining manager is missing!">>};
+send_candidate({aux, Workunit=#workunit{aux_work=AuxWork}, Hash, BData}, CoinDaemon, MMM) ->
+    case CoinDaemon:get_first_transaction_branches(Workunit) of
+        {ok, FirstTransaction, MerkleTreeBranches} ->
+            MMM:send_aux_pow(AuxWork, FirstTransaction, Hash, MerkleTreeBranches, BData);
+        Error ->
+            Error
+    end.

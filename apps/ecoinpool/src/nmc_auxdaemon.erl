@@ -25,7 +25,7 @@
 -include("btc_protocol_records.hrl").
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/2, get_aux_block/1, send_aux_pow/3]).
+-export([start_link/2, get_aux_work/1, send_aux_pow/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -49,8 +49,8 @@
 start_link(SubpoolId, Config) ->
     gen_server:start_link(?MODULE, [SubpoolId, Config], []).
 
-get_aux_block(PID) ->
-    gen_server:call(PID, get_aux_block).
+get_aux_work(PID) ->
+    gen_server:call(PID, get_aux_work).
 
 send_aux_pow(PID, AuxHash, AuxPOW) ->
     gen_server:call(PID, {send_aux_pow, AuxHash, AuxPOW}).
@@ -72,7 +72,7 @@ init([SubpoolId, Config]) ->
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 
-handle_call(get_aux_block, _From, OldState) ->
+handle_call(get_aux_work, _From, OldState) ->
     % Check if a new block must be fetched
     State = fetch_block_with_state(OldState),
     % Extract state variables

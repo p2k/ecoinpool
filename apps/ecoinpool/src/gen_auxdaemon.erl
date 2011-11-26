@@ -29,9 +29,9 @@ behaviour_info(callbacks) ->
         %   Should return {ok, PID} for later reference or an error.
         {start_link, 2},
         
-        % get_aux_block(PID)
+        % get_aux_work(PID)
         %   Should return an auxwork record or {error, Message} on any error.
-        {get_aux_block, 1},
+        {get_aux_work, 1},
         
         % send_aux_pow(PID, AuxHash, AuxPOW)
         %   Sends in a (single) aux proof-of-work to the Aux CoinDaemon.
