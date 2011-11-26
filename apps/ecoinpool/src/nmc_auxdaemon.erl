@@ -127,7 +127,7 @@ do_get_aux_block(URL, Auth) ->
     {Result} = proplists:get_value(<<"result">>, Body),
     
     Target = ecoinpool_util:byte_reverse(ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"target">>, Result))),
-    AuxHash = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"hash">>, Result)),
+    AuxHash = ecoinpool_util:byte_reverse(ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"hash">>, Result))),
     ChainId = proplists:get_value(<<"chainid">>, Result),
     
     {AuxHash, Target, ChainId}.
@@ -183,7 +183,7 @@ fetch_block_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth}) ->
 do_send_aux_pow(URL, Auth, AuxHash, AuxPOW) ->
     io:format("Unencoded AuxPOW: ~p~n", [AuxPOW]),
     BData = btc_protocol:encode_auxpow(AuxPOW),
-    HexHash = ecoinpool_util:list_to_hexstr(binary:bin_to_list(AuxHash)),
+    HexHash = ecoinpool_util:list_to_hexstr(binary:bin_to_list(ecoinpool_util:byte_reverse(AuxHash))),
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     io:format("Encoded AuxPOW: ~s~n", [HexData]),
     PostData = "{\"method\":\"getauxblock\",\"params\":[\"" ++ HexHash ++ "\",\"" ++ HexData ++ "\"]}",

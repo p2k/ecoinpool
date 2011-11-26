@@ -256,7 +256,14 @@ parse_method(<<"sc_testwork">>) -> sc_testwork;
 parse_method(Other) when is_binary(Other) -> unknown;
 parse_method(_) -> invalid.
 
-handle_post(SubpoolPID, Req, Auth) ->
+parse_path("/") ->
+    {ok, false};
+parse_path("/LP") ->
+    {ok, true};
+parse_path(_) ->
+    undefined.
+
+handle_post(SubpoolPID, Req, Auth, LP) ->
     case Req:get_header_value("Content-Type") of
         Type when Type =:= "application/json"; Type =:= undefined ->
             try
@@ -271,7 +278,7 @@ handle_post(SubpoolPID, Req, Auth) ->
                             Method ->
                                 case proplists:get_value(<<"params">>, Properties, []) of
                                     Params when is_list(Params) ->
-                                        ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), Method, Params, Auth, make_responder(self(), Req, ReqId));
+                                        ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), Method, Params, Auth, LP, make_responder(self(), Req, ReqId));
                                     _ ->
                                         respond_error(self(), Req, ReqId, invalid_request)
                                 end
@@ -306,16 +313,19 @@ handle_request(SubpoolPID, Req) ->
         true ->
             case Req:get(method) of
                 'GET' ->
-                    case Req:get(path) of
-                        "/" -> % Normal request - use default handler
-                            ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), default, [], Auth, make_responder(self(), Req));
-                        "/LP" -> % Longpolling
-                            ecoinpool_server:rpc_lp_request(SubpoolPID, Req:get(peer), Auth, make_responder(self(), Req));
+                    case parse_path(Req:get(path)) of
+                        {ok, LP} ->
+                            ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), default, [], Auth, LP, make_responder(self(), Req));
                         _ ->
                             respond_error(self(), Req, method_not_found)
                     end;
                 'POST' ->
-                    handle_post(SubpoolPID, Req, Auth);
+                    case parse_path(Req:get(path)) of
+                        {ok, LP} ->
+                            handle_post(SubpoolPID, Req, Auth, LP);
+                        _ ->
+                            respond_error(self(), Req, method_not_found)
+                    end;
                 _ ->
                     Req:respond({501, [], []}), % Unknown method
                     self() ! ok

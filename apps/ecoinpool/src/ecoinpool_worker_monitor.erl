@@ -68,7 +68,7 @@ init([]) ->
 
 handle_change({ChangeProps}, State) ->
     WorkerId = proplists:get_value(<<"id">>, ChangeProps),
-    case proplists:get_value(<<"_deleted">>, ChangeProps) of
+    case proplists:get_value(<<"deleted">>, ChangeProps) of
         true ->
             gen_changes:cast(self(), {broadcast_remove_worker, WorkerId});
         _ ->

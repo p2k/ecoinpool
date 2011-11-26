@@ -427,4 +427,5 @@ memorypools_equivalent(_, _) ->
 make_script_sig_trailer(undefined) ->
     [];
 make_script_sig_trailer(#auxwork{aux_hash=AuxHash}) ->
-    [<<250,190,109,109, AuxHash/binary, 1,0,0,0,0,0,0,0>>].
+    AuxHashLE = ecoinpool_util:byte_reverse(AuxHash),
+    [<<250,190,109,109, AuxHashLE/binary, 1,0,0,0,0,0,0,0>>].

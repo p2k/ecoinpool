@@ -26,8 +26,8 @@
 
 -export([start_link/1, reload_config/1, update_worker/2, remove_worker/2, get_worker_notifications/1, store_workunit/2, new_block_detected/1]).
 
-% Callbacks from ecoinpool_rpc
--export([rpc_request/6, rpc_lp_request/4]).
+% Callback from ecoinpool_rpc
+-export([rpc_request/7]).
 
 % Callbacks from gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -60,11 +60,8 @@ start_link(SubpoolId) ->
 reload_config(Subpool=#subpool{id=Id}) ->
     gen_server:cast({global, {subpool, Id}}, {reload_config, Subpool}).
 
-rpc_request(PID, Peer, Method, Params, Auth, Responder) ->
-    gen_server:cast(PID, {rpc_request, Peer, Method, Params, Auth, Responder}).
-
-rpc_lp_request(PID, Peer, Auth, Responder) ->
-    gen_server:cast(PID, {rpc_lp_request, Peer, Auth, Responder}).
+rpc_request(PID, Peer, Method, Params, Auth, LP, Responder) ->
+    gen_server:cast(PID, {rpc_request, Peer, Method, Params, Auth, LP, Responder}).
 
 update_worker(SubpoolId, Worker) ->
     gen_server:cast({global, {subpool, SubpoolId}}, {update_worker, Worker}).
@@ -209,14 +206,36 @@ handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, w
     
     {noreply, State};
 
-handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
+handle_cast({rpc_request, Peer, Method, Params, Auth, LP, Responder}, State) ->
     % Extract state variables
-    #state{subpool=Subpool, cdaemon=CoinDaemon, mmm=MMM, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl} = State,
+    #state{
+        subpool=Subpool,
+        cdaemon=CoinDaemon,
+        mmm=MMM,
+        gw_method=GetworkMethod,
+        sw_method=SendworkMethod,
+        share_target=ShareTarget,
+        workq=WorkQueue,
+        workq_size=WorkQueueSize,
+        worktbl=WorkTbl,
+        hashtbl=HashTbl,
+        workertbl=WorkerTbl,
+        lp_queue=LPQueue
+    } = State,
     #subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
     % Check the method and authentication
     case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
         {ok, Worker=#worker{name=User}, Action} ->
             case Action of % Now match for the action
+                getwork when LP ->
+                    io:format("LP requested by ~s/~s!~n", [User, Peer]),
+                    case Responder(start) of
+                        {ok, LateResponder} ->
+                            {noreply, State#state{lp_queue=queue:in({Worker, LateResponder}, LPQueue)}};
+                        _ ->
+                            io:format("But the connection was already dropped!~n"),
+                            {noreply, State}
+                    end;
                 getwork ->
                     {Result, NewWorkQueue, NewWorkQueueSize} = assign_work(erlang:now(), MaxWorkAge, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder),
                     case Result of
@@ -233,27 +252,11 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, Responder}, State) ->
                             ok
                     end,
                     {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
-                sendwork ->
+                sendwork when not LP ->
                     check_new_round(Subpool, check_work(Peer, Params, Subpool, Worker, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget, Responder)),
-                    {noreply, State}
-            end;
-        {error, Type} ->
-            Responder({error, Type}),
-            {noreply, State}
-    end;
-
-handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
-    % Extract state variables
-    #state{gw_method=GetworkMethod, sw_method=SendworkMethod, workertbl=WorkerTbl, lp_queue=LPQueue} = State,
-    % Check the method and authentication
-    case parse_method_and_auth(Peer, GetworkMethod, [], Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
-        {ok, Worker=#worker{name=User}, _} ->
-            io:format("LP requested by ~s/~s!~n", [User, Peer]),
-            case Responder(start) of
-                {ok, LateResponder} ->
-                    {noreply, State#state{lp_queue=queue:in({Worker, LateResponder}, LPQueue)}};
+                    {noreply, State};
                 _ ->
-                    io:format("But the connection was already dropped!~n"),
+                    Responder({error, method_not_found}),
                     {noreply, State}
             end;
         {error, Type} ->
@@ -263,7 +266,15 @@ handle_cast({rpc_lp_request, Peer, Auth, Responder}, State) ->
 
 handle_cast(new_block_detected, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue} = State,
+    #state{
+        subpool=#subpool{max_cache_size=MaxCacheSize},
+        cdaemon=CoinDaemon,
+        workq=WorkQueue,
+        workq_size=WorkQueueSize,
+        worktbl=WorkTbl,
+        hashtbl=HashTbl,
+        lp_queue=LPQueue
+    } = State,
     io:format("--- New block! Discarding ~b assigned WUs, ~b cached WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, queue:len(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
     ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
@@ -301,7 +312,13 @@ handle_cast(new_block_detected, State) ->
 
 handle_cast({store_workunit, Workunit}, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl} = State,
+    #state{
+        subpool=#subpool{max_cache_size=MaxCacheSize},
+        cdaemon=CoinDaemon,
+        workq=WorkQueue,
+        workq_size=WorkQueueSize,
+        worktbl=WorkTbl
+    } = State,
     % Inspect the Cache/Queue
     {NewWorkQueue, NewWorkQueueSize} = if
         WorkQueueSize < 0 -> % We have connections waiting -> send out
@@ -364,7 +381,12 @@ handle_info(check_work_age, State=#state{workq_size=WorkQueueSize}) when WorkQue
 
 handle_info(check_work_age, State) ->
     % Extract state variables
-    #state{subpool=#subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge}, cdaemon=CoinDaemon, workq=WorkQueue, workq_size=WorkQueueSize} = State,
+    #state{
+        subpool=#subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge},
+        cdaemon=CoinDaemon,
+        workq=WorkQueue,
+        workq_size=WorkQueueSize
+    } = State,
     {NewWorkQueue, NewWorkQueueSize} = check_work_age(WorkQueue, WorkQueueSize, erlang:now(), MaxWorkAge),
     if
         WorkQueueSize =:= MaxCacheSize, % Cache was max size
