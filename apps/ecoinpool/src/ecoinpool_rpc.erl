@@ -188,9 +188,10 @@ respond_error(ReqPID, Req, Type) ->
 make_responder(ReqPID, Req, ReqId) ->
     fun
         % Late response handling (sends header in advance and uses chunked transfer)
-        (start) ->
+        ({start, WithHeartbeat}) ->
             try % Protect against connection drops
                 Resp = Req:respond({200, [server_header(), {"Content-Type", "application/json"}], chunked}),
+                WithHeartbeat andalso (ReqPID ! {enter_heartbeat_loop, Resp}),
                 {ok, make_late_responder(ReqPID, Req, Resp, ReqId)}
             catch exit:Reason ->
                 ReqPID ! {exit, Reason},
@@ -337,5 +338,17 @@ handle_request(SubpoolPID, Req) ->
     % Block here, waiting for the result
     receive
         ok -> ok;
+        {enter_heartbeat_loop, Resp} -> heartbeat_loop(Resp);
         {exit, Reason} -> exit(Reason)
+    end.
+
+heartbeat_loop(Resp) ->
+    receive
+        ok -> ok;
+        {exit, Reason} -> exit(Reason)
+    after
+        300000 ->
+            % Send a newline character every 5 minutes to keep the connection alive
+            Resp:write_chunk(<<10>>),
+            heartbeat_loop(Resp)
     end.

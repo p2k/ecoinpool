@@ -225,11 +225,11 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, LP, Responder}, State) ->
     #subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
     % Check the method and authentication
     case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
-        {ok, Worker=#worker{name=User}, Action} ->
+        {ok, Worker=#worker{name=User, lp_heartbeat=WithHeartbeat}, Action} ->
             case Action of % Now match for the action
                 getwork when LP ->
                     io:format("LP requested by ~s/~s!~n", [User, Peer]),
-                    case Responder(start) of
+                    case Responder({start, WithHeartbeat}) of
                         {ok, LateResponder} ->
                             {noreply, State#state{lp_queue=queue:in({Worker, LateResponder}, LPQueue)}};
                         _ ->

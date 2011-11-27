@@ -49,5 +49,6 @@
     sub_pool_id :: binary(),
     name :: binary(),
     pass :: binary() | atom(),
-    lp :: boolean()
+    lp :: boolean(),
+    lp_heartbeat :: boolean()
 }).

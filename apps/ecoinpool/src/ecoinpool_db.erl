@@ -558,6 +558,7 @@ parse_worker_document(WorkerId, {DocProps}) ->
     Name = proplists:get_value(<<"name">>, DocProps),
     Pass = proplists:get_value(<<"pass">>, DocProps, null),
     LP = proplists:get_value(<<"lp">>, DocProps, true),
+    LPHeartbeat = proplists:get_value(<<"lp_heartbeat">>, DocProps, true),
     
     if
         DocType =:= <<"worker">>,
@@ -566,7 +567,8 @@ parse_worker_document(WorkerId, {DocProps}) ->
         is_binary(Name),
         Name =/= <<>>,
         is_binary(Pass) or (Pass =:= null),
-        is_boolean(LP) ->
+        is_boolean(LP),
+        is_boolean(LPHeartbeat) ->
             
             % Create record
             Worker = #worker{
@@ -575,7 +577,8 @@ parse_worker_document(WorkerId, {DocProps}) ->
                 sub_pool_id=SubpoolId,
                 name=Name,
                 pass=Pass,
-                lp=LP
+                lp=LP,
+                lp_heartbeat=LPHeartbeat
             },
             {ok, Worker};
         
