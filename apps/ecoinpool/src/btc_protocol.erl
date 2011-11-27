@@ -22,6 +22,10 @@
 
 -include("btc_protocol_records.hrl").
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -export([
     decode_header/1,
     encode_header/1,
@@ -287,3 +291,56 @@ hash160_from_address(BTCAddress) ->
     catch error:_ ->
         error(invalid_bitcoin_address)
     end.
+
+%% Unit Testing %%
+
+-ifdef(TEST).
+
+decode_var_int_test_() ->
+    [
+        ?_assertEqual(decode_var_int(<<255,1,0,0,0,1,0,0,0,"x">>), {4294967297, <<"x">>}),
+        ?_assertEqual(decode_var_int(<<254,2,0,2,0,"x">>), {131074, <<"x">>}),
+        ?_assertEqual(decode_var_int(<<253,3,3,"x">>), {771, <<"x">>}),
+        ?_assertEqual(decode_var_int(<<252,"x">>), {252, <<"x">>})
+    ].
+
+decode_var_list_test_() ->
+    [
+        ?_assertEqual(decode_var_list(<<0,"x">>, unused), {[], <<"x">>}),
+        ?_assertEqual(decode_var_list(<<1,"abcxyz">>, fun (<<X:3/bytes, T/binary>>) -> {X, T} end), {[<<"abc">>], <<"xyz">>}),
+        ?_assertEqual(decode_var_list(<<3,1,2,3,"x">>, fun decode_var_int/1), {[1,2,3], <<"x">>})
+    ].
+
+decode_var_str_test() ->
+    ?assertEqual(decode_var_str(<<4,"demo123">>), {<<"demo">>, <<"123">>}).
+
+sample_tx() ->
+    ecoinpool_util:hexbin_to_bin(<<"01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08049a110e1a02f405ffffffff0150b5062a01000000434104ffcaf778d3d063a91712fa9f8e427072175634c2f218b60189412ab7cd9cdddf331d7811409e4df72447d8e14caf49b6932014bff3f0dd83634f7ad19fb21300ac00000000">>).
+
+decode_tx_test() ->
+    ?assertEqual(
+        decode_tx(sample_tx()),
+        {
+            #btc_tx{
+                version = 1,
+                tx_in = [
+                    #btc_tx_in{
+                        prev_output_hash = <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0>>,
+                        prev_output_index = 16#ffffffff,
+                        signature_script = <<4,154,17,14,26,2,244,5>>,
+                        sequence = 16#ffffffff
+                    }
+                ],
+                tx_out = [
+                    #btc_tx_out{
+                        value = 5000050000,
+                        pk_script = <<65,4,255,202,247,120,211,208,99,169,23,18,250,159,142,66,112,114,23,86,52,194,242,24,182,1,137,65,42,183,205,156,221,223,51,29,120,17,64,158,77,247,36,71,216,225,76,175,73,182,147,32,20,191,243,240,221,131,99,79,122,209,159,178,19,0,172>>
+                    }
+                ],
+                lock_time = 0
+            },
+            <<>>
+        }
+    ).
+
+-endif.

@@ -5,6 +5,7 @@
 *.so
 erl_crash.dump
 
+.eunit
 deps/
 ebin/
 
