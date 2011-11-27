@@ -20,6 +20,10 @@
 
 -module(base58).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -export([encode/1, decode/1]).
 
 -define(BASE58_TABLE, "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").
@@ -50,3 +54,16 @@ decode(<<C:8/unsigned, T/binary>>, N) ->
         0 -> error(invalid_character);
         V -> decode(T, N * 58 + (V - 1))
     end.
+
+-ifdef(TEST).
+
+encode_test() ->
+    ?assertEqual(<<"123ABCabc">>, encode(<<0,2,21,55,59,21,115>>)).
+
+decode_test() ->
+    ?assertEqual(<<1,2,3,10,20,30,100,200,0,255>>, decode(<<"4HUtpc6ZxKt94">>)).
+
+error_test() ->
+    ?assertError(invalid_character, decode(<<"1234567890">>)).
+
+-endif.

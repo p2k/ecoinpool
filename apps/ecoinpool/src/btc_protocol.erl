@@ -24,6 +24,7 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-export([sample_tx/1, sample_header/0, sample_block/0]).
 -endif.
 
 -export([
@@ -296,51 +297,152 @@ hash160_from_address(BTCAddress) ->
 
 -ifdef(TEST).
 
-decode_var_int_test_() ->
+sample_tx(1) ->
+    base64:decode(<<"AQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8IBJoRDhoC9AX/////AVC1BioBAAAAQ0EE/8r3eNPQY6kXEvqfjkJwchdWNMLyGLYBiUEqt82c3d8zHXgRQJ5N9yRH2OFMr0m2kyAUv/Pw3YNjT3rRn7ITAKwAAAAA">>);
+sample_tx(2) ->
+    base64:decode(<<"AQAAAAHIHImp3G2FOm3yUsKXjqKIj8gar+Br2KUXjqcrFILAKwEAAACKRzBEAiA5s70M4ZHgmz6DU6Omrvmfu6qQrC9+At8WR0z5xcnhsQIgSICe8IJuHZlAB8tbDYNcgx3dcHgde5LWTvpe6lWnz/MBQQRIULR1oM/Zg+cIs1olXbEezeRR8lxCFC+vz+l+ZkeRzeYDOsYmxRufhq1+4jhaw128yDppk6TCfvpfQ9lQcb/k/////wJwHuQAAAAAABl2qRQeNWtjIrBE3IgSK9AtlCQQ/8+0NoisgMJEbgAAAAAZdqkUDfGdVdogCQq/joWhw6CotKRR2aCIrAAAAAA=">>);
+sample_tx(3) ->
+    base64:decode(<<"AQAAAAHLPfR4aPWkowO1vRPuJlQtxwsjwbluIoCSc2O9mu6R2QAAAACMSTBGAiEA2Qv/GS5/vSgee7F+HJUhE20dZ3yM1atRAIsr/dJabRwCIQCVNqaQLqipiGvBIrrqTdVkOfTiJ4NOfMAOVYVjZMVkWQFBBD/Ws4Atipx72E25O/PTIiuQpm5pgKMiOqv6e+cMdyAEJ9BmRbdToOg3oVC9jJ5868gZJ4Mrbrx40qyQV2Cfh+b/////AsDYpwAAAAAAGXapFAhMoC1OfWVGV/AzFZMrABoooftViKyAzAYCAAAAABl2qRTYhH+LF38RCXoLTrsULa0qw/sOlIisAAAAAA==">>);
+sample_tx(4) ->
+    base64:decode(<<"AQAAAAH1fes7Ej1fkfSSwHKQN1lz62FzaB/Ueap9IkQ0jhIK6gAAAABIRzBEAiAGOeUVu+UefkDn/wHCijutAoQXgfjPYbT4yvHoh2i4FAIgK1pD2+rKUpKrrWAI3uXjMyEtPjuhkqMwcaIFCCBfu44B/////wLfXuEAAAAAAENBBKObnk+9IT7yS7m+ad5KEY3QZECC5HwB/ZFZ04Y3uD+83BFaXW6XBYagEtHP4+OosaPQTnY73FoHHA6CfAvYNKWsQEIPAAAAAAAZdqkUNnJR4xF0uMdKq07yukLII2tOea+IrAAAAAA=">>).
+
+sample_script() ->
+    <<_:194/bytes, SampleScript:25/bytes, _/binary>> = sample_tx(2),
+    SampleScript.
+
+sample_header() ->
+    base64:decode(<<"AQAAAGpJl3mr0KHNIp5GxjMf1fuqR1/qIRK3OIAGAAAAAAAARyDUB5doFsGHiCruAnPtGoxaosJyISVkCbtLbEzHA/l2JMpOmhEOGkFECaA=">>).
+
+sample_block() ->
+    H = sample_header(),
+    Tx1 = sample_tx(1),
+    Tx2 = sample_tx(2),
+    Tx3 = sample_tx(3),
+    Tx4 = sample_tx(4),
+    <<H/binary, 4, Tx1/binary, Tx2/binary, Tx3/binary, Tx4/binary>>.
+
+var_int_test_() ->
+    D1 = 4294967297, E1 = <<255,1,0,0,0,1,0,0,0>>,
+    D2 = 131074, E2 = <<254,2,0,2,0>>,
+    D3 = 771, E3 = <<253,3,3>>,
+    D4 = 252, E4 = <<252>>,
     [
-        ?_assertEqual(decode_var_int(<<255,1,0,0,0,1,0,0,0,"x">>), {4294967297, <<"x">>}),
-        ?_assertEqual(decode_var_int(<<254,2,0,2,0,"x">>), {131074, <<"x">>}),
-        ?_assertEqual(decode_var_int(<<253,3,3,"x">>), {771, <<"x">>}),
-        ?_assertEqual(decode_var_int(<<252,"x">>), {252, <<"x">>})
+        ?_assertEqual({D1, <<>>}, decode_var_int(E1)),
+        ?_assertEqual({D2, <<>>}, decode_var_int(E2)),
+        ?_assertEqual({D3, <<>>}, decode_var_int(E3)),
+        ?_assertEqual({D4, <<>>}, decode_var_int(E4)),
+        ?_assertEqual(E1, encode_var_int(D1)),
+        ?_assertEqual(E2, encode_var_int(D2)),
+        ?_assertEqual(E3, encode_var_int(D3)),
+        ?_assertEqual(E4, encode_var_int(D4))
     ].
 
-decode_var_list_test_() ->
+var_list_test_() ->
     [
-        ?_assertEqual(decode_var_list(<<0,"x">>, unused), {[], <<"x">>}),
-        ?_assertEqual(decode_var_list(<<1,"abcxyz">>, fun (<<X:3/bytes, T/binary>>) -> {X, T} end), {[<<"abc">>], <<"xyz">>}),
-        ?_assertEqual(decode_var_list(<<3,1,2,3,"x">>, fun decode_var_int/1), {[1,2,3], <<"x">>})
+        ?_assertEqual({[], <<"x">>}, decode_var_list(<<0,"x">>, unused)),
+        ?_assertEqual({[<<"abc">>], <<"xyz">>}, decode_var_list(<<1,"abcxyz">>, fun (<<X:3/bytes, T/binary>>) -> {X, T} end)),
+        ?_assertEqual({[1,2,3], <<"x">>}, decode_var_list(<<3,1,2,3,"x">>, fun decode_var_int/1)),
+        ?_assertEqual(<<0>>, encode_var_list([], unused)),
+        ?_assertEqual(<<1,"abc">>, encode_var_list([<<"abc">>], fun (X) -> X end)),
+        ?_assertEqual(<<3,1,2,3>>, encode_var_list([1,2,3], fun encode_var_int/1))
     ].
 
-decode_var_str_test() ->
-    ?assertEqual(decode_var_str(<<4,"demo123">>), {<<"demo">>, <<"123">>}).
+var_str_test_() ->
+    [
+        ?_assertEqual({<<"demo">>, <<"123">>}, decode_var_str(<<4,"demo123">>)),
+        ?_assertEqual(<<4,"demo">>, encode_var_str(<<"demo">>))
+    ].
 
-sample_tx() ->
-    ecoinpool_util:hexbin_to_bin(<<"01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08049a110e1a02f405ffffffff0150b5062a01000000434104ffcaf778d3d063a91712fa9f8e427072175634c2f218b60189412ab7cd9cdddf331d7811409e4df72447d8e14caf49b6932014bff3f0dd83634f7ad19fb21300ac00000000">>).
+tx_test_() ->
+    ETx = sample_tx(1),
+    DTx = #btc_tx{
+        version = 1,
+        tx_in = [
+            #btc_tx_in{
+                prev_output_hash = <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0>>,
+                prev_output_index = 16#ffffffff,
+                signature_script = <<4,154,17,14,26,2,244,5>>,
+                sequence = 16#ffffffff
+            }
+        ],
+        tx_out = [
+            #btc_tx_out{
+                value = 5000050000,
+                pk_script = base64:decode(<<"QQT/yvd409BjqRcS+p+OQnByF1Y0wvIYtgGJQSq3zZzd3zMdeBFAnk33JEfY4UyvSbaTIBS/8/Ddg2NPetGfshMArA==">>)
+            }
+        ],
+        lock_time = 0
+    },
+    [
+        ?_assertEqual({DTx, <<>>}, decode_tx(ETx)),
+        ?_assertEqual(ETx, encode_tx(DTx))
+    ].
 
-decode_tx_test() ->
-    ?assertEqual(
-        decode_tx(sample_tx()),
-        {
-            #btc_tx{
-                version = 1,
-                tx_in = [
-                    #btc_tx_in{
-                        prev_output_hash = <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0>>,
-                        prev_output_index = 16#ffffffff,
-                        signature_script = <<4,154,17,14,26,2,244,5>>,
-                        sequence = 16#ffffffff
-                    }
-                ],
-                tx_out = [
-                    #btc_tx_out{
-                        value = 5000050000,
-                        pk_script = <<65,4,255,202,247,120,211,208,99,169,23,18,250,159,142,66,112,114,23,86,52,194,242,24,182,1,137,65,42,183,205,156,221,223,51,29,120,17,64,158,77,247,36,71,216,225,76,175,73,182,147,32,20,191,243,240,221,131,99,79,122,209,159,178,19,0,172>>
-                    }
-                ],
-                lock_time = 0
-            },
-            <<>>
+header_test_() ->
+    EHeader = sample_header(),
+    DHeader = #btc_header{
+        version = 1,
+        hash_prev_block = base64:decode(<<"akmXeavQoc0inkbGMx/V+6pHX+ohErc4gAYAAAAAAAA=">>),
+        hash_merkle_root = base64:decode(<<"RyDUB5doFsGHiCruAnPtGoxaosJyISVkCbtLbEzHA/k=">>),
+        timestamp = 1321870454,
+        bits = 437129626,
+        nonce = 2684961857
+    },
+    [
+        ?_assertEqual(DHeader, decode_header(EHeader)),
+        ?_assertEqual(EHeader, encode_header(DHeader))
+    ].
+
+script_test_() ->
+    EScript = sample_script(),
+    DScript = [op_dup, op_hash160, base64:decode(<<"HjVrYyKwRNyIEivQLZQkEP/PtDY=">>), op_equalverify, op_checksig],
+    [
+        ?_assertEqual(DScript, decode_script(EScript)),
+        ?_assertEqual(EScript, encode_script(DScript))
+    ].
+
+hash160_from_address_test_() ->
+    [
+        ?_assertEqual(base64:decode(<<"N/PfYVVqkAwRSc47ZI/+TTZMEpU=">>), hash160_from_address(<<"166rK7eEVgnGvs9aA7jvu8NoPv8KzbPQ3L">>)),
+        ?_assertError(invalid_bitcoin_address, hash160_from_address(<<"166rK7eEVgnGvs9aA7jvu8NoPv8KzbPQ3M">>))
+    ].
+
+encode_auxpow_test() ->
+    EAuxPOW = base64:decode(<<"AQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////83BEttCxoDRbIAUiz6vm1t9PgsbckHZOle+WNcwqSrg4YrqhbT1iWOlPGlOFOQN0kBAAAAAAAAAP////8BWhNWKgEAAABDQQSKuGvFWJdPA1AObmrj/iAuKXxBMm3i0trgHhYTnFaawlsMBgC6+TJT/tGzwZKttrsZnPGrV140gzm0T1mSxwTPrAAAAAAn8KtiOt5HXpwN4tQEQmbmWxSuBmMGJ7G1IAAAAAAAAAX5sGhq0WwiZ8xTBoel7dwxqSCGNxb7vNhMJQ25IHqi3hysmwX/aJ/fZUAqEAaqOgT3jaG1e2Lq+ADAGw5IA2cW8tH7fHUYZPkos3eNfblB+CdOpVo/AcrNCe1KMyl0S45wnoGRrDIbjq1BnZOD+qlE6ukuDHZ7/XFXtiWpJoSkB4j4tkEOQaVNpJP90NoIqyIoCWZFZH+doHbK1C4mW/MuAAAAAAAAAAAAAQAAAEyrZVt1wzmfhMbzPXs2PSYpWQPh3PrtWdoBAAAAAAAAXWb6XgsqHvp1esikEjISO0HGWIJsAtxLrASDiRMmw/mubJlOS20LGmSgcoo=">>),
+    AuxHash = binary_part(EAuxPOW, {57, 32}),
+    DAuxPOW = #btc_auxpow{
+        coinbase_tx = #btc_tx{
+            tx_in = [
+                #btc_tx_in{
+                    prev_output_hash = <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0>>,
+                    prev_output_index = 16#ffffffff,
+                    signature_script = [436956491, 45637, 2, <<250,190,109,109, AuxHash/binary, 1,0,0,0,0,0,0,0>>],
+                    sequence = 16#ffffffff
+                }
+            ],
+            tx_out = [
+                #btc_tx_out{
+                    value = 5005251418,
+                    pk_script = base64:decode(<<"QQSKuGvFWJdPA1AObmrj/iAuKXxBMm3i0trgHhYTnFaawlsMBgC6+TJT/tGzwZKttrsZnPGrV140gzm0T1mSxwTPrA==">>)
+                }
+            ]
+        },
+        block_hash = base64:decode(<<"J/CrYjreR16cDeLUBEJm5lsUrgZjBiextSAAAAAAAAA=">>),
+        tx_tree_branches = [
+            binary_part(EAuxPOW, {215, 32}),
+            binary_part(EAuxPOW, {247, 32}),
+            binary_part(EAuxPOW, {279, 32}),
+            binary_part(EAuxPOW, {311, 32}),
+            binary_part(EAuxPOW, {343, 32})
+        ],
+        parent_header = #btc_header{
+            hash_prev_block = base64:decode(<<"TKtlW3XDOZ+ExvM9ezY9JilZA+Hc+u1Z2gEAAAAAAAA=">>),
+            hash_merkle_root = base64:decode(<<"XWb6XgsqHvp1esikEjISO0HGWIJsAtxLrASDiRMmw/k=">>),
+            timestamp = 1318677678,
+            bits = 436956491,
+            nonce = 2322767972
         }
-    ).
+    },
+    ?assertEqual(EAuxPOW, encode_auxpow(DAuxPOW)).
 
 -endif.
