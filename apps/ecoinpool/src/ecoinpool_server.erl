@@ -169,19 +169,21 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     MMM = check_aux_pool_config(SubpoolId, OldAuxpool, OldMMM, Auxpool),
     CoinDaemon:set_mmm(MMM),
     
-    % Check caching
+    % Update state
+    NewState = State#state{subpool=Subpool, cdaemon=CoinDaemon, mmm=MMM, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget},
+    
+    % Check startup and/or cache settings
     if
+        StartCoinDaemon -> % If the coin daemon was (re-)started, always signal a block change
+            handle_cast(new_block_detected, NewState);
         WorkQueueSize =:= OldMaxCacheSize, % Cache was full
         WorkQueueSize < MaxCacheSize -> % But too few entries on new setting
             io:format("reload_config: cache size changed from ~b to ~b requesting more work.~n", [OldMaxCacheSize, MaxCacheSize]),
-            CoinDaemon:post_workunit();
-        StartCoinDaemon -> % If the coin daemon was restarted, always do a post_workunit call
-            CoinDaemon:post_workunit();
+            CoinDaemon:post_workunit(),
+            {noreply, NewState};
         true ->
-            ok
-    end,
-    
-    {noreply, State#state{subpool=Subpool, cdaemon=CoinDaemon, mmm=MMM, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget}};
+            {noreply, NewState}
+    end;
 
 handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     #subpool{id=SubpoolId, worker_share_subpools=WorkerShareSubpools} = Subpool,
