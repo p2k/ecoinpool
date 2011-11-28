@@ -22,6 +22,11 @@
 -behaviour(gen_coindaemon).
 -behaviour(gen_server).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-export([sample_header/0]).
+-endif.
+
 -include("ecoinpool_workunit.hrl").
 
 -export([
@@ -381,3 +386,30 @@ make_workunit(SCData=#sc_data{bits=Bits, block_num=BlockNum}) ->
     WUId = workunit_id_from_sc_data(SCData),
     Target = ecoinpool_util:bits_to_target(Bits),
     #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BData}.
+
+-ifdef(TEST).
+
+sample_header() ->
+    base64:decode(<<"AQAAAOn0ozHytAiN/Xp3TYrviK23A5wgQZJn05bMmiu5egAAftoWEvyq7WRKElWCNa3RIlKUMUbC7MoFtntOW6UOHYfnCgEAAAAAAADov04AAAAAAAAAAAAAAADAEwAAAAAAAAAAAIAAAAAABXUAAGVjb2lucG9vbAAAANslAR0=">>).
+
+sc_data_test_() ->
+    EHeader = sample_header(),
+    DHeader = #sc_data{
+        version = 1,
+        hash_prev_block = base64:decode(<<"6fSjMfK0CI39endNiu+IrbcDnCBBkmfTlsyaK7l6AAA=">>),
+        hash_merkle_root = base64:decode(<<"ftoWEvyq7WRKElWCNa3RIlKUMUbC7MoFtntOW6UOHYc=">>),
+        block_num = 68327,
+        time = 1321199616,
+        nonce1 = 0,
+        nonce2 = 5056,
+        nonce3 = 2147483648,
+        nonce4 = 29957,
+        miner_id = <<"ecoinpool",0,0,0>>,
+        bits = 486614491
+    },
+    [
+        ?_assertEqual(DHeader, decode_sc_data(EHeader)),
+        ?_assertEqual(EHeader, encode_sc_data(DHeader))
+    ].
+
+-endif.

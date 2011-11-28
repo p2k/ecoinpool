@@ -20,6 +20,10 @@
 
 -module(ecoinpool_hash).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -export([init/0, dsha256_hash/1, tree_pair_dsha256_hash/2, sha256_midstate/1, rs_hash/1]).
 
 -export([tree_dsha256_hash/1, tree_level_dsha256_hash/1, first_tree_branches_dsha256_hash/1, fold_tree_branches_dsha256_hash/2]).
@@ -111,3 +115,16 @@ r_tree_dsha256(Hashlist, Size) ->
             LResult = r_tree_dsha256(Hashlist, HalfSize),
             tree_pair_dsha256_hash(LResult, LResult)
     end.
+
+-ifdef(TEST).
+
+dsha256_hash_test_() ->
+    [
+        ?_assertEqual(base64:decode(<<"UD2DGaSDSM3GEKWC9791S1gz32UDhgbrSFEHkN/JlZU=">>), dsha256_hash(<<"hello">>)),
+        ?_assertEqual(base64:decode(<<"AAAAAAAAAuPFkwailUxBO6pxrRh9Z7v/pxJh6LLeoc8=">>), dsha256_hash(btc_protocol:sample_header()))
+    ].
+
+rs_hash_test() ->
+    ?assertEqual(base64:decode(<<"AAAAAA/q/9gMdBn4bwSEjvPhseM26WEQ9apzJDT+5/o=">>), rs_hash(sc_coindaemon:sample_header())).
+
+-endif.

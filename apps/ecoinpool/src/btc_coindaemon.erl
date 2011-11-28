@@ -154,7 +154,7 @@ init([SubpoolId, Config]) ->
         Tag when is_binary(Tag), byte_size(Tag) > 0 ->
             <<"ecoinpool@", Tag/binary>>;
         _ ->
-            <<"ecoinpool@anonymous">>
+            <<"ecoinpool">>
     end,
     
     TxTbl = ets:new(txtbl, [set, protected]),
