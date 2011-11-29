@@ -67,7 +67,7 @@ handle_call({start_rpc, Port, SubpoolPID}, _From, Servers) ->
             % Launch server
             mochiweb_http:start([{name, Name}, {port, Port}, {loop, Loop}]),
             % Store and reply
-            io:format("Started RPC on port ~p~n", [Port]),
+            log4erl:warn("ecoinpool_rpc: Started RPC on port ~b", [Port]),
             {reply, ok, dict:store(Port, Srv, Servers)};
         _ ->
             {reply, {error, port_occupied}, Servers}
@@ -79,7 +79,7 @@ handle_call({stop_rpc, Port}, _From, Servers) ->
             % Stop server
             mochiweb_http:stop(Name),
             % Remove and reply
-            io:format("Stopped RPC on port ~p~n", [Port]),
+            log4erl:warn("ecoinpool_rpc: Stopped RPC on port ~b", [Port]),
             {reply, ok, dict:erase(Port, Servers)};
         _ ->
             {reply, {error, not_running}, Servers}

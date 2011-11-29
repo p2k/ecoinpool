@@ -134,7 +134,7 @@ get_first_tx_with_branches(PID, Workunit) ->
 
 init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
-    io:format("BTC CoinDaemon starting~n"),
+    log4erl:warn(daemon, "BTC CoinDaemon starting..."),
     
     Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
     Port = proplists:get_value(port, Config, 8332),
@@ -229,7 +229,7 @@ handle_info(_Message, State) ->
 
 terminate(_Reason, #state{timer=Timer}) ->
     timer:cancel(Timer),
-    io:format("BTC CoinDaemon stopping~n"),
+    log4erl:warn(daemon, "BTC CoinDaemon terminated."),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -334,7 +334,7 @@ fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=
                 true ->
                     OldCoinbaseTx;
                 _ ->
-                    io:format("btc_coindaemon: fetch_work_with_state: memory pool changed!~n"),
+                    log4erl:debug(daemon, "btc_coindaemon: fetch_work_with_state: memory pool changed."),
                     undefined
             end,
             
@@ -358,10 +358,10 @@ fetch_aux_work_with_state(State=#state{mmm=MMM, aux_work=OldAuxWork}) ->
         no_new_aux_work ->
             State;
         AuxWork=#auxwork{} ->
-            io:format("btc_coindaemon: fetch_aux_work_with_state: aux work changed!~n"),
+            log4erl:debug(daemon, "btc_coindaemon: fetch_aux_work_with_state: aux work changed."),
             State#state{aux_work=AuxWork, coinbase_tx=undefined};
         {error, Message} ->
-            io:format("btc_coindaemon: fetch_aux_work_with_state: Warning: get_aux_work returned an error: ~p~n", [Message]),
+            log4erl:warn(daemon, "btc_coindaemon: fetch_aux_work_with_state: get_aux_work returned an error: ~p", [Message]),
             State#state{aux_work=undefined}
     end.
 
@@ -369,6 +369,7 @@ send_block(URL, Auth, Header, Transactions) ->
     BData = btc_protocol:encode_block(#btc_block{header=Header, txns=Transactions}),
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"getmemorypool\",\"params\":[\"" ++ HexData ++ "\"]}",
+    log4erl:debug(daemon, "btc_coindaemon: Sending upstream: ~s", [PostData]),
     case ecoinpool_util:send_http_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),

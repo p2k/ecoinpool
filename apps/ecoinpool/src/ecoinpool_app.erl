@@ -37,6 +37,10 @@ start(_StartType, _StartArgs) ->
     {ok, DBPort} = application:get_env(ecoinpool, db_port),
     {ok, DBPrefix} = application:get_env(ecoinpool, db_prefix),
     {ok, DBOptions} = application:get_env(ecoinpool, db_options),
+    % log4erl
+    log4erl:conf(filename:join(code:priv_dir(ecoinpool), "log4erl.conf")),
+    {ok, VSN} = application:get_key(ecoinpool, vsn),
+    log4erl:warn("==> Welcome to ecoinpool v~s written by p2k! <==", [VSN]),
     ecoinpool_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions}).
 
 stop(_State) ->

@@ -86,7 +86,7 @@ new_block_detected(SubpoolId) ->
 %% ===================================================================
 
 init([SubpoolId]) ->
-    io:format("Subpool ~p starting...~n", [SubpoolId]),
+    log4erl:warn(server, "Subpool ~s starting...", [SubpoolId]),
     % Trap exit
     process_flag(trap_exit, true),
     % Setup the work table, the duplicate hashes table and worker tables
@@ -113,7 +113,7 @@ handle_call(_Message, _From, State) ->
 
 handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_size=WorkQueueSize, cdaemon=OldCoinDaemon, mmm=OldMMM}) ->
     % Extract config
-    #subpool{id=SubpoolId, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig, aux_pool=Auxpool} = Subpool,
+    #subpool{id=SubpoolId, name=SubpoolName, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig, aux_pool=Auxpool} = Subpool,
     #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig, aux_pool=OldAuxpool} = OldSubpool,
     % Derive the CoinDaemon module name from PoolType + "_coindaemon"
     CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
@@ -157,7 +157,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
             case ecoinpool_server_sup:start_coindaemon(SubpoolId, CoinDaemonModule, CoinDaemonConfig) of
                 {ok, NewCoinDaemon, _} -> {ok, NewCoinDaemon};
                 {ok, NewCoinDaemon} -> {ok, NewCoinDaemon};
-                Error -> ecoinpool_rpc:stop_rpc(Port), Error % Fail but close the RPC beforehand
+                Error -> log4erl:fatal(server, "~s: Could not start CoinDaemon!", [SubpoolName]), ecoinpool_rpc:stop_rpc(Port), Error % Fail but close the RPC beforehand
             end;
         true -> {ok, OldCoinDaemon}
     end,
@@ -166,7 +166,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     ShareTarget = CoinDaemon:share_target(),
     
     % Check the aux pool configuration
-    MMM = check_aux_pool_config(SubpoolId, OldAuxpool, OldMMM, Auxpool),
+    MMM = check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool),
     CoinDaemon:set_mmm(MMM),
     
     % Update state
@@ -176,7 +176,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     if
         WorkQueueSize =:= OldMaxCacheSize, % Cache was full
         WorkQueueSize < MaxCacheSize -> % But too few entries on new setting
-            io:format("reload_config: cache size changed from ~b to ~b requesting more work.~n", [OldMaxCacheSize, MaxCacheSize]),
+            log4erl:debug(server, "~s: reload_config: cache size changed from ~b to ~b requesting more work.", [SubpoolName, OldMaxCacheSize, MaxCacheSize]),
             CoinDaemon:post_workunit();
         true ->
             ok
@@ -189,7 +189,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     end;
 
 handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
-    #subpool{id=SubpoolId, worker_share_subpools=WorkerShareSubpools} = Subpool,
+    #subpool{id=SubpoolId, name=SubpoolName, worker_share_subpools=WorkerShareSubpools} = Subpool,
     
     ets:delete_all_objects(WorkerLookupTbl),
     ets:delete_all_objects(WorkerTbl),
@@ -200,7 +200,7 @@ handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, w
                 true ->
                     ets:insert(WorkerLookupTbl, {WorkerId, WorkerName});
                 _ ->
-                    io:format("reload_workers: Warning for sub-pool '~s': Worker name '~s' already taken, ignoring worker '~s' of sub-pool '~s'!~n", [SubpoolId, WorkerName, WorkerId, WorkerSubpoolId])
+                    log4erl:warn(server, "~s: reload_workers: Worker name \"~s\" already taken, ignoring worker \"~s\" of sub-pool \"~s\"!", [SubpoolName, WorkerName, WorkerId, WorkerSubpoolId])
             end
         end,
         ecoinpool_db:get_workers_for_subpools([SubpoolId|WorkerShareSubpools])
@@ -227,27 +227,27 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, LP, Responder}, State) ->
         workertbl=WorkerTbl,
         lp_queue=LPQueue
     } = State,
-    #subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
+    #subpool{name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
     % Check the method and authentication
-    case parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
+    case parse_method_and_auth(SubpoolName, Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
         {ok, Worker=#worker{name=User, lp_heartbeat=WithHeartbeat}, Action} ->
             case Action of % Now match for the action
                 getwork when LP ->
-                    io:format("LP requested by ~s/~s!~n", [User, Peer]),
+                    log4erl:info(server, "~s: LP requested by ~s/~s", [SubpoolName, User, Peer]),
                     case Responder({start, WithHeartbeat}) of
                         {ok, LateResponder} ->
                             {noreply, State#state{lp_queue=queue:in({Worker, LateResponder}, LPQueue)}};
                         _ ->
-                            io:format("But the connection was already dropped!~n"),
+                            log4erl:debug(server, "~s: But the connection was already dropped!", [SubpoolName]),
                             {noreply, State}
                     end;
                 getwork ->
-                    {Result, NewWorkQueue, NewWorkQueueSize} = assign_work(erlang:now(), MaxWorkAge, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder),
+                    {Result, NewWorkQueue, NewWorkQueueSize} = assign_work(SubpoolName, erlang:now(), MaxWorkAge, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder),
                     case Result of
                         hit ->
-                            io:format("Cache hit by ~s/~s - Queue size: ~b/~b~n", [User, Peer, NewWorkQueueSize, MaxCacheSize]);
+                            log4erl:info(server, "~s: Cache hit by ~s/~s - Queue size: ~b/~b", [SubpoolName, User, Peer, NewWorkQueueSize, MaxCacheSize]);
                         miss ->
-                            io:format("Cache miss by ~s/~s - Queue size: ~b/~b~n", [User, Peer, NewWorkQueueSize, MaxCacheSize])
+                            log4erl:info(server, "~s: Cache miss by ~s/~s - Queue size: ~b/~b", [SubpoolName, User, Peer, NewWorkQueueSize, MaxCacheSize])
                     end,
                     if
                         WorkQueueSize =:= MaxCacheSize, % Cache was max size
@@ -272,7 +272,7 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, LP, Responder}, State) ->
 handle_cast(new_block_detected, State) ->
     % Extract state variables
     #state{
-        subpool=#subpool{max_cache_size=MaxCacheSize},
+        subpool=#subpool{name=SubpoolName, max_cache_size=MaxCacheSize},
         cdaemon=CoinDaemon,
         workq=WorkQueue,
         workq_size=WorkQueueSize,
@@ -280,7 +280,7 @@ handle_cast(new_block_detected, State) ->
         hashtbl=HashTbl,
         lp_queue=LPQueue
     } = State,
-    io:format("--- New block! Discarding ~b assigned WUs, ~b cached WUs and calling ~b LPs ---~n", [ets:info(WorkTbl, size), WorkQueueSize, queue:len(LPQueue)]),
+    log4erl:warn(server, "~s: --- New block! Assigned: ~b; Shares: ~b; Cached: ~b; Longpolling: ~b ---", [SubpoolName, ets:info(WorkTbl, size), ets:info(HashTbl, size), WorkQueueSize, queue:len(LPQueue)]),
     ets:delete_all_objects(WorkTbl), % Clear the work table
     ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
     % Check if LP are still valid, then push onto the work queue
@@ -290,7 +290,7 @@ handle_cast(new_block_detected, State) ->
                 ok ->
                     true;
                 _ ->
-                    io:format("LP connection for ~s was dropped, skipping.~n", [User]),
+                    log4erl:debug(server, "~s: LP connection for ~s was dropped, skipping.", [SubpoolName, User]),
                     false
             end
         end,
@@ -318,7 +318,7 @@ handle_cast(new_block_detected, State) ->
 handle_cast({store_workunit, Workunit}, State) ->
     % Extract state variables
     #state{
-        subpool=#subpool{max_cache_size=MaxCacheSize},
+        subpool=#subpool{name=SubpoolName, max_cache_size=MaxCacheSize},
         cdaemon=CoinDaemon,
         workq=WorkQueue,
         workq_size=WorkQueueSize,
@@ -329,7 +329,7 @@ handle_cast({store_workunit, Workunit}, State) ->
         WorkQueueSize < 0 -> % We have connections waiting -> send out
             {{value, {Worker=#worker{id=WorkerId}, Responder}}, NWQ} = queue:out(WorkQueue),
             case ets:insert_new(WorkTbl, Workunit#workunit{worker_id=WorkerId}) of
-                false -> io:format("store_workunit got a collision :/~n");
+                false -> log4erl:error(server, "~s: store_workunit got a collision :/", [SubpoolName]);
                 _ -> ok
             end,
             Responder({ok, CoinDaemon:encode_workunit(Workunit), make_responder_options(Worker, Workunit)}),
@@ -339,7 +339,7 @@ handle_cast({store_workunit, Workunit}, State) ->
         true -> % Overflow -> ignore
             {WorkQueue, WorkQueueSize}
     end,
-    io:format(" Queue size: ~b/~b~n", [NewWorkQueueSize, MaxCacheSize]),
+    log4erl:debug(server, "~s:  Queue size: ~b/~b", [SubpoolName, NewWorkQueueSize, MaxCacheSize]),
     if
         NewWorkQueueSize < MaxCacheSize -> % Cache is still below max size
             CoinDaemon:post_workunit(); % -> Call for more work
@@ -348,18 +348,16 @@ handle_cast({store_workunit, Workunit}, State) ->
     end,
     {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
 
-handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State=#state{workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
-    ets:match(WorkerTbl, #worker{id=WorkerId, _='_'}),
-    
+handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State=#state{subpool=#subpool{name=SubpoolName}, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     % Check if existing
     case ets:lookup(WorkerLookupTbl, WorkerId) of
         [] -> % Brand new
-            io:format("Brand new: ~p~n", [Worker]),
+            log4erl:info(server, "~s: Adding new worker \"~s\".", [SubpoolName, WorkerName]),
             ets:insert(WorkerLookupTbl, {WorkerId, WorkerName});
         [{_, WorkerName}] -> % Existing and worker name matches
-            io:format("Existing and matches: ~p~n", [WorkerId]);
+            log4erl:info(server, "~s: Updating worker \"~s\".", [SubpoolName, WorkerName]);
         [{_, OldWorkerName}] -> % Existing & name change
-            io:format("Name change: ~p - ~p -> ~p~n", [WorkerId, OldWorkerName, WorkerName]),
+            log4erl:info(server, "~s: Updating worker \"~s\" with name change to \"~s\".", [SubpoolName, OldWorkerName, WorkerName]),
             ets:delete(WorkerTbl, OldWorkerName),
             ets:insert(WorkerLookupTbl, {WorkerId, WorkerName})
     end,
@@ -369,10 +367,11 @@ handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State
     
     {noreply, State};
 
-handle_cast({remove_worker, WorkerId}, State=#state{workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
+handle_cast({remove_worker, WorkerId}, State=#state{subpool=#subpool{name=SubpoolName}, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     case ets:lookup(WorkerLookupTbl, WorkerId) of
         [] -> ok;
         [{_, WorkerName}] ->
+            log4erl:info(server, "~s: Deleting worker \"~s\".", [SubpoolName, WorkerName]),
             ets:delete(WorkerLookupTbl, WorkerId),
             ets:delete(WorkerTbl, WorkerName)
     end,
@@ -387,12 +386,12 @@ handle_info(check_work_age, State=#state{workq_size=WorkQueueSize}) when WorkQue
 handle_info(check_work_age, State) ->
     % Extract state variables
     #state{
-        subpool=#subpool{max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge},
+        subpool=#subpool{name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge},
         cdaemon=CoinDaemon,
         workq=WorkQueue,
         workq_size=WorkQueueSize
     } = State,
-    {NewWorkQueue, NewWorkQueueSize} = check_work_age(WorkQueue, WorkQueueSize, erlang:now(), MaxWorkAge),
+    {NewWorkQueue, NewWorkQueueSize} = check_work_age(SubpoolName, WorkQueue, WorkQueueSize, erlang:now(), MaxWorkAge),
     if
         WorkQueueSize =:= MaxCacheSize, % Cache was max size
         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
@@ -411,7 +410,7 @@ terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, work_checker=WorkC
     % Unregister notifications
     ecoinpool_worker_monitor:set_worker_notifications(Id, []),
     % We don't need to stop the CoinDaemon, because that will be handled by the supervisor
-    io:format("Subpool ~p terminated.~n", [Id]),
+    log4erl:warn(server, "Subpool ~s terminated.", [Id]),
     % Kill the work check timer
     timer:cancel(WorkChecker),
     ok.
@@ -423,7 +422,7 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) ->
+parse_method_and_auth(SubpoolName, Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) ->
     Action = case Method of
         GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
             if
@@ -446,20 +445,20 @@ parse_method_and_auth(Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, Send
             % Check authentication
             case Auth of
                 unauthorized ->
-                    io:format("rpc_request: ~s: Unauthorized!~n", [Peer]),
+                    log4erl:warn(server, "~s: rpc_request: ~s: Unauthorized!", [SubpoolName, Peer]),
                     {error, authorization_required};
                 {User, Password} ->
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
                             {ok, Worker, Action};
                         [] ->
-                            io:format("rpc_request: ~s: Wrong password for username ~p!~n", [Peer, User]),
+                            log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Peer, User]),
                             {error, authorization_required}
                     end
             end
     end.
 
-assign_work(Now, MaxWorkAge, Worker=#worker{id=WorkerId}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder) ->
+assign_work(SubpoolName, Now, MaxWorkAge, Worker=#worker{id=WorkerId}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder) ->
     % Look if work is available in the Cache
     if
         WorkQueueSize > 0 -> % Cache hit
@@ -467,24 +466,24 @@ assign_work(Now, MaxWorkAge, Worker=#worker{id=WorkerId}, WorkQueue, WorkQueueSi
             case timer:now_diff(Now, WorkTS) / 1000000 of
                 Diff when Diff =< MaxWorkAge -> % Check age
                     case ets:insert_new(WorkTbl, Workunit#workunit{worker_id=WorkerId}) of
-                        false -> io:format("assign_work got a collision :/~n");
+                        false -> log4erl:error(server, "~s: assign_work got a collision :/", [SubpoolName]);
                         _ -> ok
                     end,
                     Responder({ok, CoinDaemon:encode_workunit(Workunit), make_responder_options(Worker, Workunit)}),
                     {hit, NewWorkQueue, WorkQueueSize-1};
                 _ -> % Try again if too old (tail recursive)
-                    io:format("assign_work: discarded an old workunit.~n"),
-                    assign_work(Now, MaxWorkAge, Worker, NewWorkQueue, WorkQueueSize-1, WorkTbl, CoinDaemon, Responder)
+                    log4erl:debug(server, "~s: assign_work: discarded an old workunit.", [SubpoolName]),
+                    assign_work(SubpoolName, Now, MaxWorkAge, Worker, NewWorkQueue, WorkQueueSize-1, WorkTbl, CoinDaemon, Responder)
             end;
         true -> % Cache miss, append to waiting queue
             {miss, queue:in({Worker, Responder}, WorkQueue), WorkQueueSize-1}
     end.
 
-check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget, Responder) ->
+check_work(Peer, Params, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=User}, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget, Responder) ->
     % Analyze results
     case CoinDaemon:analyze_result(Params) of
         error ->
-            io:format("Wrong data from ~s/~s!~n~p~n", [User, Peer, Params]),
+            log4erl:warn(server, "~s: Wrong data from ~s/~s: ~p", [SubpoolName, User, Peer, Params]),
             ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
             Responder({error, invalid_request}),
             [];
@@ -500,7 +499,7 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
                                 true ->
                                     case ets:insert_new(HashTbl, {Hash}) of % Also stores the new hash
                                         true ->
-                                            check_for_candidate(Workunit, Hash, BData, User, Peer);
+                                            check_for_candidate(SubpoolName, Workunit, Hash, BData, User, Peer);
                                         _ ->
                                             {duplicate, Workunit, Hash}
                                     end
@@ -526,7 +525,7 @@ check_work(Peer, Params, Subpool, Worker=#worker{name=User}, WorkTbl, HashTbl, C
             )
     end.
 
-process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, MMM, Responder) ->
+process_results(Peer, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=User}, CoinDaemon, MMM, Responder) ->
     % Process all results
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
@@ -564,25 +563,25 @@ process_results(Peer, Results, Subpool, Worker=#worker{name=User}, CoinDaemon, M
         fun (C={Chain, _, _, _}) ->
             case send_candidate(C, CoinDaemon, MMM) of
                 accepted ->
-                    io:format("Data sent upstream from ~s/~s to ~p chain got accepted!~n", [User, Peer, Chain]);
+                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got accepted!", [SubpoolName, User, Peer, Chain]);
                 rejected ->
-                    io:format("Data sent upstream from ~s/~s to ~p chain got rejected!~n", [User, Peer, Chain]);
+                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got rejected!", [SubpoolName, User, Peer, Chain]);
                 {error, Message} ->
-                    io:format("Upstream error from ~s/~s to ~p chain! Message: ~p~n", [User, Peer, Chain, Message])
+                    log4erl:error(server, "~s: Upstream error from ~s/~s to ~p chain! Message: ~p", [SubpoolName, User, Peer, Chain, Message])
             end
         end,
         Candidates
     ).
 
-check_work_age(WorkQueue, WorkQueueSize, _, _) when WorkQueueSize =< 0 ->
+check_work_age(_, WorkQueue, WorkQueueSize, _, _) when WorkQueueSize =< 0 ->
     {WorkQueue, WorkQueueSize}; % Done
 
-check_work_age(WorkQueue, WorkQueueSize, Now, MaxWorkAge) ->
+check_work_age(SubpoolName, WorkQueue, WorkQueueSize, Now, MaxWorkAge) ->
     {value, #workunit{ts=WorkTS}} = queue:peek(WorkQueue),
     case timer:now_diff(Now, WorkTS) / 1000000 of
         Diff when Diff > MaxWorkAge ->
-            io:format("check_work_age: discarded an old workunit.~n"),
-            check_work_age(queue:drop(WorkQueue), WorkQueueSize-1, Now, MaxWorkAge); % Check next (tail recursive)
+            log4erl:debug(server, "~s: check_work_age: discarded an old workunit.", [SubpoolName]),
+            check_work_age(SubpoolName, queue:drop(WorkQueue), WorkQueueSize-1, Now, MaxWorkAge); % Check next (tail recursive)
         _ ->
             {WorkQueue, WorkQueueSize} % Done
     end.
@@ -598,28 +597,34 @@ make_responder_options(Worker, #workunit{block_num=BlockNum}) ->
 
 check_new_round(_, []) ->
     ok;
-check_new_round(Subpool=#subpool{round=Round}, [main|T]) ->
+check_new_round(Subpool=#subpool{name=SubpoolName, round=Round}, [main|T]) ->
     case Round of
-        undefined -> ok;
-        _ -> ecoinpool_db:set_subpool_round(Subpool, Round+1)
+        undefined ->
+            ok;
+        _ ->
+            log4erl:info(server, "~s: New round: ~b", [SubpoolName, Round+1]),
+            ecoinpool_db:set_subpool_round(Subpool, Round+1)
     end,
     check_new_round(Subpool, T);
-check_new_round(Subpool=#subpool{aux_pool=#auxpool{round=Round}}, [aux|T]) ->
+check_new_round(Subpool=#subpool{aux_pool=#auxpool{name=AuxpoolName, round=Round}}, [aux|T]) ->
     case Round of
-        undefined -> ok;
-        _ -> ecoinpool_db:set_auxpool_round(Subpool, Round+1)
+        undefined ->
+            ok;
+        _ ->
+            log4erl:info(server, "~s: New round: ~b", [AuxpoolName, Round+1]),
+            ecoinpool_db:set_auxpool_round(Subpool, Round+1)
     end,
     check_new_round(Subpool, T);
 check_new_round(Subpool, [_|T]) ->
     check_new_round(Subpool, T).
 
-check_aux_pool_config(_, undefined, undefined, undefined) ->
+check_aux_pool_config(_, _, undefined, undefined, undefined) ->
     undefined;
-check_aux_pool_config(SubpoolId, _, OldMMM, undefined) ->
+check_aux_pool_config(_, SubpoolId, _, OldMMM, undefined) ->
     % This code will change if multi aux chains are supported
     [AuxDaemonModule] = OldMMM:aux_daemon_modules(),
     ecoinpool_server_sup:remove_auxdaemon(SubpoolId, AuxDaemonModule, OldMMM);
-check_aux_pool_config(SubpoolId, OldAuxpool, OldMMM, Auxpool) ->
+check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool) ->
     % This code will change if multi aux chains are supported
     #auxpool{pool_type=PoolType, aux_daemon_config=AuxDaemonConfig} = Auxpool,
     OldAuxDaemonConfig = case OldAuxpool of
@@ -647,19 +652,19 @@ check_aux_pool_config(SubpoolId, OldAuxpool, OldMMM, Auxpool) ->
         StartAuxDaemon ->
             case ecoinpool_server_sup:add_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig, undefined) of
                 {ok, NewMMM} -> NewMMM;
-                _Error -> io:format("ecoinpool_server:check_aux_pool_config: Warning: could not start aux daemon!~n"), undefined
+                _Error -> log4erl:warn(server, "~s: Could not start AuxDaemon!", [SubpoolName]), undefined
             end;
         true ->
             OldMMM
     end.
 
-check_for_candidate(Workunit=#workunit{aux_work=AuxWork}, Hash, BData, User, Peer) ->
+check_for_candidate(SubpoolName, Workunit=#workunit{aux_work=AuxWork}, Hash, BData, User, Peer) ->
     MainCandidate = case hash_is_below_target(Hash, Workunit) of
-        true -> io:format("+++ Main candidate share from ~s/~s! +++~n", [User, Peer]), [main];
+        true -> log4erl:warn(server, "~s: +++ Main candidate share from ~s/~s! +++", [SubpoolName, User, Peer]), [main];
         _ -> []
     end,
     AuxCandidate = case hash_is_below_target(Hash, AuxWork) of
-        true -> io:format("+++ Aux candidate share from ~s/~s! +++~n", [User, Peer]), [aux];
+        true -> log4erl:warn(server, "~s: +++ Aux candidate share from ~s/~s! +++", [SubpoolName, User, Peer]), [aux];
         _ -> []
     end,
     {ok, Workunit, Hash, BData, lists:merge(MainCandidate, AuxCandidate)}.

@@ -155,9 +155,9 @@ handle_cast({broadcast_update_worker, WorkerId}, State=#state{notify_map=NotifyM
                     ok
             end;
         {error, missing} -> % Ignore missing workers (shouldn't happen anyway)
-            io:format("ecoinpool_worker_monitor:broadcast_update_worker: Missing document for worker ID: ~p.", [WorkerId]);
+            log4erl:warn("ecoinpool_worker_monitor: broadcast_update_worker: Missing document for worker ID: ~s.", [WorkerId]);
         {error, invalid} -> % Ignore invalid workers
-            io:format("ecoinpool_worker_monitor:broadcast_update_worker: Invalid document for worker ID: ~p.", [WorkerId])
+            log4erl:warn("ecoinpool_worker_monitor: broadcast_update_worker: Invalid document for worker ID: ~s.", [WorkerId])
     end,
     {noreply, State};
 

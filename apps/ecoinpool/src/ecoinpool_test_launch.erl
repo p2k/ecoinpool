@@ -24,6 +24,7 @@
 start() ->
     ok = application:start(sasl),
     ok = application:start(crypto),
+    ok = application:start(log4erl),
     ok = application:start(ibrowse),
     ok = application:start(couchbeam),
     ok = application:start(ecoinpool).

@@ -134,10 +134,10 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
                         {<<"language">>, <<"javascript">>},
                         {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
                     ]}),
-                    io:format("ecoinpool_db: Config database created!~n"),
+                    log4erl:info(db, "Config database created!"),
                     NewConfDb;
                 {error, Error} ->
-                    io:format("couchbeam:open_or_create_db/3 returned an error: ~p~n", [Error]), throw({error, Error})
+                    log4erl:fatal(db, "config_db - couchbeam:open_or_create_db/3 returned an error: ~p", [Error]), throw({error, Error})
             end
     end,
     % Start config & worker monitor (asynchronously)
@@ -198,7 +198,7 @@ handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=
                 {ok, Worker} ->
                     [Worker|AccWorkers];
                 {error, invalid} ->
-                    io:format("ecoinpool_db:get_workers_for_subpools: Invalid document for worker ID: ~p.", [Id]),
+                    log4erl:warn(db, "get_workers_for_subpools: Invalid document for worker ID \"~s\", ignoring.", [Id]),
                     AccWorkers
             end
         end,
@@ -259,10 +259,10 @@ handle_call({setup_shares_db, SubpoolName}, _From, State=#state{srv_conn=S}) ->
                         {<<"language">>, <<"javascript">>},
                         {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
                     ]}),
-                    io:format("ecoinpool_db: Shares database \"~s\" created!~n", [SubpoolName]),
+                    log4erl:info(db, "Shares database \"~s\" created!", [SubpoolName]),
                     {reply, ok, State};
                 {error, Error} ->
-                    io:format("setup_share_db - couchbeam:open_or_create_db/3 returned an error: ~p~n", [Error]),
+                    log4erl:error(db, "shares_db - couchbeam:open_or_create_db/3 returned an error: ~p", [Error]),
                     {reply, error, State}
             end
     end;
@@ -303,7 +303,7 @@ handle_cast({set_auxpool_round, SubpoolId, Round}, State=#state{conf_db=ConfDb})
     end,
     {noreply, State};
 
-handle_cast({store_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool}, IP, #worker{id=WorkerId, user_id=UserId}, #workunit{target=Target, block_num=BlockNum, data=BData, aux_work=AuxWork}, Hash, Candidates}, State=#state{srv_conn=S}) ->
+handle_cast({store_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool}, IP, #worker{id=WorkerId, user_id=UserId, name=WorkerName}, #workunit{target=Target, block_num=BlockNum, data=BData, aux_work=AuxWork}, Hash, Candidates}, State=#state{srv_conn=S}) ->
     % This code will change if multi aux chains are supported
     Now = erlang:now(),
     {MainState, AuxState} = lists:foldl(
@@ -318,6 +318,7 @@ handle_cast({store_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpo
     
     NewState = case Auxpool of
         #auxpool{name=AuxpoolName, round=AuxRound} ->
+            log4erl:debug(db, "~s&~s: Storing ~p&~p share from ~s/~s", [SubpoolName, AuxpoolName, MainState, AuxState, WorkerName, IP]),
             {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
             #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum} = AuxWork,
             case store_share_in_db(WorkerId, UserId, IP, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, BData, AuxRound, AuxDB) of
@@ -327,6 +328,7 @@ handle_cast({store_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpo
                     State
             end;
         _ ->
+            log4erl:debug(db, "~s: Storing ~p share from ~s/~s", [SubpoolName, MainState, WorkerName, IP]),
             State
     end,
     
@@ -338,10 +340,11 @@ handle_cast({store_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpo
             {noreply, NewState}
     end;
 
-handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool}, IP, #worker{id=WorkerId, user_id=UserId}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
+handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool}, IP, #worker{id=WorkerId, user_id=UserId, name=WorkerName}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
     % This code will change if multi aux chains are supported
     case Auxpool of
         #auxpool{name=AuxpoolName, round=AuxRound} ->
+            log4erl:debug(db, "~s&~s: Storing invalid share from ~s/~s, reason: ~p", [SubpoolName, AuxpoolName, WorkerName, IP, Reason]),
             {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
             case Workunit of
                 #workunit{aux_work=#auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum}} ->
@@ -350,6 +353,7 @@ handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round, aux_po
                     store_invalid_share_in_db(WorkerId, UserId, IP, Reason, AuxRound, AuxDB)
             end;
         _ ->
+            log4erl:debug(db, "~s: Storing invalid share from ~s/~s, reason: ~p", [SubpoolName, WorkerName, IP, Reason]),
             ok
     end,
     
@@ -371,10 +375,10 @@ handle_cast({set_view_update_interval, Seconds}, State=#state{view_update_interv
             timer:cancel(OldViewUpdateTimer),
             case Seconds of
                 0 ->
-                    io:format("ecoinpool_db: view updates disabled.~n"),
+                    log4erl:info(db, "View updates disabled."),
                     {noreply, State#state{view_update_interval=0, view_update_timer=undefined, view_update_dbs=undefined}};
                 _ ->
-                    io:format("ecoinpool_db: set view update timer to ~bs.~n", [Seconds]),
+                    log4erl:info(db, "Set view update timer to ~bs.", [Seconds]),
                     {ok, Timer} = timer:send_interval(Seconds * 1000, update_views),
                     ViewUpdateDBS = case OldViewUpdateDBS of
                         undefined -> dict:new();
@@ -414,7 +418,7 @@ handle_info(update_views, State=#state{view_update_interval=ViewUpdateInterval, 
 
 handle_info(view_update_complete, State=#state{view_update_running=ViewUpdateRunning}) ->
     MS = timer:now_diff(erlang:now(), ViewUpdateRunning),
-    io:format("ecoinpool_db: View update finished after ~.1fs.~n", [MS / 1000000]),
+    log4erl:info(db, "View update finished after ~.1fs.", [MS / 1000000]),
     {noreply, State#state{view_update_running=false}};
 
 handle_info(_Message, State) ->
@@ -441,9 +445,9 @@ do_update_views(DBS, PID) ->
         )
     catch
         exit:Reason ->
-            io:format("ecoinpool_db: exception in do_update_views: ~p~n", [Reason]);
+            log4erl:error(db, "Exception in do_update_views: ~p", [Reason]);
         error:Reason ->
-            io:format("ecoinpool_db: exception in do_update_views: ~p~n", [Reason])
+            log4erl:error(db, "Exception in do_update_views: ~p", [Reason])
     end,
     PID ! view_update_complete.
 
@@ -640,7 +644,7 @@ store_share_in_db(WorkerId, UserId, IP, State, Hash, ParentHash, Target, BlockNu
         couchbeam:save_doc(DB, Doc),
         ok
     catch error:Reason ->
-        io:format("ecoinpool_db:store_share_in_db: ignored error: ~p~n", [Reason]),
+        log4erl:warn(db, "store_share_in_db: ignored error: ~p", [Reason]),
         error
     end.
 
@@ -656,7 +660,7 @@ store_invalid_share_in_db(WorkerId, UserId, IP, Reason, Hash, ParentHash, Target
         couchbeam:save_doc(DB, Doc),
         ok
     catch error:Reason ->
-        io:format("ecoinpool_db:store_invalid_share_in_db: ignored error: ~p~n", [Reason]),
+        log4erl:warn(db, "store_invalid_share_in_db: ignored error: ~p", [Reason]),
         error
     end.
 

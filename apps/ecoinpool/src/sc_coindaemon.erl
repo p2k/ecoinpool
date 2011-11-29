@@ -139,7 +139,7 @@ get_first_tx_with_branches(_, _) ->
 
 init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
-    io:format("SC CoinDaemon starting~n"),
+    log4erl:warn(daemon, "SC CoinDaemon starting..."),
     
     Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
     Port = proplists:get_value(port, Config, 8555),
@@ -163,7 +163,7 @@ handle_call(_Message, _From, State) ->
 handle_cast(post_workunit, State=#state{subpool=SubpoolId}) ->
     case getwork_with_state(State, true) of
         {error, Message, NewState} ->
-            io:format("getwork returned error: ~p~n", [Message]),
+            log4erl:error(daemon, "sc_coindaemon: getwork returned error: ~p", [Message]),
             timer:send_after(1000, retry_post_workunit), % Retry in one second
             {noreply, NewState};
         {Result, Workunit, NewState} ->
@@ -183,7 +183,7 @@ handle_info(poll_daemon, State=#state{subpool=SubpoolId}) ->
         {error, Reason, NState} ->
             case Reason of
                 no_new_block -> ok;
-                _ -> io:format("exception in sc_coindaemon-poll_daemon: ~p~n", [Reason])
+                _ -> log4erl:error(daemon, "sc_coindaemon: Exception in poll_daemon: ~p", [Reason])
             end,
             {noreply, NState};
         {Result, Workunit, NState} ->
@@ -202,7 +202,7 @@ handle_info(_Message, State) ->
 
 terminate(_Reason, #state{timer=Timer}) ->
     timer:cancel(Timer),
-    io:format("SC CoinDaemon stopping~n"),
+    log4erl:warn(daemon, "SC CoinDaemon terminated."),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -305,6 +305,7 @@ getwork(URL, Auth) ->
 sendwork(URL, Auth, BData) ->
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"sc_testwork\",\"params\":[\"" ++ HexData ++ "\"]}",
+    log4erl:debug(daemon, "sc_coindaemon: Sending upstream: ~s", [PostData]),
     case ecoinpool_util:send_http_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),

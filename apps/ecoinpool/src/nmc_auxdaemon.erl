@@ -61,7 +61,7 @@ send_aux_pow(PID, AuxHash, AuxPOW) ->
 
 init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
-    io:format("NMC AuxDaemon starting~n"),
+    log4erl:warn(daemon, "NMC AuxDaemon starting..."),
     
     Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
     Port = proplists:get_value(port, Config, 8332),
@@ -106,7 +106,7 @@ handle_info(_Message, State) ->
 
 terminate(_Reason, #state{timer=Timer}) ->
     timer:cancel(Timer),
-    io:format("NMC AuxDaemon stopping~n"),
+    log4erl:warn(daemon, "NMC AuxDaemon terminated."),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -185,6 +185,7 @@ do_send_aux_pow(URL, Auth, AuxHash, AuxPOW) ->
     HexHash = ecoinpool_util:list_to_hexstr(binary:bin_to_list(ecoinpool_util:byte_reverse(AuxHash))),
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"getauxblock\",\"params\":[\"" ++ HexHash ++ "\",\"" ++ HexData ++ "\"]}",
+    log4erl:debug(daemon, "nmc_auxdaemon: Sending upstream: ~s", [PostData]),
     case ecoinpool_util:send_http_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),

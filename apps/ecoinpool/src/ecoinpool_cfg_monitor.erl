@@ -108,7 +108,7 @@ handle_cast({reload_subpool, SubpoolId}, CurrentSubpools) ->
             end;
         
         {error, invalid} -> % Ignore on invalid
-            io:format("ecoinpool_cfg_monitor:reload_subpool: Invalid document for subpool ID: ~p.", [SubpoolId]),
+            log4erl:warn("ecoinpool_cfg_monitor: reload_subpool: Invalid document for subpool ID: ~s.", [SubpoolId]),
             {noreply, CurrentSubpools}
     end;
 
@@ -122,7 +122,6 @@ handle_cast({remove_subpool, SubpoolId}, CurrentSubpools) ->
     end;
 
 handle_cast(_Message, CurrentSubpools) ->
-    io:format("ecoinpool_cfg_monitor:handle_cast: Unhandled message: ~p~n", [_Message]),
     {noreply, CurrentSubpools}.
 
 handle_info(_Message, CurrentSubpools) ->
