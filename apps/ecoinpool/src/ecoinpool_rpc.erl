@@ -117,11 +117,8 @@ compose_success(ReqId, Result) ->
         ]}
     ).
 
-respond_success(ReqPID, Req, ReqId, Result, Options) ->
-    % Make JSON reply
-    Body = compose_success(ReqId, Result),
-    % Create headers from options
-    Headers = lists:foldl(
+headers_from_options(Options) ->
+    lists:foldl(
         fun
             (longpolling, AccHeaders) ->
                 [{"X-Long-Polling", "/LP"} | AccHeaders];
@@ -134,14 +131,7 @@ respond_success(ReqPID, Req, ReqId, Result, Options) ->
         end,
         [],
         Options
-    ),
-    try % Protect against connection drops
-        Req:respond({200, [server_header(), {"Content-Type", "application/json"} | Headers], Body}),
-        ReqPID ! ok
-    catch exit:Reason ->
-        ReqPID ! {exit, Reason},
-        error
-    end.
+    ).
 
 compose_error(ReqId, Type) ->
     {HTTPCode, RPCCode, RPCMessage} = case Type of
@@ -172,83 +162,6 @@ compose_error(ReqId, Type) ->
     ),
     {HTTPCode, Body}.
 
-respond_error(ReqPID, Req, ReqId, Type) ->
-    {HTTPCode, Body} = compose_error(ReqId, Type),
-    try % Protect against connection drops
-        Req:respond({HTTPCode, [server_header(), {"Content-Type", "application/json"}], Body}),
-        ReqPID ! ok
-    catch exit:Reason ->
-        ReqPID ! {exit, Reason},
-        error
-    end.
-
-respond_error(ReqPID, Req, Type) ->
-    respond_error(ReqPID, Req, 1, Type).
-
-make_responder(ReqPID, Req, ReqId) ->
-    fun
-        % Late response handling (sends header in advance and uses chunked transfer)
-        ({start, WithHeartbeat}) ->
-            try % Protect against connection drops
-                Resp = Req:respond({200, [server_header(), {"Content-Type", "application/json"}], chunked}),
-                WithHeartbeat andalso (ReqPID ! {enter_heartbeat_loop, Resp}),
-                {ok, make_late_responder(ReqPID, Req, Resp, ReqId)}
-            catch exit:Reason ->
-                ReqPID ! {exit, Reason},
-                error
-            end;
-        (check) ->
-            % Explicitly check for connection drops
-            case process_info(ReqPID, status) of
-                undefined -> error;
-                _ -> ok
-            end;
-        (cancel) ->
-            mochiweb_socket:close(Req:get(socket)),
-            ReqPID ! ok;
-        % Normal response handling
-        ({ok, Result, Options}) ->
-            respond_success(ReqPID, Req, ReqId, Result, Options);
-        ({error, Type}) ->
-            respond_error(ReqPID, Req, ReqId, Type)
-    end.
-
-make_responder(ReqPID, Req) ->
-    make_responder(ReqPID, Req, 1).
-
-make_late_responder(ReqPID, Req, Resp, ReqId) ->
-    fun
-        (check) ->
-            % Explicitly check for connection drops
-            case process_info(ReqPID, status) of
-                undefined -> error;
-                _ -> ok
-            end;
-        (cancel) ->
-            mochiweb_socket:close(Req:get(socket)),
-            ReqPID ! ok;
-        ({ok, Result, _}) ->
-            Body = compose_success(ReqId, Result),
-            try % Protect against connection drops
-                Resp:write_chunk(Body),
-                Resp:write_chunk(<<>>),
-                ReqPID ! ok
-            catch exit:Reason ->
-                ReqPID ! {exit, Reason},
-                error
-            end;
-        ({error, Type}) ->
-            {_, Body} = compose_error(ReqId, Type),
-            try % Protect against connection drops
-                Resp:write_chunk(Body),
-                Resp:write_chunk(<<>>),
-                ReqPID ! ok
-            catch exit:Reason ->
-                ReqPID ! {exit, Reason},
-                error
-            end
-    end.
-
 % Valid methods are defined here
 parse_method(<<"getwork">>) -> getwork;
 parse_method(<<"sc_getwork">>) -> sc_getwork;
@@ -264,35 +177,36 @@ parse_path("/LP") ->
 parse_path(_) ->
     undefined.
 
+% Note: this function returns the request ID (except if the connection is canceled)
 handle_post(SubpoolPID, Req, Auth, LP) ->
     case Req:get_header_value("Content-Type") of
         Type when Type =:= "application/json"; Type =:= undefined ->
             try
                 case ejson:decode(Req:recv_body()) of % Decode JSON
                     {Properties} ->
-                        ReqId = proplists:get_value(<<"id">>, Properties, 1),
                         case parse_method(proplists:get_value(<<"method">>, Properties)) of
                             unknown ->
-                                respond_error(self(), Req, ReqId, method_not_found);
+                                self() ! {error, method_not_found};
                             invalid ->
-                                respond_error(self(), Req, ReqId, invalid_request);
+                                self() ! {error, invalid_request};
                             Method ->
                                 case proplists:get_value(<<"params">>, Properties, []) of
                                     Params when is_list(Params) ->
-                                        ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), Method, Params, Auth, LP, make_responder(self(), Req, ReqId));
+                                        ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), Req:get(peer), Method, Params, Auth, LP));
                                     _ ->
-                                        respond_error(self(), Req, ReqId, invalid_request)
+                                        self() ! {error, invalid_request}
                                 end
-                        end;
+                        end,
+                        proplists:get_value(<<"id">>, Properties, 1);
                     _ ->
-                        respond_error(self(), Req, invalid_request)
+                        self() ! {error, invalid_request}, 1
                 end
             catch _ ->
-                respond_error(self(), Req, parse_error)
+                self() ! {error, parse_error}, 1
             end;
         _ ->
             Req:respond({415, [{"Content-Type", "text/plain"}], "Unsupported Content-Type. We only accept application/json."}),
-            self() ! ok
+            self() ! cancel
     end.
 
 handle_request(SubpoolPID, Req) ->
@@ -310,49 +224,71 @@ handle_request(SubpoolPID, Req) ->
         _ ->
             unauthorized
     end,
-    case Req:accepts_content_type("application/json") of
+    ReqId = case Req:accepts_content_type("application/json") of
         true ->
             case Req:get(method) of
                 'GET' ->
                     case parse_path(Req:get(path)) of
                         {ok, LP} ->
-                            ecoinpool_server:rpc_request(SubpoolPID, Req:get(peer), default, [], Auth, LP, make_responder(self(), Req));
+                            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), Req:get(peer), default, [], Auth, LP));
                         _ ->
-                            respond_error(self(), Req, method_not_found)
-                    end;
+                            self() ! {error, method_not_found}
+                    end,
+                    1; % GET requests always get ID 1
                 'POST' ->
                     case parse_path(Req:get(path)) of
                         {ok, LP} ->
                             handle_post(SubpoolPID, Req, Auth, LP);
                         _ ->
-                            respond_error(self(), Req, method_not_found)
+                            self() ! {error, method_not_found}, 1
                     end;
                 _ ->
-                    Req:respond({501, [], []}), % Unknown method
-                    self() ! ok
+                    Req:respond({501, [{"Content-Type", "text/plain"}], "Unknown method"}),
+                    self() ! cancel
             end;
         _ ->
             Req:respond({406, [{"Content-Type", "text/plain"}], "For this service you must accept application/json."}),
-            self() ! ok
+            self() ! cancel
     end,
     % Block here, waiting for the result
     receive
-        ok -> ok;
-        {enter_heartbeat_loop, Resp} -> heartbeat_loop(Resp);
-        {exit, Reason} -> exit(Reason)
+        cancel ->
+            ok;
+        {error, Type} ->
+            {HTTPCode, Body} = compose_error(ReqId, Type),
+            Req:respond({HTTPCode, [server_header(), {"Content-Type", "application/json"}], Body});
+        {ok, Result, Options} ->
+            Body = compose_success(ReqId, Result),
+            Headers = headers_from_options(Options),
+            Req:respond({200, [server_header(), {"Content-Type", "application/json"} | Headers], Body});
+        {start, WithHeartbeat} ->
+            Resp = Req:respond({200, [server_header(), {"Content-Type", "application/json"}], chunked}),
+            longpolling_loop(ReqId, Resp, WithHeartbeat)
     after
         300000 ->
             % Die after 5 minutes if nothing happened
-            log4erl:info("ecoinpool_rpc: Dropped idle connection to ~s.", [Req:get(peer)]),
+            mochiweb_socket:close(Req:get(socket)),
+            log4erl:info("ecoinpool_rpc: Dropped idle connection to ~s.", [Req:get(peer)])
     end.
 
-heartbeat_loop(Resp) ->
+longpolling_loop(ReqId, Resp, WithHeartbeat) ->
     receive
-        ok -> ok;
-        {exit, Reason} -> exit(Reason)
-    after
-        300000 ->
-            % Send a newline character every 5 minutes to keep the connection alive
-            Resp:write_chunk(<<10>>),
-            heartbeat_loop(Resp)
+        {ok, Result, _} ->
+            Body = compose_success(ReqId, Result),
+            Resp:write_chunk(Body),
+            Resp:write_chunk(<<>>);
+        {error, Type} ->
+            {_, Body} = compose_error(ReqId, Type),
+            Resp:write_chunk(Body),
+            Resp:write_chunk(<<>>)
+    after 300000 ->
+        if
+            WithHeartbeat ->
+                % Send a newline character every 5 minutes to keep the connection alive
+                Resp:write_chunk(<<10>>),
+                longpolling_loop(ReqId, Resp, WithHeartbeat);
+            true ->
+                Req = Resp:get(request),
+                mochiweb_socket:close(Req:get(socket))
+        end
     end.

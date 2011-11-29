@@ -18,12 +18,39 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
-{application, ecoinpool,
- [
-  {description, "A pool mining software for cryptographic currencies"},
-  {vsn, "0.2.0"},
-  {registered, [ecoinpool_app]},
-  {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, couchbeam]},
-  {mod, {ecoinpool_app, []}},
-  {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
- ]}.
+-module(ecoinpool_rpc_request, [ReqPID, Peer, Method, Params, Auth, LP]).
+
+-export([get/1, has_params/0, check/0, start/1, ok/2, error/1]).
+
+get(peer) ->
+    Peer;
+get(method) ->
+    Method;
+get(params) ->
+    Params;
+get(auth) ->
+    Auth;
+get(lp) ->
+    LP.
+
+has_params() ->
+    case Params of
+        [] -> false;
+        _ -> true
+    end.
+
+check() ->
+    % Explicitly check for connection drops
+    case process_info(ReqPID, status) of
+        undefined -> error;
+        _ -> ok
+    end.
+
+start(WithHeartbeat) ->
+    ReqPID ! {start, WithHeartbeat}, ok.
+
+ok(Result, Options) ->
+    ReqPID ! {ok, Result, Options}, ok.
+
+error(Type) ->
+    ReqPID ! {error, Type}, ok.

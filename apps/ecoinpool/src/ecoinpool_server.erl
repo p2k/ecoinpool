@@ -27,7 +27,7 @@
 -export([start_link/1, reload_config/1, update_worker/2, remove_worker/2, get_worker_notifications/1, store_workunit/2, new_block_detected/1]).
 
 % Callback from ecoinpool_rpc
--export([rpc_request/7]).
+-export([rpc_request/2]).
 
 % Callbacks from gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -60,8 +60,8 @@ start_link(SubpoolId) ->
 reload_config(Subpool=#subpool{id=Id}) ->
     gen_server:cast({global, {subpool, Id}}, {reload_config, Subpool}).
 
-rpc_request(PID, Peer, Method, Params, Auth, LP, Responder) ->
-    gen_server:cast(PID, {rpc_request, Peer, Method, Params, Auth, LP, Responder}).
+rpc_request(PID, Req) ->
+    gen_server:cast(PID, {rpc_request, Req}).
 
 update_worker(SubpoolId, Worker) ->
     gen_server:cast({global, {subpool, SubpoolId}}, {update_worker, Worker}).
@@ -211,7 +211,7 @@ handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, w
     
     {noreply, State};
 
-handle_cast({rpc_request, Peer, Method, Params, Auth, LP, Responder}, State) ->
+handle_cast({rpc_request, Req}, State) ->
     % Extract state variables
     #state{
         subpool=Subpool,
@@ -229,26 +229,16 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, LP, Responder}, State) ->
     } = State,
     #subpool{name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
     % Check the method and authentication
-    case parse_method_and_auth(SubpoolName, Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) of
-        {ok, Worker=#worker{name=User, lp_heartbeat=WithHeartbeat}, Action} ->
+    case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod) of
+        {ok, Worker=#worker{name=WorkerName, lp_heartbeat=WithHeartbeat}, Action} ->
+            LP = Req:get(lp),
             case Action of % Now match for the action
                 getwork when LP ->
-                    log4erl:info(server, "~s: LP requested by ~s/~s", [SubpoolName, User, Peer]),
-                    case Responder({start, WithHeartbeat}) of
-                        {ok, LateResponder} ->
-                            {noreply, State#state{lp_queue=queue:in({Worker, LateResponder}, LPQueue)}};
-                        _ ->
-                            log4erl:debug(server, "~s: But the connection was already dropped!", [SubpoolName]),
-                            {noreply, State}
-                    end;
+                    log4erl:info(server, "~s: LP requested by ~s/~s", [SubpoolName, WorkerName, Req:get(peer)]),
+                    Req:start(WithHeartbeat),
+                    {noreply, State#state{lp_queue=queue:in({Worker, Req}, LPQueue)}};
                 getwork ->
-                    {Result, NewWorkQueue, NewWorkQueueSize} = assign_work(SubpoolName, erlang:now(), MaxWorkAge, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder),
-                    case Result of
-                        hit ->
-                            log4erl:info(server, "~s: Cache hit by ~s/~s - Queue size: ~b/~b", [SubpoolName, User, Peer, NewWorkQueueSize, MaxCacheSize]);
-                        miss ->
-                            log4erl:info(server, "~s: Cache miss by ~s/~s - Queue size: ~b/~b", [SubpoolName, User, Peer, NewWorkQueueSize, MaxCacheSize])
-                    end,
+                    {NewWorkQueue, NewWorkQueueSize} = assign_work(Req, SubpoolName, erlang:now(), MaxWorkAge, MaxCacheSize, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon),
                     if
                         WorkQueueSize =:= MaxCacheSize, % Cache was max size
                         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
@@ -258,14 +248,14 @@ handle_cast({rpc_request, Peer, Method, Params, Auth, LP, Responder}, State) ->
                     end,
                     {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
                 sendwork when not LP ->
-                    check_new_round(Subpool, check_work(Peer, Params, Subpool, Worker, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget, Responder)),
+                    check_new_round(Subpool, check_work(Req, Subpool, Worker, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget)),
                     {noreply, State};
                 _ ->
-                    Responder({error, method_not_found}),
+                    Req:error(method_not_found),
                     {noreply, State}
             end;
         {error, Type} ->
-            Responder({error, Type}),
+            Req:error(Type),
             {noreply, State}
     end;
 
@@ -285,12 +275,12 @@ handle_cast(new_block_detected, State) ->
     ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
     % Check if LP are still valid, then push onto the work queue
     CheckedLPQueue = queue:filter(
-        fun ({#worker{name=User}, Responder}) ->
-            case Responder(check) of
+        fun ({#worker{name=WorkerName}, Req}) ->
+            case Req:check() of
                 ok ->
                     true;
                 _ ->
-                    log4erl:debug(server, "~s: LP connection for ~s was dropped, skipping.", [SubpoolName, User]),
+                    log4erl:debug(server, "~s: LP connection for ~s/~s was dropped, skipping.", [SubpoolName, WorkerName, Req:get(peer)]),
                     false
             end
         end,
@@ -327,12 +317,12 @@ handle_cast({store_workunit, Workunit}, State) ->
     % Inspect the Cache/Queue
     {NewWorkQueue, NewWorkQueueSize} = if
         WorkQueueSize < 0 -> % We have connections waiting -> send out
-            {{value, {Worker=#worker{id=WorkerId}, Responder}}, NWQ} = queue:out(WorkQueue),
+            {{value, {Worker=#worker{id=WorkerId}, Req}}, NWQ} = queue:out(WorkQueue),
             case ets:insert_new(WorkTbl, Workunit#workunit{worker_id=WorkerId}) of
                 false -> log4erl:error(server, "~s: store_workunit got a collision :/", [SubpoolName]);
                 _ -> ok
             end,
-            Responder({ok, CoinDaemon:encode_workunit(Workunit), make_responder_options(Worker, Workunit)}),
+            Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit)),
             {NWQ, WorkQueueSize+1};
         WorkQueueSize < MaxCacheSize -> % We are under the cache limit -> cache
             {queue:in(Workunit, WorkQueue), WorkQueueSize+1};
@@ -422,12 +412,12 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-parse_method_and_auth(SubpoolName, Peer, Method, Params, Auth, WorkerTbl, GetworkMethod, SendworkMethod) ->
-    Action = case Method of
+parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod) ->
+    Action = case Req:get(method) of
         GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
-            if
-                length(Params) =:= 0 -> getwork;
-                true -> sendwork
+            case Req:has_params() of
+                true -> sendwork;
+                _ -> getwork
             end;
         GetworkMethod ->
             getwork;
@@ -443,22 +433,22 @@ parse_method_and_auth(SubpoolName, Peer, Method, Params, Auth, WorkerTbl, Getwor
             {error, method_not_found};
         _ ->
             % Check authentication
-            case Auth of
+            case Req:get(auth) of
                 unauthorized ->
-                    log4erl:warn(server, "~s: rpc_request: ~s: Unauthorized!", [SubpoolName, Peer]),
+                    log4erl:warn(server, "~s: rpc_request: ~s: Unauthorized!", [SubpoolName, Req:get(peer)]),
                     {error, authorization_required};
                 {User, Password} ->
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
                             {ok, Worker, Action};
                         [] ->
-                            log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Peer, User]),
+                            log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Req:get(peer), User]),
                             {error, authorization_required}
                     end
             end
     end.
 
-assign_work(SubpoolName, Now, MaxWorkAge, Worker=#worker{id=WorkerId}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon, Responder) ->
+assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, Worker=#worker{id=WorkerId, name=WorkerName}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon) ->
     % Look if work is available in the Cache
     if
         WorkQueueSize > 0 -> % Cache hit
@@ -469,23 +459,26 @@ assign_work(SubpoolName, Now, MaxWorkAge, Worker=#worker{id=WorkerId}, WorkQueue
                         false -> log4erl:error(server, "~s: assign_work got a collision :/", [SubpoolName]);
                         _ -> ok
                     end,
-                    Responder({ok, CoinDaemon:encode_workunit(Workunit), make_responder_options(Worker, Workunit)}),
-                    {hit, NewWorkQueue, WorkQueueSize-1};
+                    Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit)),
+                    log4erl:info(server, "~s: Cache hit by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(peer), WorkQueueSize-1, MaxCacheSize]),
+                    {NewWorkQueue, WorkQueueSize-1};
                 _ -> % Try again if too old (tail recursive)
                     log4erl:debug(server, "~s: assign_work: discarded an old workunit.", [SubpoolName]),
-                    assign_work(SubpoolName, Now, MaxWorkAge, Worker, NewWorkQueue, WorkQueueSize-1, WorkTbl, CoinDaemon, Responder)
+                    assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, Worker, NewWorkQueue, WorkQueueSize-1, WorkTbl, CoinDaemon)
             end;
         true -> % Cache miss, append to waiting queue
-            {miss, queue:in({Worker, Responder}, WorkQueue), WorkQueueSize-1}
+            log4erl:info(server, "~s: Cache miss by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(peer), WorkQueueSize-1, MaxCacheSize]),
+            {queue:in({Worker, Req}, WorkQueue), WorkQueueSize-1}
     end.
 
-check_work(Peer, Params, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=User}, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget, Responder) ->
+check_work(Req, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerName}, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget) ->
     % Analyze results
-    case CoinDaemon:analyze_result(Params) of
+    Peer = Req:get(peer),
+    case CoinDaemon:analyze_result(Req:get(params)) of
         error ->
-            log4erl:warn(server, "~s: Wrong data from ~s/~s: ~p", [SubpoolName, User, Peer, Params]),
+            log4erl:warn(server, "~s: Wrong data from ~s/~s: ~p", [SubpoolName, WorkerName, Peer, Req:get(params)]),
             ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
-            Responder({error, invalid_request}),
+            Req:error(invalid_request),
             [];
         Results ->
             % Lookup workunits, check hash target and check duplicates
@@ -499,7 +492,7 @@ check_work(Peer, Params, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name
                                 true ->
                                     case ets:insert_new(HashTbl, {Hash}) of % Also stores the new hash
                                         true ->
-                                            check_for_candidate(SubpoolName, Workunit, Hash, BData, User, Peer);
+                                            check_for_candidate(SubpoolName, Workunit, Hash, BData, WorkerName, Peer);
                                         _ ->
                                             {duplicate, Workunit, Hash}
                                     end
@@ -511,7 +504,7 @@ check_work(Peer, Params, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name
                 Results
             ),
             % Process results in new process
-            spawn(fun () -> process_results(Peer, ResultsWithWU, Subpool, Worker, CoinDaemon, MMM, Responder) end),
+            spawn(fun () -> process_results(Req, ResultsWithWU, Subpool, Worker, CoinDaemon, MMM) end),
             % Combine candidate announcements (used by check_new_round)
             lists:foldl(
                 fun
@@ -525,8 +518,9 @@ check_work(Peer, Params, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name
             )
     end.
 
-process_results(Peer, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=User}, CoinDaemon, MMM, Responder) ->
+process_results(Req, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerName}, CoinDaemon, MMM) ->
     % Process all results
+    Peer = Req:get(peer),
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
             (stale, {AccReplyItems, _, AccCandidates}) ->
@@ -551,23 +545,23 @@ process_results(Peer, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worke
         Results 
     ),
     % Send reply
-    Options = make_responder_options(Worker),
+    Options = make_response_options(Worker),
     case RejectReason of
         undefined ->
-            Responder({ok, CoinDaemon:make_reply(ReplyItems), Options});
+            Req:ok(CoinDaemon:make_reply(ReplyItems), Options);
         _ ->
-            Responder({ok, CoinDaemon:make_reply(ReplyItems), [{reject_reason, RejectReason} | Options]})
+            Req:ok(CoinDaemon:make_reply(ReplyItems), [{reject_reason, RejectReason} | Options])
     end,
     % Send candidates
     lists:foreach(
         fun (C={Chain, _, _, _}) ->
             case send_candidate(C, CoinDaemon, MMM) of
                 accepted ->
-                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got accepted!", [SubpoolName, User, Peer, Chain]);
+                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got accepted!", [SubpoolName, WorkerName, Peer, Chain]);
                 rejected ->
-                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got rejected!", [SubpoolName, User, Peer, Chain]);
+                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got rejected!", [SubpoolName, WorkerName, Peer, Chain]);
                 {error, Message} ->
-                    log4erl:error(server, "~s: Upstream error from ~s/~s to ~p chain! Message: ~p", [SubpoolName, User, Peer, Chain, Message])
+                    log4erl:error(server, "~s: Upstream error from ~s/~s to ~p chain! Message: ~p", [SubpoolName, WorkerName, Peer, Chain, Message])
             end
         end,
         Candidates
@@ -586,14 +580,14 @@ check_work_age(SubpoolName, WorkQueue, WorkQueueSize, Now, MaxWorkAge) ->
             {WorkQueue, WorkQueueSize} % Done
     end.
 
-make_responder_options(#worker{lp=LP}) ->
+make_response_options(#worker{lp=LP}) ->
     case LP of
         true -> [longpolling];
         _ -> []
     end.
 
-make_responder_options(Worker, #workunit{block_num=BlockNum}) ->
-    [{block_num, BlockNum} | make_responder_options(Worker)].
+make_response_options(Worker, #workunit{block_num=BlockNum}) ->
+    [{block_num, BlockNum} | make_response_options(Worker)].
 
 check_new_round(_, []) ->
     ok;
@@ -658,13 +652,13 @@ check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool) ->
             OldMMM
     end.
 
-check_for_candidate(SubpoolName, Workunit=#workunit{aux_work=AuxWork}, Hash, BData, User, Peer) ->
+check_for_candidate(SubpoolName, Workunit=#workunit{aux_work=AuxWork}, Hash, BData, WorkerName, Peer) ->
     MainCandidate = case hash_is_below_target(Hash, Workunit) of
-        true -> log4erl:warn(server, "~s: +++ Main candidate share from ~s/~s! +++", [SubpoolName, User, Peer]), [main];
+        true -> log4erl:warn(server, "~s: +++ Main candidate share from ~s/~s! +++", [SubpoolName, WorkerName, Peer]), [main];
         _ -> []
     end,
     AuxCandidate = case hash_is_below_target(Hash, AuxWork) of
-        true -> log4erl:warn(server, "~s: +++ Aux candidate share from ~s/~s! +++", [SubpoolName, User, Peer]), [aux];
+        true -> log4erl:warn(server, "~s: +++ Aux candidate share from ~s/~s! +++", [SubpoolName, WorkerName, Peer]), [aux];
         _ -> []
     end,
     {ok, Workunit, Hash, BData, lists:merge(MainCandidate, AuxCandidate)}.
