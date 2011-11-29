@@ -268,29 +268,40 @@ get_block_number(URL, Auth) ->
     {Body} = ejson:decode(ResponseBody),
     proplists:get_value(<<"result">>, Body) + 1.
 
-get_memory_pool(URL, Auth) ->
-    {ok, "200", _ResponseHeaders, ResponseBody} = ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getmemorypool\"}"),
-    {Body} = ejson:decode(ResponseBody),
-    {Result} = proplists:get_value(<<"result">>, Body),
-    1 = proplists:get_value(<<"version">>, Result),
-    
-    HashPrevBlock = ecoinpool_util:byte_reverse(ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"previousblockhash">>, Result))),
-    CoinbaseValue = proplists:get_value(<<"coinbasevalue">>, Result),
-    Timestamp = proplists:get_value(<<"time">>, Result),
-    <<Bits:32/unsigned>> = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"bits">>, Result)),
-    Transactions = lists:map(fun ecoinpool_util:hexbin_to_bin/1, proplists:get_value(<<"transactions">>, Result)),
-    
-    TransactionHashes = lists:map(fun ecoinpool_hash:dsha256_hash/1, Transactions),
-    FT = ecoinpool_hash:first_tree_branches_dsha256_hash(TransactionHashes),
-    
-    #memorypool{
-        hash_prev_block = HashPrevBlock,
-        timestamp = Timestamp,
-        bits = Bits,
-        transactions = Transactions,
-        first_tree_branches = FT,
-        coinbase_value = CoinbaseValue
-    }.
+get_memory_pool(URL, Auth, OldMemorypool) ->
+    case ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getmemorypool\"}") of
+        {ok, "200", _ResponseHeaders, ResponseBody} ->
+            {Body} = ejson:decode(ResponseBody),
+            {Result} = proplists:get_value(<<"result">>, Body),
+            1 = proplists:get_value(<<"version">>, Result),
+            
+            HashPrevBlock = ecoinpool_util:byte_reverse(ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"previousblockhash">>, Result))),
+            CoinbaseValue = proplists:get_value(<<"coinbasevalue">>, Result),
+            Timestamp = proplists:get_value(<<"time">>, Result),
+            <<Bits:32/unsigned>> = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"bits">>, Result)),
+            Transactions = lists:map(fun ecoinpool_util:hexbin_to_bin/1, proplists:get_value(<<"transactions">>, Result)),
+            
+            TransactionHashes = lists:map(fun ecoinpool_hash:dsha256_hash/1, Transactions),
+            FT = ecoinpool_hash:first_tree_branches_dsha256_hash(TransactionHashes),
+            
+            case OldMemorypool of
+                #memorypool{hash_prev_block=HashPrevBlock, bits=Bits, first_tree_branches=FT, coinbase_value=CoinbaseValue} ->
+                    keep_old; % Nothing changed
+                _ ->
+                    log4erl:debug(daemon, "btc_coindaemon: get_memory_pool: New data received."),
+                    #memorypool{
+                        hash_prev_block = HashPrevBlock,
+                        timestamp = Timestamp,
+                        bits = Bits,
+                        transactions = Transactions,
+                        first_tree_branches = FT,
+                        coinbase_value = CoinbaseValue
+                    }
+            end;
+        {error, req_timedout} ->
+            log4erl:warn(daemon, "btc_coindaemon: get_memory_pool: Request timed out!"),
+            keep_old
+    end.
 
 check_fetch_now(_, #state{last_fetch=undefined}) ->
     {true, starting};
@@ -329,13 +340,11 @@ fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=
                     ok
             end,
             
-            Memorypool = get_memory_pool(URL, Auth),
-            CoinbaseTx = case memorypools_equivalent(OldMemorypool, Memorypool) of
-                true ->
-                    OldCoinbaseTx;
-                _ ->
-                    log4erl:debug(daemon, "btc_coindaemon: fetch_work_with_state: memory pool changed."),
-                    undefined
+            {Memorypool, CoinbaseTx} = case get_memory_pool(URL, Auth, OldMemorypool) of
+                keep_old ->
+                    {OldMemorypool, OldCoinbaseTx};
+                NewMemorypool ->
+                    {NewMemorypool, undefined}
             end,
             
             case Reason of
@@ -416,14 +425,6 @@ make_workunit(Header=#btc_header{bits=Bits}, BlockNum, AuxWork) ->
     WUId = workunit_id_from_btc_header(Header),
     Target = ecoinpool_util:bits_to_target(Bits),
     #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BHeader, aux_work=AuxWork}.
-
-memorypools_equivalent(
-            #memorypool{hash_prev_block=A, bits=B, first_tree_branches=C, coinbase_value=D},
-            #memorypool{hash_prev_block=A, bits=B, first_tree_branches=C, coinbase_value=D}
-        ) ->
-    true;
-memorypools_equivalent(_, _) ->
-    false.
 
 make_script_sig_trailer(undefined) ->
     [];
