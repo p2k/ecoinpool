@@ -183,6 +183,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     
     % Check the aux pool configuration
     MMM = check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool),
+    CoinDaemon:set_mmm(MMM),
     
     % Check cache settings
     if
@@ -207,10 +208,15 @@ handle_cast({coindaemon_ready, PID}, State=#state{subpool=#subpool{max_cache_siz
     % Always trigger a block change here
     handle_cast(new_block_detected, State#state{cdaemon=CoinDaemon});
 
-handle_cast({auxdaemon_ready, Module, PID}, State=#state{cdaemon=CoinDaemon, mmm=OldMMM}) ->
-    MMM = OldMMM:update_aux_daemon(Module, PID),
-    CoinDaemon:set_mmm(MMM),
-    {noreply, State#state{mmm=MMM}};
+handle_cast({auxdaemon_ready, Module, PID}, State=#state{subpool=#subpool{name=SubpoolName}}, cdaemon=CoinDaemon, mmm=OldMMM}) ->
+    case OldMMM:update_aux_daemon(Module, PID) of
+        unchanged ->
+            {noreply, State};
+        MMM ->
+            log4erl:info(server, "~s: Got new AuxDaemon process.", [SubpoolName]),
+            CoinDaemon:set_mmm(MMM),
+            {noreply, State#state{mmm=MMM}}
+    end;
 
 handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     #subpool{id=SubpoolId, name=SubpoolName, worker_share_subpools=WorkerShareSubpools} = Subpool,

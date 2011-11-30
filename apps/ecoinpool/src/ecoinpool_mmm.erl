@@ -65,7 +65,7 @@ send_aux_pow(#auxwork{aux_hash=AuxHash}, CoinbaseTx, BlockHash, TxTreeBranches, 
 update_aux_daemon(Module, PID) ->
     Pair = {Module, PID},
     case lists:member(Pair, AuxDaemons) of
-        true -> THIS;
+        true -> unchanged;
         _ -> ecoinpool_mmm:new(lists:keyreplace(Module, 1, AuxDaemons, Pair))
     end.
 
