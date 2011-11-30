@@ -208,7 +208,7 @@ handle_cast({coindaemon_ready, PID}, State=#state{subpool=#subpool{max_cache_siz
     % Always trigger a block change here
     handle_cast(new_block_detected, State#state{cdaemon=CoinDaemon});
 
-handle_cast({auxdaemon_ready, Module, PID}, State=#state{subpool=#subpool{name=SubpoolName}}, cdaemon=CoinDaemon, mmm=OldMMM}) ->
+handle_cast({auxdaemon_ready, Module, PID}, State=#state{subpool=#subpool{name=SubpoolName}, cdaemon=CoinDaemon, mmm=OldMMM}) ->
     case OldMMM:update_aux_daemon(Module, PID) of
         unchanged ->
             {noreply, State};
