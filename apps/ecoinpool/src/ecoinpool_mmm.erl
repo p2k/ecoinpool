@@ -33,7 +33,7 @@
 
 -export([get_new_aux_work/1, send_aux_pow/5]).
 
--export([add_aux_daemon/2, remove_aux_daemon/1, aux_daemon_modules/0]).
+-export([update_aux_daemon/2, add_aux_daemon/2, remove_aux_daemon/1, aux_daemon_modules/0]).
 
 get_new_aux_work(OldAuxWork) ->
     % This code will change if multi aux chains are supported
@@ -61,6 +61,13 @@ send_aux_pow(#auxwork{aux_hash=AuxHash}, CoinbaseTx, BlockHash, TxTreeBranches, 
     Module:send_aux_pow(PID, AuxHash, AuxPOW).
 
 % The following code is for future multi aux chain support
+
+update_aux_daemon(Module, PID) ->
+    Pair = {Module, PID},
+    case lists:member(Pair) of
+        true -> THIS;
+        _ -> ecoinpool_mmm:new(lists:keyreplace(Module, 1, AuxDaemons, Pair))
+    end.
 
 add_aux_daemon(Module, PID) ->
     ecoinpool_mmm:new([{Module, PID} | AuxDaemons]).

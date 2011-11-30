@@ -24,7 +24,17 @@
 -include("ecoinpool_db_records.hrl").
 -include("ecoinpool_workunit.hrl").
 
--export([start_link/1, reload_config/1, update_worker/2, remove_worker/2, get_worker_notifications/1, store_workunit/2, new_block_detected/1]).
+-export([
+    start_link/1,
+    reload_config/1,
+    coindaemon_ready/2,
+    auxdaemon_ready/3,
+    update_worker/2,
+    remove_worker/2,
+    get_worker_notifications/1,
+    store_workunit/2,
+    new_block_detected/1
+]).
 
 % Callback from ecoinpool_rpc
 -export([rpc_request/2]).
@@ -59,6 +69,12 @@ start_link(SubpoolId) ->
 
 reload_config(Subpool=#subpool{id=Id}) ->
     gen_server:cast({global, {subpool, Id}}, {reload_config, Subpool}).
+
+coindaemon_ready(SubpoolId, PID) ->
+    gen_server:cast({global, {subpool, SubpoolId}}, {coindaemon_ready, PID}).
+
+auxdaemon_ready(SubpoolId, Module, PID) ->
+    gen_server:cast({global, {subpool, SubpoolId}}, {auxdaemon_ready, Module, PID}).
 
 rpc_request(PID, Req) ->
     gen_server:cast(PID, {rpc_request, Req}).
@@ -167,13 +183,10 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     
     % Check the aux pool configuration
     MMM = check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool),
-    CoinDaemon:set_mmm(MMM),
     
-    % Update state
-    NewState = State#state{subpool=Subpool, cdaemon=CoinDaemon, mmm=MMM, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget},
-    
-    % Check cache settings and startup
+    % Check cache settings
     if
+        not StartCoinDaemon, % CoinDaemon was already running
         WorkQueueSize =:= OldMaxCacheSize, % Cache was full
         WorkQueueSize < MaxCacheSize -> % But too few entries on new setting
             log4erl:debug(server, "~s: reload_config: cache size changed from ~b to ~b requesting more work.", [SubpoolName, OldMaxCacheSize, MaxCacheSize]),
@@ -181,12 +194,23 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
         true ->
             ok
     end,
-    if
-        StartCoinDaemon -> % If the coin daemon was (re-)started, always signal a block change
-            handle_cast(new_block_detected, NewState);
+    {noreply, State#state{subpool=Subpool, cdaemon=CoinDaemon, mmm=MMM, gw_method=GetworkMethod, sw_method=SendworkMethod, share_target=ShareTarget}};
+
+handle_cast({coindaemon_ready, PID}, State=#state{subpool=#subpool{max_cache_size=MaxCacheSize}, workq_size=WorkQueueSize, cdaemon=OldCoinDaemon}) ->
+    CoinDaemon = OldCoinDaemon:update_pid(PID),
+    if % At this point, no request can be running yet; if it should, start it now
+        WorkQueueSize < MaxCacheSize ->
+            CoinDaemon:post_workunit();
         true ->
-            {noreply, NewState}
-    end;
+            ok
+    end,
+    % Always trigger a block change here
+    handle_cast(new_block_detected, State#state{cdaemon=CoinDaemon});
+
+handle_cast({auxdaemon_ready, Module, PID}, State=#state{cdaemon=CoinDaemon, mmm=OldMMM}) ->
+    MMM = OldMMM:update_aux_daemon(Module, PID),
+    CoinDaemon:set_mmm(MMM),
+    {noreply, State#state{mmm=MMM}};
 
 handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
     #subpool{id=SubpoolId, name=SubpoolName, worker_share_subpools=WorkerShareSubpools} = Subpool,
@@ -394,9 +418,18 @@ handle_info(check_work_age, State) ->
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, work_checker=WorkChecker}) ->
+terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, workq_size=WorkQueueSize, lp_queue=LPQueue, work_checker=WorkChecker}) ->
     % Stop the RPC
     ecoinpool_rpc:stop_rpc(Port),
+    % Cancel open connections
+    Cancel = fun ({_, Req}) -> Req:error({-32603, <<"Server is terminating!">>}) end,
+    lists:foreach(Cancel, queue:to_list(LPQueue)),
+    if
+        WorkQueueSize < 0 ->
+            lists:foreach(Cancel, queue:to_list(WorkQueue));
+        true ->
+            ok
+    end,
     % Unregister notifications
     ecoinpool_worker_monitor:set_worker_notifications(Id, []),
     % We don't need to stop the CoinDaemon, because that will be handled by the supervisor

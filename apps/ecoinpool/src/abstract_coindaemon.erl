@@ -38,7 +38,7 @@
     get_first_tx_with_branches/1
 ]).
 
--export([coindaemon_module/0]).
+-export([coindaemon_module/0, update_pid/1]).
 
 getwork_method() ->
     M:getwork_method().
@@ -72,3 +72,11 @@ get_first_tx_with_branches(Workunit) ->
 
 coindaemon_module() ->
     M.
+
+update_pid(NewPID) ->
+    if
+        PID =:= NewPID ->
+            THIS;
+        true ->
+            abstract_coindaemon:new(M, NewPID)
+    end.

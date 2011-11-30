@@ -267,8 +267,8 @@ handle_request(SubpoolPID, Req) ->
     after
         300000 ->
             % Die after 5 minutes if nothing happened
-            mochiweb_socket:close(Req:get(socket)),
-            log4erl:info("ecoinpool_rpc: Dropped idle connection to ~s.", [Req:get(peer)])
+            log4erl:info("ecoinpool_rpc: Dropping idle connection to ~s.", [Req:get(peer)]),
+            mochiweb_socket:close(Req:get(socket))
     end.
 
 longpolling_loop(ReqId, Resp, WithHeartbeat) ->

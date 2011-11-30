@@ -53,6 +53,7 @@
     
     timer,
     txtbl,
+    worktbl,
     block_num,
     last_fetch,
     
@@ -66,7 +67,7 @@
     hash_prev_block,
     timestamp,
     bits,
-    transactions,
+    tx_index,
     first_tree_branches,
     coinbase_value
 }).
@@ -158,17 +159,22 @@ init([SubpoolId, Config]) ->
     end,
     
     TxTbl = ets:new(txtbl, [set, protected]),
+    WorkTbl = ets:new(worktbl, [set, protected]),
     
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
-    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, timer=Timer, txtbl=TxTbl}}.
+    
+    ecoinpool_server:coindaemon_ready(SubpoolId, self()),
+    
+    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, timer=Timer, txtbl=TxTbl, worktbl=WorkTbl}}.
 
-handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, txtbl=TxTbl}) ->
+handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, worktbl=WorkTbl, txtbl=TxTbl}) ->
     Header = btc_protocol:decode_header(BData),
     WorkunitId = workunit_id_from_btc_header(Header),
-    case ets:lookup(TxTbl, WorkunitId) of
-        [{_, Transactions, _}] ->
+    case ets:lookup(WorkTbl, WorkunitId) of
+        [{_, CoinbaseTx, TxIndex, _}] ->
+            {_, Transactions} = ets:lookup(TxTbl, TxIndex),
             try
-                {reply, send_block(URL, Auth, Header, Transactions), State}
+                {reply, send_block(URL, Auth, Header, [CoinbaseTx | Transactions]), State}
             catch error:_ ->
                 {reply, {error, <<"exception in btc_coindaemon:send_block/3">>}, State}
             end;
@@ -176,9 +182,9 @@ handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, txtbl=
             {reply, rejected, State}
     end;
 
-handle_call({get_first_tx_with_branches, #workunit{id=WorkunitId}}, _From, State=#state{txtbl=TxTbl}) ->
-    case ets:lookup(TxTbl, WorkunitId) of
-        [{_, [CoinbaseTx|_], FirstTreeBranches}] ->
+handle_call({get_first_tx_with_branches, #workunit{id=WorkunitId}}, _From, State=#state{worktbl=WorkTbl}) ->
+    case ets:lookup(WorkTbl, WorkunitId) of
+        [{_, CoinbaseTx, _, FirstTreeBranches}] ->
             FirstTreeBranchesLE = lists:map(fun ecoinpool_util:byte_reverse/1, FirstTreeBranches),
             {reply, {ok, CoinbaseTx, FirstTreeBranchesLE}, State};
         [] ->
@@ -195,8 +201,8 @@ handle_cast(post_workunit, OldState) ->
     % Check if new work must be fetched
     State = fetch_work_with_state(OldState),
     % Extract state variables
-    #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, txtbl=TxTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx, aux_work=AuxWork} = State,
-    #memorypool{transactions=Transactions, first_tree_branches=FirstTreeBranches} = Memorypool,
+    #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, worktbl=WorkTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx, aux_work=AuxWork} = State,
+    #memorypool{tx_index=TxIndex, first_tree_branches=FirstTreeBranches} = Memorypool,
     % Create/update coinbase
     CoinbaseTx = case OldCoinbaseTx of
         undefined ->
@@ -208,8 +214,8 @@ handle_cast(post_workunit, OldState) ->
     Header = make_btc_header(Memorypool, CoinbaseTx),
     % Create the workunit
     Workunit = make_workunit(Header, BlockNum, AuxWork),
-    % Store transactions for this workunit, including the coinbase transaction
-    ets:insert(TxTbl, {Workunit#workunit.id, [CoinbaseTx | Transactions], FirstTreeBranches}),
+    % Store the coinbase transaction and the transaction index for this workunit
+    ets:insert(WorkTbl, {Workunit#workunit.id, CoinbaseTx, TxIndex, FirstTreeBranches}),
     % Send back
     ecoinpool_server:store_workunit(SubpoolId, Workunit),
     % Update state
@@ -268,7 +274,7 @@ get_block_number(URL, Auth) ->
     {Body} = ejson:decode(ResponseBody),
     proplists:get_value(<<"result">>, Body) + 1.
 
-get_memory_pool(URL, Auth, OldMemorypool) ->
+get_memory_pool(URL, Auth, TxTbl, OldMemorypool) ->
     case ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getmemorypool\"}") of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),
@@ -288,12 +294,14 @@ get_memory_pool(URL, Auth, OldMemorypool) ->
                 #memorypool{hash_prev_block=HashPrevBlock, bits=Bits, first_tree_branches=FT, coinbase_value=CoinbaseValue} ->
                     keep_old; % Nothing changed
                 _ ->
-                    log4erl:debug(daemon, "btc_coindaemon: get_memory_pool: New data received."),
+                    TxIndex = ets:info(TxTbl, size),
+                    ets:insert(TxTbl, {TxIndex, Transactions}),
+                    log4erl:debug(daemon, "btc_coindaemon: get_memory_pool: New data received (#~b; ~b TX).", [TxIndex, length(Transactions)]),
                     #memorypool{
                         hash_prev_block = HashPrevBlock,
                         timestamp = Timestamp,
                         bits = Bits,
-                        transactions = Transactions,
+                        tx_index = TxIndex,
                         first_tree_branches = FT,
                         coinbase_value = CoinbaseValue
                     }
@@ -326,7 +334,7 @@ check_fetch_now(Now, #state{url=URL, auth=Auth, block_num=BlockNum, last_fetch=L
             end
     end.
 
-fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=TxTbl, memorypool=OldMemorypool, coinbase_tx=OldCoinbaseTx}) ->
+fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=TxTbl, worktbl=WorkTbl, memorypool=OldMemorypool, coinbase_tx=OldCoinbaseTx}) ->
     Now = erlang:now(),
     NewState = case check_fetch_now(Now, State) of
         false ->
@@ -335,12 +343,13 @@ fetch_work_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, txtbl=
             case Reason of
                 {new_block, _} ->
                     ecoinpool_server:new_block_detected(SubpoolId),
+                    ets:delete_all_objects(WorkTbl),
                     ets:delete_all_objects(TxTbl);
                 _ ->
                     ok
             end,
             
-            {Memorypool, CoinbaseTx} = case get_memory_pool(URL, Auth, OldMemorypool) of
+            {Memorypool, CoinbaseTx} = case get_memory_pool(URL, Auth, TxTbl, OldMemorypool) of
                 keep_old ->
                     {OldMemorypool, OldCoinbaseTx};
                 NewMemorypool ->

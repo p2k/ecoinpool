@@ -148,6 +148,9 @@ init([SubpoolId, Config]) ->
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
     
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
+    
+    ecoinpool_server:coindaemon_ready(SubpoolId, self()),
+    
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 
 handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth}) ->

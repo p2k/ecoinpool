@@ -70,6 +70,9 @@ init([SubpoolId, Config]) ->
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
     
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
+    
+    ecoinpool_server:auxdaemon_ready(SubpoolId, self(), ?MODULE),
+    
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 
 handle_call(get_aux_work, _From, OldState) ->
