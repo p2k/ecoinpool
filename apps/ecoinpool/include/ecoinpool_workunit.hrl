@@ -32,5 +32,6 @@
     block_num :: integer(),
     data :: binary(),
     worker_id :: binary(),
-    aux_work :: #auxwork{} | undefined
+    aux_work :: #auxwork{} | undefined,
+    aux_work_stale = false :: boolean()
 }).

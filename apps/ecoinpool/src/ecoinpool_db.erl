@@ -303,7 +303,13 @@ handle_cast({set_auxpool_round, SubpoolId, Round}, State=#state{conf_db=ConfDb})
     end,
     {noreply, State};
 
-handle_cast({store_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool}, IP, #worker{id=WorkerId, user_id=UserId, name=WorkerName}, #workunit{target=Target, block_num=BlockNum, data=BData, aux_work=AuxWork}, Hash, Candidates}, State=#state{srv_conn=S}) ->
+handle_cast({store_share,
+            #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool},
+            IP,
+            #worker{id=WorkerId, user_id=UserId, name=WorkerName},
+            #workunit{target=Target, block_num=BlockNum, data=BData, aux_work=AuxWork, aux_work_stale=AuxWorkStale},
+            Hash,
+            Candidates}, State=#state{srv_conn=S}) ->
     % This code will change if multi aux chains are supported
     Now = erlang:now(),
     {MainState, AuxState} = lists:foldl(
@@ -318,14 +324,21 @@ handle_cast({store_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpo
     
     NewState = case Auxpool of
         #auxpool{name=AuxpoolName, round=AuxRound} when AuxWork =/= undefined ->
-            log4erl:debug(db, "~s&~s: Storing ~p&~p share from ~s/~s", [SubpoolName, AuxpoolName, MainState, AuxState, WorkerName, IP]),
             {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
-            #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum} = AuxWork,
-            case store_share_in_db(WorkerId, UserId, IP, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, BData, AuxRound, AuxDB) of
-                ok ->
-                    store_view_update(AuxDB, Now, State);
-                _ ->
-                    State
+            if
+                AuxWorkStale ->
+                    log4erl:debug(db, "~s&~s: Storing ~p&stale share from ~s/~s", [SubpoolName, AuxpoolName, MainState, WorkerName, IP]),
+                    store_invalid_share_in_db(WorkerId, UserId, IP, stale, AuxRound, AuxDB),
+                    State;
+                true ->
+                    #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum} = AuxWork,
+                    log4erl:debug(db, "~s&~s: Storing ~p&~p share from ~s/~s", [SubpoolName, AuxpoolName, MainState, AuxState, WorkerName, IP]),
+                    case store_share_in_db(WorkerId, UserId, IP, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, BData, AuxRound, AuxDB) of
+                        ok ->
+                            store_view_update(AuxDB, Now, State);
+                        _ ->
+                            State
+                    end
             end;
         _ ->
             log4erl:debug(db, "~s: Storing ~p share from ~s/~s", [SubpoolName, MainState, WorkerName, IP]),

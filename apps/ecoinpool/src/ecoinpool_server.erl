@@ -33,7 +33,8 @@
     remove_worker/2,
     get_worker_notifications/1,
     store_workunit/2,
-    new_block_detected/1
+    new_block_detected/1,
+    new_aux_block_detected/2
 ]).
 
 % Callback from ecoinpool_rpc
@@ -95,7 +96,10 @@ store_workunit(SubpoolId, Workunit) ->
     gen_server:cast({global, {subpool, SubpoolId}}, {store_workunit, Workunit}).
 
 new_block_detected(SubpoolId) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, new_block_detected).
+    gen_server:cast({global, {subpool, SubpoolId}}, {new_block_detected, main}).
+
+new_aux_block_detected(SubpoolId, _Module) ->
+    gen_server:cast({global, {subpool, SubpoolId}}, {new_block_detected, aux}).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -106,9 +110,9 @@ init([SubpoolId]) ->
     % Trap exit
     process_flag(trap_exit, true),
     % Setup the work table, the duplicate hashes table and worker tables
-    WorkTbl = ets:new(worktbl, [set, protected, {keypos, 2}]),
+    WorkTbl = ets:new(worktbl, [set, protected, {keypos, #workunit.id}]),
     HashTbl = ets:new(hashtbl, [set, protected]),
-    WorkerTbl = ets:new(workertbl, [set, protected, {keypos, 5}]),
+    WorkerTbl = ets:new(workertbl, [set, protected, {keypos, #worker.name}]),
     WorkerLookupTbl = ets:new(workerltbl, [set, protected]),
     % Get Subpool record; terminate on error
     {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
@@ -289,7 +293,7 @@ handle_cast({rpc_request, Req}, State) ->
             {noreply, State}
     end;
 
-handle_cast(new_block_detected, State) ->
+handle_cast({new_block_detected, Chain}, State) ->
     % Extract state variables
     #state{
         subpool=#subpool{name=SubpoolName, max_cache_size=MaxCacheSize},
@@ -300,9 +304,14 @@ handle_cast(new_block_detected, State) ->
         hashtbl=HashTbl,
         lp_queue=LPQueue
     } = State,
-    log4erl:warn(server, "~s: --- New block! Assigned: ~b; Shares: ~b; Cached: ~b; Longpolling: ~b ---", [SubpoolName, ets:info(WorkTbl, size), ets:info(HashTbl, size), WorkQueueSize, queue:len(LPQueue)]),
-    ets:delete_all_objects(WorkTbl), % Clear the work table
-    ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
+    log4erl:warn(server, "~s: --- New ~p block! Assigned: ~b; Shares: ~b; Cached: ~b; Longpolling: ~b ---", [SubpoolName, Chain, ets:info(WorkTbl, size), ets:info(HashTbl, size), WorkQueueSize, queue:len(LPQueue)]),
+    case Chain of
+        main ->
+            ets:delete_all_objects(WorkTbl), % Clear the work table
+            ets:delete_all_objects(HashTbl); % Clear the duplicate hashes table
+        aux ->
+            mark_aux_work_stale(WorkTbl, ets:first(WorkTbl)) % Mark all aux work as stale
+    end,
     % Check if LP are still valid, then push onto the work queue
     CheckedLPQueue = queue:filter(
         fun ({#worker{name=WorkerName}, Req}) ->
@@ -529,7 +538,7 @@ check_work(Req, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerNa
                                 Hash > ShareTarget ->
                                     {target, Workunit, Hash};
                                 true ->
-                                    case ets:insert_new(HashTbl, {Hash}) of % Also stores the new hash
+                                    case ets:insert_new(HashTbl, {Hash}) of % Store the new hash or detect as duplicate
                                         true ->
                                             check_for_candidate(SubpoolName, Workunit, Hash, BData, WorkerName, Peer);
                                         _ ->
@@ -693,14 +702,19 @@ check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool, Start
             OldMMM
     end.
 
-check_for_candidate(SubpoolName, Workunit=#workunit{aux_work=AuxWork}, Hash, BData, WorkerName, Peer) ->
+check_for_candidate(SubpoolName, Workunit=#workunit{aux_work=AuxWork, aux_work_stale=AuxWorkStale}, Hash, BData, WorkerName, Peer) ->
     MainCandidate = case hash_is_below_target(Hash, Workunit) of
         true -> log4erl:warn(server, "~s: +++ Main candidate share from ~s/~s! +++", [SubpoolName, WorkerName, Peer]), [main];
         _ -> []
     end,
-    AuxCandidate = case hash_is_below_target(Hash, AuxWork) of
-        true -> log4erl:warn(server, "~s: +++ Aux candidate share from ~s/~s! +++", [SubpoolName, WorkerName, Peer]), [aux];
-        _ -> []
+    AuxCandidate = if
+        AuxWorkStale ->
+            [];
+        true ->
+            case hash_is_below_target(Hash, AuxWork) of
+                true -> log4erl:warn(server, "~s: +++ Aux candidate share from ~s/~s! +++", [SubpoolName, WorkerName, Peer]), [aux];
+                _ -> []
+            end
     end,
     {ok, Workunit, Hash, BData, lists:merge(MainCandidate, AuxCandidate)}.
 
@@ -722,3 +736,9 @@ send_candidate({aux, Workunit=#workunit{aux_work=AuxWork}, Hash, BData}, CoinDae
         Error ->
             Error
     end.
+
+mark_aux_work_stale(_, '$end_of_table') ->
+    ok;
+mark_aux_work_stale(WorkTbl, Key) ->
+    ets:update_element(WorkTbl, Key, {#workunit.aux_work_stale, true}),
+    mark_aux_work_stale(WorkTbl, ets:next(WorkTbl, Key)).

@@ -166,7 +166,7 @@ fetch_block_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth}) ->
         {true, Reason} ->
             case Reason of
                 {new_block, _} ->
-                    ecoinpool_server:new_block_detected(SubpoolId);
+                    ecoinpool_server:new_aux_block_detected(SubpoolId, ?MODULE);
                 _ ->
                     ok
             end,
