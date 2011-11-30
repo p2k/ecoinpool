@@ -182,7 +182,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     ShareTarget = CoinDaemon:share_target(),
     
     % Check the aux pool configuration
-    MMM = check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool),
+    MMM = check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool, StartCoinDaemon),
     CoinDaemon:set_mmm(MMM),
     
     % Check cache settings
@@ -651,18 +651,20 @@ check_new_round(Subpool=#subpool{aux_pool=#auxpool{name=AuxpoolName, round=Round
 check_new_round(Subpool, [_|T]) ->
     check_new_round(Subpool, T).
 
-check_aux_pool_config(_, _, undefined, undefined, undefined) ->
+check_aux_pool_config(_, _, undefined, undefined, undefined, _) ->
     undefined;
-check_aux_pool_config(_, SubpoolId, _, OldMMM, undefined) ->
+check_aux_pool_config(_, SubpoolId, _, OldMMM, undefined, _) ->
     % This code will change if multi aux chains are supported
     [AuxDaemonModule] = OldMMM:aux_daemon_modules(),
     ecoinpool_server_sup:remove_auxdaemon(SubpoolId, AuxDaemonModule, OldMMM);
-check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool) ->
+check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool, StartCoinDaemon) ->
     % This code will change if multi aux chains are supported
     #auxpool{pool_type=PoolType, aux_daemon_config=AuxDaemonConfig} = Auxpool,
     OldAuxDaemonConfig = case OldAuxpool of
         undefined ->
             undefined;
+        _ when StartCoinDaemon ->
+            undefined; % Force restart if the CoinDaemon was restarted
         #auxpool{aux_daemon_config=OADC} ->
             OADC
     end,
