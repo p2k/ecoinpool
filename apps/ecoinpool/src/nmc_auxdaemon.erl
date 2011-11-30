@@ -71,7 +71,7 @@ init([SubpoolId, Config]) ->
     
     {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
     
-    ecoinpool_server:auxdaemon_ready(SubpoolId, self(), ?MODULE),
+    ecoinpool_server:auxdaemon_ready(SubpoolId, ?MODULE, self()),
     
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
 

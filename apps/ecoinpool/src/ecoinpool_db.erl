@@ -317,7 +317,7 @@ handle_cast({store_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpo
     ),
     
     NewState = case Auxpool of
-        #auxpool{name=AuxpoolName, round=AuxRound} ->
+        #auxpool{name=AuxpoolName, round=AuxRound} when AuxWork =/= undefined ->
             log4erl:debug(db, "~s&~s: Storing ~p&~p share from ~s/~s", [SubpoolName, AuxpoolName, MainState, AuxState, WorkerName, IP]),
             {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
             #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum} = AuxWork,
