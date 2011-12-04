@@ -185,8 +185,7 @@ handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, worktb
 handle_call({get_first_tx_with_branches, #workunit{id=WorkunitId}}, _From, State=#state{worktbl=WorkTbl}) ->
     case ets:lookup(WorkTbl, WorkunitId) of
         [{_, CoinbaseTx, _, FirstTreeBranches}] ->
-            FirstTreeBranchesLE = lists:map(fun ecoinpool_util:byte_reverse/1, FirstTreeBranches),
-            {reply, {ok, CoinbaseTx, FirstTreeBranchesLE}, State};
+            {reply, {ok, CoinbaseTx, FirstTreeBranches}, State};
         [] ->
             {reply, {error, <<"unknown work">>}, State}
     end;
@@ -410,7 +409,7 @@ workunit_id_from_btc_header(#btc_header{hash_prev_block=HashPrevBlock, hash_merk
 make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits, first_tree_branches=FT}, CoinbaseTx) ->
     EncTx = btc_protocol:encode_tx(CoinbaseTx),
     HashedTx = ecoinpool_hash:dsha256_hash(EncTx),
-    HashMerkleRoot = ecoinpool_util:byte_reverse(ecoinpool_hash:fold_tree_branches_dsha256_hash(HashedTx, FT)),
+    HashMerkleRoot = ecoinpool_hash:fold_tree_branches_dsha256_hash(HashedTx, FT),
     #btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
 
 make_coinbase_tx(#memorypool{timestamp=Timestamp, coinbase_value=CoinbaseValue}, Tag, PubkeyHash160, ScriptSigTrailer) ->
@@ -437,6 +436,5 @@ make_workunit(Header=#btc_header{bits=Bits}, BlockNum, AuxWork) ->
 
 make_script_sig_trailer(undefined) ->
     [];
-make_script_sig_trailer(#auxwork{aux_hash=AuxHash}) ->
-    AuxHashLE = ecoinpool_util:byte_reverse(AuxHash),
-    [<<250,190,109,109, AuxHashLE/binary, 1,0,0,0,0,0,0,0>>].
+make_script_sig_trailer(#auxwork{aux_hash = <<AuxHash:256/big>>}) ->
+    [<<250,190,109,109, AuxHash:256/little, 1,0,0,0,0,0,0,0>>].

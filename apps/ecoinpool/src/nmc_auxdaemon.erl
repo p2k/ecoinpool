@@ -183,9 +183,9 @@ fetch_block_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth}) ->
             end
     end.
 
-do_send_aux_pow(URL, Auth, AuxHash, AuxPOW) ->
+do_send_aux_pow(URL, Auth, <<AuxHash:256/big>>, AuxPOW) ->
     BData = btc_protocol:encode_auxpow(AuxPOW),
-    HexHash = ecoinpool_util:list_to_hexstr(binary:bin_to_list(ecoinpool_util:byte_reverse(AuxHash))),
+    HexHash = ecoinpool_util:list_to_hexstr(binary:bin_to_list(<<AuxHash:256/little>>)),
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"getauxblock\",\"params\":[\"" ++ HexHash ++ "\",\"" ++ HexData ++ "\"]}",
     log4erl:debug(daemon, "nmc_auxdaemon: Sending upstream: ~s", [PostData]),

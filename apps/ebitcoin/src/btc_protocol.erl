@@ -91,26 +91,7 @@
 
 %% Decoding %%
 
-decode_header(BData) ->
-    <<
-        Version:32/little,
-        HashPrevBlock:32/bytes,
-        HashMerkleRoot:32/bytes,
-        Timestamp:32/unsigned-little,
-        Bits:32/unsigned-little,
-        Nonce:32/unsigned-little
-    >> = BData,
-    
-    #btc_header{version=Version,
-        hash_prev_block=HashPrevBlock,
-        hash_merkle_root=HashMerkleRoot,
-        timestamp=Timestamp,
-        bits=Bits,
-        nonce=Nonce}.
-
-decode_hash(<<Hash:256/little, T/binary>>) ->
-    {<<Hash:256/big>>, T}.
-
+% Note: These functions always return a tuple
 decode_var_int(<<16#ff, V:64/unsigned-little, T/binary>>) ->
     {V, T};
 decode_var_int(<<16#fe, V:32/unsigned-little, T/binary>>) ->
@@ -127,31 +108,65 @@ decode_var_list(BData, DecodeElementFun) ->
 decode_var_list(T, _, 0, Acc) ->
     {Acc, T};
 decode_var_list(BData, DecodeElementFun, N, Acc) ->
-    {Element, T} = DecodeElementFun(BData),
-    decode_var_list(T, DecodeElementFun, N-1, Acc ++ [Element]).
+    case DecodeElementFun(BData) of
+        {Element, T} ->
+            decode_var_list(T, DecodeElementFun, N-1, Acc ++ [Element]);
+        Element when N =:= 1 -> % If no tuple is returned, it must be the last element or bogus
+            {Acc ++ [Element], <<>>}
+    end.
 
 decode_var_str(BData) ->
     {Length, StrAndT} = decode_var_int(BData),
     <<Str:Length/bytes, T/binary>> = StrAndT,
     {Str, T}.
 
-decode_tx(BData) ->
-    <<Version:32/unsigned-little, T1/binary>> = BData,
+% All other functions may only return a tuple if a tail exists
+tailcheck(X, <<>>) ->
+    X;
+tailcheck(X, T) ->
+    {X, T}.
+
+% This function adds an empty tail if none was present
+tailadd({X, T}) ->
+    {X, T};
+tailadd(X) ->
+    {X, <<>>}.
+
+decode_hash(<<Hash:256/little, T/binary>>) ->
+    tailcheck(<<Hash:256/big>>, T).
+
+decode_header(BData) ->
+    <<
+        Version:32/little,
+        HashPrevBlock:256/little,
+        HashMerkleRoot:256/little,
+        Timestamp:32/unsigned-little,
+        Bits:32/unsigned-little,
+        Nonce:32/unsigned-little,
+        T/binary
+    >> = BData,
+    
+    tailcheck(#btc_header{
+        version = Version,
+        hash_prev_block = <<HashPrevBlock:256/big>>,
+        hash_merkle_root = <<HashMerkleRoot:256/big>>,
+        timestamp = Timestamp,
+        bits = Bits,
+        nonce = Nonce}, T).
+
+decode_tx(<<Version:32/unsigned-little, T1/binary>>) ->
     {TxIn, T2} = decode_var_list(T1, fun decode_tx_in/1),
     {TxOut, T3} = decode_var_list(T2, fun decode_tx_out/1),
     <<LockTime:32/unsigned-little, T4/binary>> = T3,
-    {#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}, T4}.
+    tailcheck(#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}, T4).
 
-decode_tx_in(BData) ->
-    <<PrevOutputHash:32/bytes, PrevOutputIndex:32/unsigned-little, T1/binary>> = BData,
-    {SignatureScript, T2} = decode_var_str(T1),
-    <<Sequence:32/unsigned-little, T3/binary>> = T2,
-    {#btc_tx_in{prev_output_hash=PrevOutputHash, prev_output_index=PrevOutputIndex, signature_script=SignatureScript, sequence=Sequence}, T3}.
+decode_tx_in(<<PrevOutputHash:256/little, PrevOutputIndex:32/unsigned-little, T1/binary>>) ->
+    {SignatureScript, <<Sequence:32/unsigned-little, T2/binary>>} = decode_var_str(T1),
+    tailcheck(#btc_tx_in{prev_output_hash = <<PrevOutputHash:256/big>>, prev_output_index = PrevOutputIndex, signature_script = SignatureScript, sequence = Sequence}, T2).
 
-decode_tx_out(BData) ->
-    <<Value:64/unsigned-little, T1/binary>> = BData,
+decode_tx_out(<<Value:64/unsigned-little, T1/binary>>) ->
     {PKScript, T2} = decode_var_str(T1),
-    {#btc_tx_out{value=Value, pk_script=PKScript}, T2}.
+    tailcheck(#btc_tx_out{value=Value, pk_script=PKScript}, T2).
 
 decode_script(BData) ->
     decode_script(BData, []).
@@ -181,35 +196,35 @@ decode_script(<<OPCode:8/unsigned, T/binary>>, Acc) ->
         true -> Acc ++ [op_invalidopcode]
     end).
 
-decode_block(<<BHeader:80/bytes, BData/binary>>) ->
-    Header = decode_header(BHeader),
-    {AuxPOW, BTxnData} = case Header#btc_header.version of
+decode_block(BData) ->
+    {Header, T1} = decode_header(BData),
+    {AuxPOW, T2} = case Header#btc_header.version of
         1 ->
-            {undefined, BData};
+            {undefined, T1};
         16#10101 ->
-            decode_auxpow(BData)
+            decode_auxpow(T1)
     end,
-    {Txns, <<>>} = decode_var_list(BTxnData, fun decode_tx/1),
-    #btc_block{header=Header, auxpow=AuxPOW, txns=Txns}.
+    {Txns, T3} = decode_var_list(T2, fun decode_tx/1),
+    tailcheck(#btc_block{header=Header, auxpow=AuxPOW, txns=Txns}, T3).
 
 decode_auxpow(BData) ->
-    {CoinbaseTx, <<BlockHash:32/bytes, T1/binary>>} = decode_tx(BData),
+    {CoinbaseTx, <<BlockHash:256/little, T1/binary>>} = decode_tx(BData),
     {TxTreeBranches, <<TxIndex:32/unsigned-little, T2/binary>>} = decode_var_list(T1, fun decode_hash/1),
-    {AuxTreeBranches, <<AuxIndex:32/unsigned-little, BHeader:80/bytes, T3/binary>>} = decode_var_list(T2, fun decode_hash/1),
-    ParentHeader = decode_header(BHeader),
-    {#btc_auxpow{
-        coinbase_tx=CoinbaseTx,
-        block_hash=BlockHash,
-        tx_tree_branches=TxTreeBranches,
-        tx_index=TxIndex,
-        aux_tree_branches=AuxTreeBranches,
-        aux_index=AuxIndex,
-        parent_header=ParentHeader
-    }, T3}.
+    {AuxTreeBranches, <<AuxIndex:32/unsigned-little, T3/binary>>} = decode_var_list(T2, fun decode_hash/1),
+    {ParentHeader, T4} = tailadd(decode_header(T3)),
+    tailcheck(#btc_auxpow{
+        coinbase_tx = CoinbaseTx,
+        block_hash = <<BlockHash:256/big>>,
+        tx_tree_branches = TxTreeBranches,
+        tx_index = TxIndex,
+        aux_tree_branches = AuxTreeBranches,
+        aux_index = AuxIndex,
+        parent_header = ParentHeader
+    }, T4).
 
-decode_ip(<<0,0,0,0,0,0,0,0,0,0,255,255,A,B,C,D>>) ->
-    {ip4, lists:flatten(io_lib:format("~b.~b.~b.~b", [A,B,C,D]))};
-decode_ip(<<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>) ->
+decode_ip(<<0,0,0,0,0,0,0,0,0,0,255,255,A,B,C,D, T/binary>>) ->
+    tailcheck({ip4, lists:flatten(io_lib:format("~b.~b.~b.~b", [A,B,C,D]))}, T);
+decode_ip(<<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16, T/binary>>) ->
     L = [A,B,C,D,E,F,G,H],
     BestZSeq = lists:foldl(
         fun
@@ -232,41 +247,47 @@ decode_ip(<<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>) ->
         {P, LN} when P+LN =:= 8 -> lists:sublist(Encoded, P) ++ ["", ""];
         {P, LN} -> lists:sublist(Encoded, P) ++ [""] ++ lists:nthtail(P+LN, Encoded)
     end,
-    {ip6, lists:flatten(string:join(Compacted, ":"))}.
+    tailcheck({ip6, lists:flatten(string:join(Compacted, ":"))}, T).
 
-decode_net_addr(<<Time:32/unsigned-little, Services:64/unsigned-little, IP:16/bytes, Port:16/unsigned-big, T/binary>>) ->
-    {#btc_net_addr{time=Time, services=Services, ip=decode_ip(IP), port=Port}, T}.
+decode_net_addr(<<Time:32/unsigned-little, Services:64/unsigned-little, T1/binary>>) ->
+    {IP, <<Port:16/unsigned-big, T2/binary>>} = decode_ip(T1),
+    tailcheck(#btc_net_addr{time=Time, services=Services, ip=IP, port=Port}, T2).
 
-decode_version_net_addr(<<Services:64/unsigned-little, IP:16/bytes, Port:16/unsigned-big>>) ->
-    #btc_net_addr{services=Services, ip=decode_ip(IP), port=Port}.
+decode_version_net_addr(<<Services:64/unsigned-little, T1/binary>>) ->
+    {IP, <<Port:16/unsigned-big, T2/binary>>} = decode_ip(T1),
+    tailcheck(#btc_net_addr{services=Services, ip=IP, port=Port}, T2).
 
 decode_addr(BAddr) ->
-    {AddrList, <<>>} = decode_var_list(BAddr, fun decode_net_addr/1),
-    #btc_addr{addr_list=AddrList}.
+    {AddrList, T} = decode_var_list(BAddr, fun decode_net_addr/1),
+    tailcheck(#btc_addr{addr_list=AddrList}, T).
 
-decode_version(<<Version:32/little, Services:64/unsigned-little, Timestamp:64/little, BAddrRecv:26/binary, BAddrFrom:26/binary, Nonce:64/unsigned-little, BSubVersionNum/binary>>) ->
-    {SubVersionNum, T} = decode_var_str(BSubVersionNum),
-    StartHeight = case T of
-        <<SH:32/little>> -> SH;
-        _ -> undefined
-    end,
-    #btc_version{
-        version=Version,
-        services=Services,
-        timestamp=Timestamp,
-        addr_recv=decode_version_net_addr(BAddrRecv),
-        addr_from=decode_version_net_addr(BAddrFrom),
-        nonce=Nonce,
-        sub_version_num=SubVersionNum,
-        start_height=StartHeight
-    };
-decode_version(<<Version:32/little, Services:64/unsigned-little, Timestamp:64/little, BAddrRecv:26/binary>>) ->
-    #btc_version{
-        version=Version,
-        services=Services,
-        timestamp=Timestamp,
-        addr_recv=decode_version_net_addr(BAddrRecv)
-    }.
+decode_version(<<V:32/little, Services:64/unsigned-little, Timestamp:64/little, T1/binary>>) ->
+    case decode_version_net_addr(T1) of
+        {AddrRecv, T2} ->
+            {AddrFrom, <<Nonce:64/unsigned-little, T3/binary>>} = decode_version_net_addr(T2),
+            {SubVersionNum, T4} = decode_var_str(T3),
+            {StartHeight, T5} = case T4 of
+                <<SH:32/little, TT5/binary>> -> {SH, TT5};
+                _ -> {undefined, T4}
+            end,
+            tailcheck(#btc_version{
+                version=V,
+                services=Services,
+                timestamp=Timestamp,
+                addr_recv=AddrRecv,
+                addr_from=AddrFrom,
+                nonce=Nonce,
+                sub_version_num=SubVersionNum,
+                start_height=StartHeight
+            }, T5);
+        AddrRecv ->
+            #btc_version{
+                version=V,
+                services=Services,
+                timestamp=Timestamp,
+                addr_recv=AddrRecv
+            }
+    end.
 
 decode_command(BCommand) ->
     list_to_atom(string:strip(binary:bin_to_list(BCommand), right, 0)).
@@ -278,49 +299,29 @@ decode_inv_vect(<<Type:32/unsigned-little, Hash:256/little, T/binary>>) ->
         2 -> msg_block;
         _ -> Type
     end,
-    {#btc_inv_vect{type = DType, hash = <<Hash:256/big>>}, T}.
+    tailcheck(#btc_inv_vect{type = DType, hash = <<Hash:256/big>>}, T).
 
 decode_inv(BInv) ->
-    {Inventory, <<>>} = decode_var_list(BInv, fun decode_inv_vect/1),
-    #btc_inv{inventory=Inventory}.
+    {Inventory, T} = decode_var_list(BInv, fun decode_inv_vect/1),
+    tailcheck(#btc_inv{inventory=Inventory}, T).
 
 decode_getdata(BGetData) ->
-    {Inventory, <<>>} = decode_var_list(BGetData, fun decode_inv_vect/1),
-    #btc_getdata{inventory=Inventory}.
+    {Inventory, T} = decode_var_list(BGetData, fun decode_inv_vect/1),
+    tailcheck(#btc_getdata{inventory=Inventory}, T).
 
 decode_getblocks(<<Version:32/unsigned-little, BGetBlocks/binary>>) ->
-    {BlockLocatorHashes, <<HashStop:256/little>>} = decode_var_list(BGetBlocks, fun decode_hash/1),
-    #btc_getblocks{version = Version, block_locator_hashes = BlockLocatorHashes, hash_stop = <<HashStop:256/big>>}.
+    {BlockLocatorHashes, <<HashStop:256/little, T/binary>>} = decode_var_list(BGetBlocks, fun decode_hash/1),
+    tailcheck(#btc_getblocks{version = Version, block_locator_hashes = BlockLocatorHashes, hash_stop = <<HashStop:256/big>>}, T).
 
 decode_getheaders(BGetHeaders) ->
-    {HashStart, <<HashStop:256/little>>} = decode_var_list(BGetHeaders, fun decode_hash/1),
-    #btc_getheaders{hash_start = HashStart, hash_stop = <<HashStop:256/big>>}.
+    {HashStart, <<HashStop:256/little, T/binary>>} = decode_var_list(BGetHeaders, fun decode_hash/1),
+    tailcheck(#btc_getheaders{hash_start = HashStart, hash_stop = <<HashStop:256/big>>}, T).
 
 decode_headers(BHeaders) ->
-    {Headers, <<>>} = decode_var_list(BHeaders, fun (<<BHeader:80/bytes, T/binary>>) -> {decode_header(BHeader), T} end),
-    #btc_headers{headers=Headers}.
+    {Headers, T} = decode_var_list(BHeaders, fun decode_header/1),
+    tailcheck(#btc_headers{headers=Headers}, T).
 
 %% Encoding %%
-
-encode_header(BTCHeader) ->
-    #btc_header{version=Version,
-        hash_prev_block=HashPrevBlock,
-        hash_merkle_root=HashMerkleRoot,
-        timestamp=Timestamp,
-        bits=Bits,
-        nonce=Nonce} = BTCHeader,
-    
-    <<
-        Version:32/little,
-        HashPrevBlock:32/bytes,
-        HashMerkleRoot:32/bytes,
-        Timestamp:32/unsigned-little,
-        Bits:32/unsigned-little,
-        Nonce:32/unsigned-little
-    >>.
-
-encode_hash(<<Hash:256/big>>) ->
-    <<Hash:256/little>>.
 
 encode_var_int(V) when V > 16#ffffffff ->
     <<16#ff, V:64/unsigned-little>>;
@@ -348,19 +349,41 @@ encode_var_str(Str) ->
     BLength = encode_var_int(byte_size(Str)),
     <<BLength/binary, Str/binary>>.
 
+encode_hash(<<Hash:256/big>>) ->
+    <<Hash:256/little>>.
+
+encode_header(BTCHeader) ->
+    #btc_header{
+        version = Version,
+        hash_prev_block = <<HashPrevBlock:256/big>>,
+        hash_merkle_root = <<HashMerkleRoot:256/big>>,
+        timestamp = Timestamp,
+        bits = Bits,
+        nonce = Nonce
+    } = BTCHeader,
+    
+    <<
+        Version:32/little,
+        HashPrevBlock:256/little,
+        HashMerkleRoot:256/little,
+        Timestamp:32/unsigned-little,
+        Bits:32/unsigned-little,
+        Nonce:32/unsigned-little
+    >>.
+
 encode_tx(#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}) ->
     BTxIn = encode_var_list(TxIn, fun encode_tx_in/1),
     BTxOut = encode_var_list(TxOut, fun encode_tx_out/1),
     <<Version:32/unsigned-little, BTxIn/binary, BTxOut/binary, LockTime:32/unsigned-little>>.
 
-encode_tx_in(#btc_tx_in{prev_output_hash=PrevOutputHash, prev_output_index=PrevOutputIndex, signature_script=SignatureScript, sequence=Sequence}) ->
+encode_tx_in(#btc_tx_in{prev_output_hash = <<PrevOutputHash:256/big>>, prev_output_index = PrevOutputIndex, signature_script = SignatureScript, sequence = Sequence}) ->
     BSignatureScript = encode_var_str(
         if % Skip already encoded script
             is_binary(SignatureScript) -> SignatureScript;
             true -> encode_script(SignatureScript)
         end
     ),
-    <<PrevOutputHash:32/bytes, PrevOutputIndex:32/unsigned-little, BSignatureScript/binary, Sequence:32/unsigned-little>>.
+    <<PrevOutputHash:256/little, PrevOutputIndex:32/unsigned-little, BSignatureScript/binary, Sequence:32/unsigned-little>>.
 
 encode_tx_out(#btc_tx_out{value=Value, pk_script=PKScript}) ->
     BPKScript = encode_var_str(
@@ -419,7 +442,16 @@ encode_block(#btc_block{header=Header, auxpow=AuxPOW, txns=Txns}) ->
             <<BHeader:80/bytes, BAuxPOW/binary, BTxns/binary>>
     end.
 
-encode_auxpow(#btc_auxpow{coinbase_tx=CoinbaseTx, block_hash=BlockHash, tx_tree_branches=TxTreeBranches, tx_index=TxIndex, aux_tree_branches=AuxTreeBranches, aux_index=AuxIndex, parent_header=ParentHeader}) ->
+encode_auxpow(AuxPOW) ->
+    #btc_auxpow{
+        coinbase_tx = CoinbaseTx,
+        block_hash = <<BlockHash:256/big>>,
+        tx_tree_branches = TxTreeBranches,
+        tx_index = TxIndex,
+        aux_tree_branches = AuxTreeBranches,
+        aux_index = AuxIndex,
+        parent_header = ParentHeader
+    } = AuxPOW,
     BCoinbaseTx = if
         is_binary(CoinbaseTx) -> CoinbaseTx;
         true -> encode_tx(CoinbaseTx)
@@ -430,7 +462,15 @@ encode_auxpow(#btc_auxpow{coinbase_tx=CoinbaseTx, block_hash=BlockHash, tx_tree_
         is_binary(ParentHeader) -> ParentHeader;
         true -> encode_header(ParentHeader)
     end,
-    <<BCoinbaseTx/binary, BlockHash/binary, BTxTreeBranches/binary, TxIndex:32/unsigned-little, BAuxTreeBranches/binary, AuxIndex:32/unsigned-little, BParentHeader/binary>>.
+    <<
+        BCoinbaseTx/binary,
+        BlockHash:256/little,
+        BTxTreeBranches/binary,
+        TxIndex:32/unsigned-little,
+        BAuxTreeBranches/binary,
+        AuxIndex:32/unsigned-little,
+        BParentHeader/binary
+    >>.
 
 encode_ip({ip4, DotQuad}) ->
     {ok, [A,B,C,D], []} = io_lib:fread("~d.~d.~d.~d", DotQuad),
@@ -463,11 +503,30 @@ encode_version_net_addr(#btc_net_addr{services=Services, ip=DecodedIP, port=Port
 encode_addr(#btc_addr{addr_list=AddrList}) ->
     encode_var_list(AddrList, fun encode_net_addr/1).
 
-encode_version(#btc_version{version=Version, services=Services, timestamp=Timestamp, addr_recv=AddrRecv, addr_from=AddrFrom, nonce=Nonce, sub_version_num=SubVersionNum, start_height=StartHeight}) ->
+encode_version(Version) ->
+    #btc_version{
+        version=V,
+        services=Services,
+        timestamp=Timestamp,
+        addr_recv=AddrRecv,
+        addr_from=AddrFrom,
+        nonce=Nonce,
+        sub_version_num=SubVersionNum,
+        start_height=StartHeight
+    } = Version,
     BAddrRecv = encode_version_net_addr(AddrRecv),
     BAddrFrom = encode_version_net_addr(AddrFrom),
     BSubVersionNum = encode_var_str(SubVersionNum),
-    <<Version:32/little, Services:64/unsigned-little, Timestamp:64/little, BAddrRecv:26/binary, BAddrFrom:26/binary, Nonce:64/unsigned-little, BSubVersionNum/binary, StartHeight:32/little>>.
+    <<
+        V:32/little,
+        Services:64/unsigned-little,
+        Timestamp:64/little,
+        BAddrRecv:26/binary,
+        BAddrFrom:26/binary,
+        Nonce:64/unsigned-little,
+        BSubVersionNum/binary,
+        StartHeight:32/little
+    >>.
 
 encode_command(Command) ->
     SCommand = atom_to_list(Command),
@@ -591,7 +650,7 @@ tx_test_() ->
         lock_time = 0
     },
     [
-        ?_assertEqual({DTx, <<>>}, decode_tx(ETx)),
+        ?_assertEqual(DTx, decode_tx(ETx)),
         ?_assertEqual(ETx, encode_tx(DTx))
     ].
 
@@ -599,8 +658,8 @@ header_test_() ->
     EHeader = sample_header(),
     DHeader = #btc_header{
         version = 1,
-        hash_prev_block = base64:decode(<<"akmXeavQoc0inkbGMx/V+6pHX+ohErc4gAYAAAAAAAA=">>),
-        hash_merkle_root = base64:decode(<<"RyDUB5doFsGHiCruAnPtGoxaosJyISVkCbtLbEzHA/k=">>),
+        hash_prev_block = base64:decode(<<"AAAAAAAABoA4txIh6l9HqvvVHzPGRp4izaHQq3mXSWo=">>),
+        hash_merkle_root = base64:decode(<<"+QPHTGxLuwlkJSFywqJajBrtcwLuKoiHwRZolwfUIEc=">>),
         timestamp = 1321870454,
         bits = 437129626,
         nonce = 2684961857
@@ -647,7 +706,7 @@ encode_auxpow_test() ->
                 }
             ]
         },
-        block_hash = base64:decode(<<"J/CrYjreR16cDeLUBEJm5lsUrgZjBiextSAAAAAAAAA=">>),
+        block_hash = base64:decode(<<"AAAAAAAAILWxJwZjBq4UW+ZmQgTU4g2cXkfeOmKr8Cc=">>),
         tx_tree_branches = [
             binary_part(EAuxPOW, {215, 32}),
             binary_part(EAuxPOW, {247, 32}),
@@ -656,8 +715,8 @@ encode_auxpow_test() ->
             binary_part(EAuxPOW, {343, 32})
         ],
         parent_header = #btc_header{
-            hash_prev_block = base64:decode(<<"TKtlW3XDOZ+ExvM9ezY9JilZA+Hc+u1Z2gEAAAAAAAA=">>),
-            hash_merkle_root = base64:decode(<<"XWb6XgsqHvp1esikEjISO0HGWIJsAtxLrASDiRMmw/k=">>),
+            hash_prev_block = base64:decode(<<"AAAAAAAAAdpZ7frc4QNZKSY9Nns988aEnznDdVtlq0w=">>),
+            hash_merkle_root = base64:decode(<<"+cMmE4mDBKxL3AJsgljGQTsSMhKkyHp1+h4qC176Zl0=">>),
             timestamp = 1318677678,
             bits = 436956491,
             nonce = 2322767972
@@ -683,7 +742,7 @@ net_addr_test_() ->
     EAddr1 = base64:decode(<<"4hUQTQEAAAAAAAAAAAAAAAAAAAAAAP//CgAAASCN">>),
     DAddr1 = #btc_net_addr{time=1292899810, services=1, ip={ip4, "10.0.0.1"}, port=8333},
     [
-        ?_assertEqual({DAddr1, <<>>}, decode_net_addr(EAddr1)),
+        ?_assertEqual(DAddr1, decode_net_addr(EAddr1)),
         ?_assertEqual(EAddr1, encode_net_addr(DAddr1))
     ].
 
