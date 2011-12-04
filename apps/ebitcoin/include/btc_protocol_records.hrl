@@ -50,12 +50,6 @@
 }).
 -type btc_tx() :: #btc_tx{}.
 
--record(btc_block, {
-    header :: btc_header(),
-    txns :: [btc_tx()]
-}).
--type btc_block() :: #btc_block{}.
-
 -record(btc_auxpow, {
     coinbase_tx :: btc_tx() | binary(),
     block_hash :: binary(),
@@ -66,3 +60,69 @@
     parent_header :: btc_header() | binary()
 }).
 -type btc_auxpow() :: #btc_auxpow{}.
+
+-record(btc_block, {
+    header :: btc_header(),
+    auxpow :: btc_auxpow() | undefined,
+    txns :: [btc_tx()]
+}).
+-type btc_block() :: #btc_block{}.
+
+-record(btc_net_addr, {
+    time :: integer() | undefined,
+    services :: integer(),
+    ip :: {ip4 | ip6, string()},
+    port :: integer()
+}).
+-type btc_net_addr() :: #btc_net_addr{}.
+
+-record(btc_addr, {
+    addr_list :: [btc_net_addr()]
+}).
+-type btc_addr() :: #btc_addr{}.
+
+-record(btc_version, {
+    version :: integer(),
+    services :: integer(),
+    timestamp :: integer(),
+    addr_recv :: btc_net_addr(),
+    addr_from :: btc_net_addr(),
+    nonce :: integer(),
+    sub_version_num :: binary(),
+    start_height :: integer()
+}).
+-type btc_version() :: #btc_version{}.
+
+-record(btc_inv_vect, {
+    type :: error | msg_tx | msg_block | integer(),
+    hash :: binary()
+}).
+-type btc_inv_vect() :: #btc_inv_vect{}.
+
+-record(btc_inv, {
+    inventory :: [btc_inv_vect()]
+}).
+-type btc_inv() :: #btc_inv{}.
+
+-record(btc_getdata, {
+    inventory :: [btc_inv_vect()]
+}).
+-type btc_getdata() :: #btc_getdata{}.
+
+-record(btc_getblocks, {
+    version :: integer(),
+    block_locator_hashes :: [binary()],
+    hash_stop :: binary()
+}).
+-type btc_getblocks() :: #btc_getblocks{}.
+
+-record(btc_getheaders, {
+    hash_start :: [binary()],
+    hash_stop :: binary()
+}).
+-type btc_getheaders() :: #btc_getheaders{}.
+
+-record(btc_headers, {
+    headers :: [btc_header()]
+}).
+-type btc_headers() :: #btc_headers{}.

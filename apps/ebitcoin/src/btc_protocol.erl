@@ -36,7 +36,28 @@
     encode_script/1,
     decode_block/1,
     encode_block/1,
+    decode_auxpow/1,
     encode_auxpow/1,
+    decode_net_addr/1,
+    encode_net_addr/1,
+    decode_addr/1,
+    encode_addr/1,
+    decode_version/1,
+    encode_version/1,
+    decode_command/1,
+    encode_command/1,
+    decode_inv_vect/1,
+    encode_inv_vect/1,
+    decode_inv/1,
+    encode_inv/1,
+    decode_getdata/1,
+    encode_getdata/1,
+    decode_getblocks/1,
+    encode_getblocks/1,
+    decode_getheaders/1,
+    encode_getheaders/1,
+    decode_headers/1,
+    encode_headers/1,
     hash160_from_address/1
 ]).
 
@@ -86,6 +107,9 @@ decode_header(BData) ->
         timestamp=Timestamp,
         bits=Bits,
         nonce=Nonce}.
+
+decode_hash(<<Hash:256/little, T/binary>>) ->
+    {<<Hash:256/big>>, T}.
 
 decode_var_int(<<16#ff, V:64/unsigned-little, T/binary>>) ->
     {V, T};
@@ -158,8 +182,123 @@ decode_script(<<OPCode:8/unsigned, T/binary>>, Acc) ->
     end).
 
 decode_block(<<BHeader:80/bytes, BData/binary>>) ->
-    {Txns, <<>>} = decode_var_list(BData, fun decode_tx/1),
-    #btc_block{header=decode_header(BHeader), txns=Txns}.
+    Header = decode_header(BHeader),
+    {AuxPOW, BTxnData} = case Header#btc_header.version of
+        1 ->
+            {undefined, BData};
+        16#10101 ->
+            decode_auxpow(BData)
+    end,
+    {Txns, <<>>} = decode_var_list(BTxnData, fun decode_tx/1),
+    #btc_block{header=Header, auxpow=AuxPOW, txns=Txns}.
+
+decode_auxpow(BData) ->
+    {CoinbaseTx, <<BlockHash:32/bytes, T1/binary>>} = decode_tx(BData),
+    {TxTreeBranches, <<TxIndex:32/unsigned-little, T2/binary>>} = decode_var_list(T1, fun decode_hash/1),
+    {AuxTreeBranches, <<AuxIndex:32/unsigned-little, BHeader:80/bytes, T3/binary>>} = decode_var_list(T2, fun decode_hash/1),
+    ParentHeader = decode_header(BHeader),
+    {#btc_auxpow{
+        coinbase_tx=CoinbaseTx,
+        block_hash=BlockHash,
+        tx_tree_branches=TxTreeBranches,
+        tx_index=TxIndex,
+        aux_tree_branches=AuxTreeBranches,
+        aux_index=AuxIndex,
+        parent_header=ParentHeader
+    }, T3}.
+
+decode_ip(<<0,0,0,0,0,0,0,0,0,0,255,255,A,B,C,D>>) ->
+    {ip4, lists:flatten(io_lib:format("~b.~b.~b.~b", [A,B,C,D]))};
+decode_ip(<<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>) ->
+    L = [A,B,C,D,E,F,G,H],
+    BestZSeq = lists:foldl(
+        fun
+            (_, {7, {0, 0},   Best}) -> Best;
+            (0, {7, {ZP, ZL}, Best={_, BZL}}) -> if ZL+1 > BZL -> {ZP, ZL+1}; true -> Best end;
+            (_, {7, {ZP, ZL}, Best={_, BZL}}) -> if ZL > 1, ZL > BZL -> {ZP, ZL}; true -> Best end;
+            (0, {P, {0, 0},   Best}) -> {P+1, {P, 1}, Best};
+            (0, {P, {ZP, ZL}, Best}) -> {P+1, {ZP, ZL+1}, Best};
+            (_, {P, {0, 0},   Best}) -> {P+1, {0, 0}, Best};
+            (_, {P, {ZP, ZL}, Best={_, BZL}}) -> {P+1, {0, 0}, if ZL > 1, ZL > BZL -> {ZP, ZL}; true -> Best end}
+        end,
+        {0, {0, 0}, {0, 0}},
+        L
+    ),
+    Encoded = [io_lib:format("~.16b", [X]) || X <- L],
+    Compacted = case BestZSeq of
+        {0, 0}  -> Encoded;
+        {0, 8}  -> ["", "", ""];
+        {0, LN} -> ["", ""] ++ lists:nthtail(LN, Encoded);
+        {P, LN} when P+LN =:= 8 -> lists:sublist(Encoded, P) ++ ["", ""];
+        {P, LN} -> lists:sublist(Encoded, P) ++ [""] ++ lists:nthtail(P+LN, Encoded)
+    end,
+    {ip6, lists:flatten(string:join(Compacted, ":"))}.
+
+decode_net_addr(<<Time:32/unsigned-little, Services:64/unsigned-little, IP:16/bytes, Port:16/unsigned-big, T/binary>>) ->
+    {#btc_net_addr{time=Time, services=Services, ip=decode_ip(IP), port=Port}, T}.
+
+decode_version_net_addr(<<Services:64/unsigned-little, IP:16/bytes, Port:16/unsigned-big>>) ->
+    #btc_net_addr{services=Services, ip=decode_ip(IP), port=Port}.
+
+decode_addr(BAddr) ->
+    {AddrList, <<>>} = decode_var_list(BAddr, fun decode_net_addr/1),
+    #btc_addr{addr_list=AddrList}.
+
+decode_version(<<Version:32/little, Services:64/unsigned-little, Timestamp:64/little, BAddrRecv:26/binary, BAddrFrom:26/binary, Nonce:64/unsigned-little, BSubVersionNum/binary>>) ->
+    {SubVersionNum, T} = decode_var_str(BSubVersionNum),
+    StartHeight = case T of
+        <<SH:32/little>> -> SH;
+        _ -> undefined
+    end,
+    #btc_version{
+        version=Version,
+        services=Services,
+        timestamp=Timestamp,
+        addr_recv=decode_version_net_addr(BAddrRecv),
+        addr_from=decode_version_net_addr(BAddrFrom),
+        nonce=Nonce,
+        sub_version_num=SubVersionNum,
+        start_height=StartHeight
+    };
+decode_version(<<Version:32/little, Services:64/unsigned-little, Timestamp:64/little, BAddrRecv:26/binary>>) ->
+    #btc_version{
+        version=Version,
+        services=Services,
+        timestamp=Timestamp,
+        addr_recv=decode_version_net_addr(BAddrRecv)
+    }.
+
+decode_command(BCommand) ->
+    list_to_atom(string:strip(binary:bin_to_list(BCommand), right, 0)).
+
+decode_inv_vect(<<Type:32/unsigned-little, Hash:256/little, T/binary>>) ->
+    DType = case Type of
+        0 -> error;
+        1 -> msg_tx;
+        2 -> msg_block;
+        _ -> Type
+    end,
+    {#btc_inv_vect{type = DType, hash = <<Hash:256/big>>}, T}.
+
+decode_inv(BInv) ->
+    {Inventory, <<>>} = decode_var_list(BInv, fun decode_inv_vect/1),
+    #btc_inv{inventory=Inventory}.
+
+decode_getdata(BGetData) ->
+    {Inventory, <<>>} = decode_var_list(BGetData, fun decode_inv_vect/1),
+    #btc_getdata{inventory=Inventory}.
+
+decode_getblocks(<<Version:32/unsigned-little, BGetBlocks/binary>>) ->
+    {BlockLocatorHashes, <<HashStop:256/little>>} = decode_var_list(BGetBlocks, fun decode_hash/1),
+    #btc_getblocks{version = Version, block_locator_hashes = BlockLocatorHashes, hash_stop = <<HashStop:256/big>>}.
+
+decode_getheaders(BGetHeaders) ->
+    {HashStart, <<HashStop:256/little>>} = decode_var_list(BGetHeaders, fun decode_hash/1),
+    #btc_getheaders{hash_start = HashStart, hash_stop = <<HashStop:256/big>>}.
+
+decode_headers(BHeaders) ->
+    {Headers, <<>>} = decode_var_list(BHeaders, fun (<<BHeader:80/bytes, T/binary>>) -> {decode_header(BHeader), T} end),
+    #btc_headers{headers=Headers}.
 
 %% Encoding %%
 
@@ -179,6 +318,9 @@ encode_header(BTCHeader) ->
         Bits:32/unsigned-little,
         Nonce:32/unsigned-little
     >>.
+
+encode_hash(<<Hash:256/big>>) ->
+    <<Hash:256/little>>.
 
 encode_var_int(V) when V > 16#ffffffff ->
     <<16#ff, V:64/unsigned-little>>;
@@ -266,10 +408,16 @@ lookup_op(_, [], _)  -> 255;
 lookup_op(OP, [OP|_], Index) -> Index+97;
 lookup_op(OP, [_|T], Index) -> lookup_op(OP, T, Index+1).
 
-encode_block(#btc_block{header=Header, txns=Txns}) ->
+encode_block(#btc_block{header=Header, auxpow=AuxPOW, txns=Txns}) ->
     BHeader = encode_header(Header),
-    BData = encode_var_list(Txns, fun encode_tx/1),
-    <<BHeader:80/bytes, BData/binary>>.
+    BTxns = encode_var_list(Txns, fun encode_tx/1),
+    case Header#btc_header.version of
+        1 ->
+            <<BHeader:80/bytes, BTxns/binary>>;
+        16#10101 ->
+            BAuxPOW = encode_auxpow(AuxPOW),
+            <<BHeader:80/bytes, BAuxPOW/binary, BTxns/binary>>
+    end.
 
 encode_auxpow(#btc_auxpow{coinbase_tx=CoinbaseTx, block_hash=BlockHash, tx_tree_branches=TxTreeBranches, tx_index=TxIndex, aux_tree_branches=AuxTreeBranches, aux_index=AuxIndex, parent_header=ParentHeader}) ->
     BCoinbaseTx = if
@@ -283,6 +431,75 @@ encode_auxpow(#btc_auxpow{coinbase_tx=CoinbaseTx, block_hash=BlockHash, tx_tree_
         true -> encode_header(ParentHeader)
     end,
     <<BCoinbaseTx/binary, BlockHash/binary, BTxTreeBranches/binary, TxIndex:32/unsigned-little, BAuxTreeBranches/binary, AuxIndex:32/unsigned-little, BParentHeader/binary>>.
+
+encode_ip({ip4, DotQuad}) ->
+    {ok, [A,B,C,D], []} = io_lib:fread("~d.~d.~d.~d", DotQuad),
+    <<0,0,0,0,0,0,0,0,0,0,255,255,A,B,C,D>>;
+encode_ip({ip6, Addr}) ->
+    DecodeSections = fun (Str) -> lists:map(fun (X) -> {ok, [V], []} = io_lib:fread("~16u", X), V end, string:tokens(Str, ":")) end,
+    [A,B,C,D,E,F,G,H] = case string:str(Addr, "::") of
+        0 ->
+            DecodeSections(Addr);
+        ExpPoint ->
+            {FS, RS} = lists:split(ExpPoint, Addr),
+            DF = DecodeSections(FS),
+            DR = DecodeSections(RS),
+            DF ++ lists:duplicate(8 - length(DF) - length(DR), 0) ++ DR
+    end,
+    <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>;
+encode_ip({A, B, C, D}) ->
+    <<0,0,0,0,0,0,0,0,0,0,255,255,A,B,C,D>>;
+encode_ip({A, B, C, D, E, F, G, H}) ->
+    <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>.
+
+encode_net_addr(#btc_net_addr{time=Time, services=Services, ip=DecodedIP, port=Port}) ->
+    IP = encode_ip(DecodedIP),
+    <<Time:32/unsigned-little, Services:64/unsigned-little, IP:16/bytes, Port:16/unsigned-big>>.
+
+encode_version_net_addr(#btc_net_addr{services=Services, ip=DecodedIP, port=Port}) ->
+    IP = encode_ip(DecodedIP),
+    <<Services:64/unsigned-little, IP:16/bytes, Port:16/unsigned-big>>.
+
+encode_addr(#btc_addr{addr_list=AddrList}) ->
+    encode_var_list(AddrList, fun encode_net_addr/1).
+
+encode_version(#btc_version{version=Version, services=Services, timestamp=Timestamp, addr_recv=AddrRecv, addr_from=AddrFrom, nonce=Nonce, sub_version_num=SubVersionNum, start_height=StartHeight}) ->
+    BAddrRecv = encode_version_net_addr(AddrRecv),
+    BAddrFrom = encode_version_net_addr(AddrFrom),
+    BSubVersionNum = encode_var_str(SubVersionNum),
+    <<Version:32/little, Services:64/unsigned-little, Timestamp:64/little, BAddrRecv:26/binary, BAddrFrom:26/binary, Nonce:64/unsigned-little, BSubVersionNum/binary, StartHeight:32/little>>.
+
+encode_command(Command) ->
+    SCommand = atom_to_list(Command),
+    binary:list_to_bin(SCommand ++ lists:duplicate(12 - length(SCommand), 0)).
+
+encode_inv_vect(#btc_inv_vect{type = Type, hash = <<Hash:256/big>>}) ->
+    EType = case Type of
+        error -> 0;
+        msg_tx -> 1;
+        msg_block -> 2;
+        _ when is_integer(Type) -> Type
+    end,
+    <<EType:32/unsigned-little, Hash:256/little>>.
+
+encode_inv(#btc_inv{inventory=Inventory}) ->
+    encode_var_list(Inventory, fun encode_inv_vect/1).
+
+encode_getdata(#btc_getdata{inventory=Inventory}) ->
+    encode_var_list(Inventory, fun encode_inv_vect/1).
+
+encode_getblocks(#btc_getblocks{version = Version, block_locator_hashes = BlockLocatorHashes, hash_stop = <<HashStop:256/big>>}) ->
+    BBlockLocatorHashes = encode_var_list(BlockLocatorHashes, fun encode_hash/1),
+    <<Version:32/unsigned-little, BBlockLocatorHashes/binary, HashStop:256/little>>.
+
+encode_getheaders(#btc_getheaders{hash_start = HashStart, hash_stop = <<HashStop:256/big>>}) ->
+    BHashStart = encode_var_list(HashStart, fun encode_hash/1),
+    <<BHashStart/binary, HashStop:256/little>>.
+
+encode_headers(#btc_headers{headers=Headers}) ->
+    encode_var_list(Headers, fun encode_header/1).
+
+%% Other %%
 
 hash160_from_address(BTCAddress) ->
     try
@@ -407,6 +624,9 @@ hash160_from_address_test_() ->
         ?_assertError(invalid_bitcoin_address, hash160_from_address(<<"166rK7eEVgnGvs9aA7jvu8NoPv8KzbPQ3M">>))
     ].
 
+dsha256_hash_test() ->
+    ?assertEqual(base64:decode(<<"AAAAAAAAAuPFkwailUxBO6pxrRh9Z7v/pxJh6LLeoc8=">>), ecoinpool_hash:dsha256_hash(sample_header())).
+
 encode_auxpow_test() ->
     EAuxPOW = base64:decode(<<"AQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////83BEttCxoDRbIAUiz6vm1t9PgsbckHZOle+WNcwqSrg4YrqhbT1iWOlPGlOFOQN0kBAAAAAAAAAP////8BWhNWKgEAAABDQQSKuGvFWJdPA1AObmrj/iAuKXxBMm3i0trgHhYTnFaawlsMBgC6+TJT/tGzwZKttrsZnPGrV140gzm0T1mSxwTPrAAAAAAn8KtiOt5HXpwN4tQEQmbmWxSuBmMGJ7G1IAAAAAAAAAX5sGhq0WwiZ8xTBoel7dwxqSCGNxb7vNhMJQ25IHqi3hysmwX/aJ/fZUAqEAaqOgT3jaG1e2Lq+ADAGw5IA2cW8tH7fHUYZPkos3eNfblB+CdOpVo/AcrNCe1KMyl0S45wnoGRrDIbjq1BnZOD+qlE6ukuDHZ7/XFXtiWpJoSkB4j4tkEOQaVNpJP90NoIqyIoCWZFZH+doHbK1C4mW/MuAAAAAAAAAAAAAQAAAEyrZVt1wzmfhMbzPXs2PSYpWQPh3PrtWdoBAAAAAAAAXWb6XgsqHvp1esikEjISO0HGWIJsAtxLrASDiRMmw/mubJlOS20LGmSgcoo=">>),
     AuxHash = binary_part(EAuxPOW, {57, 32}),
@@ -444,5 +664,58 @@ encode_auxpow_test() ->
         }
     },
     ?assertEqual(EAuxPOW, encode_auxpow(DAuxPOW)).
+
+ip_test_() ->
+    DataSet = [
+        {{ip4, "192.168.42.1"}, <<0:16, 0:16, 0:16, 0:16, 0:16, 16#ffff:16, 192, 168, 42, 1>>},
+        {{ip6, "::"}, <<0:16, 0:16, 0:16, 0:16, 0:16, 0:16, 0:16, 0:16>>},
+        {{ip6, "1:0:1::"}, <<1:16, 0:16, 1:16, 0:16, 0:16, 0:16, 0:16, 0:16>>},
+        {{ip6, "::1:0:1"}, <<0:16, 0:16, 0:16, 0:16, 0:16, 1:16, 0:16, 1:16>>},
+        {{ip6, "2001:db8::1"}, <<16#2001:16, 16#0db8:16, 0:16, 0:16, 0:16, 0:16, 0:16, 16#0001:16>>},
+        {{ip6, "2001:db8:0:1:1:1:1:1"}, <<16#2001:16, 16#0db8:16, 0:16, 1:16, 1:16, 1:16, 1:16, 1:16>>},
+        {{ip6, "2001:0:0:1::1"}, <<16#2001:16, 0:16, 0:16, 1:16, 0:16, 0:16, 0:16, 1:16>>},
+        {{ip6, "2001:db8::1:0:0:1"}, <<16#2001:16, 16#0db8:16, 0:16, 0:16, 1:16, 0:16, 0:16, 1:16>>}
+    ],
+    [?_assertEqual(D, decode_ip(E)) || {D, E} <- DataSet] ++
+    [?_assertEqual(E, encode_ip(D)) || {D, E} <- DataSet].
+
+net_addr_test_() ->
+    EAddr1 = base64:decode(<<"4hUQTQEAAAAAAAAAAAAAAAAAAAAAAP//CgAAASCN">>),
+    DAddr1 = #btc_net_addr{time=1292899810, services=1, ip={ip4, "10.0.0.1"}, port=8333},
+    [
+        ?_assertEqual({DAddr1, <<>>}, decode_net_addr(EAddr1)),
+        ?_assertEqual(EAddr1, encode_net_addr(DAddr1))
+    ].
+
+version_test_() ->
+    EVersion = base64:decode(<<"nHwAAAEAAAAAAAAA5hUQTQAAAAABAAAAAAAAAAAAAAAAAAAAAAD//woAAAEgjQEAAAAAAAAAAAAA\nAAAAAAAAAP//CgAAAiCN3Z0gLDq0VxMAVYEBAA==">>),
+    DVersion = #btc_version{
+        version = 31900,
+        services = 1,
+        timestamp = 1292899814,
+        addr_recv = #btc_net_addr{services=1, ip={ip4, "10.0.0.1"}, port=8333},
+        addr_from = #btc_net_addr{services=1, ip={ip4, "10.0.0.2"}, port=8333},
+        nonce = 1393780771635895773,
+        sub_version_num = <<>>,
+        start_height = 98645
+    },
+    [
+        ?_assertEqual(DVersion, decode_version(EVersion)),
+        ?_assertEqual(EVersion, encode_version(DVersion))
+    ].
+
+command_test_() ->
+    [
+        ?_assertEqual(version, decode_command(<<"version",0,0,0,0,0>>)),
+        ?_assertEqual(<<"version",0,0,0,0,0>>, encode_command(version))
+    ].
+
+inv_test_() ->
+    EInv = base64:decode(<<"AQEAAAB0lIKueCpOhbzvAVsrHVsf1Agb/ryGu+dwLyoBwELThw==">>),
+    DInv = #btc_inv{inventory=[#btc_inv_vect{type=msg_tx, hash=base64:decode(<<"h9NCwAEqL3Dnu4a8/hsI1B9bHStbAe+8hU4qeK6ClHQ=">>)}]},
+    [
+        ?_assertEqual(DInv, decode_inv(EInv)),
+        ?_assertEqual(EInv, encode_inv(DInv))
+    ].
 
 -endif.

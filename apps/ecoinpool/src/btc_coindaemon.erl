@@ -23,7 +23,7 @@
 -behaviour(gen_server).
 
 -include("ecoinpool_workunit.hrl").
--include("btc_protocol_records.hrl").
+-include_lib("ebitcoin/include/btc_protocol_records.hrl").
 
 -export([
     start_link/2,

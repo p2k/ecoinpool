@@ -118,11 +118,8 @@ r_tree_dsha256(Hashlist, Size) ->
 
 -ifdef(TEST).
 
-dsha256_hash_test_() ->
-    [
-        ?_assertEqual(base64:decode(<<"UD2DGaSDSM3GEKWC9791S1gz32UDhgbrSFEHkN/JlZU=">>), dsha256_hash(<<"hello">>)),
-        ?_assertEqual(base64:decode(<<"AAAAAAAAAuPFkwailUxBO6pxrRh9Z7v/pxJh6LLeoc8=">>), dsha256_hash(btc_protocol:sample_header()))
-    ].
+dsha256_hash_test() ->
+    ?assertEqual(base64:decode(<<"UD2DGaSDSM3GEKWC9791S1gz32UDhgbrSFEHkN/JlZU=">>), dsha256_hash(<<"hello">>)).
 
 rs_hash_test() ->
     ?assertEqual(base64:decode(<<"AAAAAA/q/9gMdBn4bwSEjvPhseM26WEQ9apzJDT+5/o=">>), rs_hash(sc_coindaemon:sample_header())).

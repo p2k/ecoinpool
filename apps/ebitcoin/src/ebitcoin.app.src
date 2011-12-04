@@ -2,28 +2,28 @@
 %%
 %% Copyright (C) 2011  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
 %%
-%% This file is part of ecoinpool.
+%% This file is part of ebitcoin.
 %%
-%% ecoinpool is free software: you can redistribute it and/or modify
+%% ebitcoin is free software: you can redistribute it and/or modify
 %% it under the terms of the GNU General Public License as published by
 %% the Free Software Foundation, either version 3 of the License, or
 %% (at your option) any later version.
 %%
-%% ecoinpool is distributed in the hope that it will be useful,
+%% ebitcoin is distributed in the hope that it will be useful,
 %% but WITHOUT ANY WARRANTY; without even the implied warranty of
 %% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 %% GNU General Public License for more details.
 %%
 %% You should have received a copy of the GNU General Public License
-%% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
+%% along with ebitcoin.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
-{application, ecoinpool,
+{application, ebitcoin,
  [
-  {description, "A pool mining software for cryptographic currencies"},
-  {vsn, "0.2.2"},
-  {registered, [ecoinpool_app]},
-  {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, couchbeam]},
-  {mod, {ecoinpool_app, []}},
+  {description, "A Bitcoin cryptographic currency client implementation in Erlang"},
+  {vsn, "0.0.1"},
+  {registered, [ebitcoin_app]},
+  {applications, [kernel, stdlib, sasl, log4erl, crypto]},
+  {mod, {ebitcoin_app, []}},
   {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
  ]}.
