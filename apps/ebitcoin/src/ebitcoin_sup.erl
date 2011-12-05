@@ -23,7 +23,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, running_clients/0, start_client/3, stop_client/1]).
+-export([start_link/1, running_clients/0, start_client/3, stop_client/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -32,8 +32,8 @@
 %% API functions
 %% ===================================================================
 
-start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+start_link(DBConfig) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [DBConfig]).
 
 running_clients() ->
     lists:foldl(
@@ -64,6 +64,7 @@ stop_client(Name) ->
 %% Supervisor callbacks
 %% ===================================================================
 
-init([]) ->
+init([DBConfig]) ->
     {ok, { {one_for_one, 5, 10}, [
+        {ebitcoin_db, {ebitcoin_db_sup, start_link, [DBConfig]}, permanent, 5000, supervisor, [ebitcoin_db_sup]}
     ]} }.

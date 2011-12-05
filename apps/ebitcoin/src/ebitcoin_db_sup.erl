@@ -18,28 +18,26 @@
 %% along with ebitcoin.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(ebitcoin_app).
+-module(ebitcoin_db_sup).
+-behaviour(supervisor).
 
--behaviour(application).
+-export([start_link/1]).
 
-%% Application callbacks
--export([start/2, stop/1]).
+% Callbacks from supervisor
+-export([init/1]).
 
 %% ===================================================================
-%% Application callbacks
+%% API functions
 %% ===================================================================
 
-start(_StartType, _StartArgs) ->
-    % Init hash library
-    ok = ecoinpool_hash:init(),
-    % Load configuration
-    {ok, DBHost} = application:get_env(ebitcoin, db_host),
-    {ok, DBPort} = application:get_env(ebitcoin, db_port),
-    {ok, DBPrefix} = application:get_env(ebitcoin, db_prefix),
-    {ok, DBOptions} = application:get_env(ebitcoin, db_options),
-    % log4erl
-    log4erl:conf(filename:join(code:priv_dir(ebitcoin), "log4erl.conf")),
-    ebitcoin_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions}).
+start_link(DBConfig) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [DBConfig]).
 
-stop(_State) ->
-    ok.
+%% ===================================================================
+%% Supervisor callbacks
+%% ===================================================================
+
+init([DBConfig]) ->
+    {ok, { {rest_for_one, 5, 10}, [
+        {ebitcoin_db, {ebitcoin_db, start_link, [DBConfig]}, permanent, 5000, worker, [ebitcoin_db]}
+    ]} }.

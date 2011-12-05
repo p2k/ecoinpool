@@ -23,7 +23,7 @@
   {description, "A Bitcoin cryptographic currency client implementation in Erlang"},
   {vsn, "0.0.1"},
   {registered, [ebitcoin_app]},
-  {applications, [kernel, stdlib, sasl, log4erl, crypto]},
+  {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, couchbeam]},
   {mod, {ebitcoin_app, []}},
   {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
  ]}.

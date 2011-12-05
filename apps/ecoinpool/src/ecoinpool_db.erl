@@ -137,7 +137,7 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
                     log4erl:info(db, "Config database created!"),
                     NewConfDb;
                 {error, Error} ->
-                    log4erl:fatal(db, "config_db - couchbeam:open_or_create_db/3 returned an error: ~p", [Error]), throw({error, Error})
+                    log4erl:fatal(db, "config_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]), throw({error, Error})
             end
     end,
     % Start config & worker monitor (asynchronously)
@@ -262,7 +262,7 @@ handle_call({setup_shares_db, SubpoolName}, _From, State=#state{srv_conn=S}) ->
                     log4erl:info(db, "Shares database \"~s\" created!", [SubpoolName]),
                     {reply, ok, State};
                 {error, Error} ->
-                    log4erl:error(db, "shares_db - couchbeam:open_or_create_db/3 returned an error: ~p", [Error]),
+                    log4erl:error(db, "shares_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]),
                     {reply, error, State}
             end
     end;
@@ -446,6 +446,10 @@ terminate(_Reason, #state{view_update_timer=ViewUpdateTimer}) ->
 
 code_change(_OldVersion, State=#state{}, _Extra) ->
     {ok, State}.
+
+%% ===================================================================
+%% Other functions
+%% ===================================================================
 
 do_update_views(DBS, PID) ->
     try
@@ -657,7 +661,7 @@ store_share_in_db(WorkerId, UserId, IP, State, Hash, ParentHash, Target, BlockNu
         couchbeam:save_doc(DB, Doc),
         ok
     catch error:Reason ->
-        log4erl:warn(db, "store_share_in_db: ignored error: ~p", [Reason]),
+        log4erl:warn(db, "store_share_in_db: ignored error:~n~p", [Reason]),
         error
     end.
 
@@ -673,7 +677,7 @@ store_invalid_share_in_db(WorkerId, UserId, IP, Reason, Hash, ParentHash, Target
         couchbeam:save_doc(DB, Doc),
         ok
     catch error:Reason ->
-        log4erl:warn(db, "store_invalid_share_in_db: ignored error: ~p", [Reason]),
+        log4erl:warn(db, "store_invalid_share_in_db: ignored error:~n~p", [Reason]),
         error
     end.
 

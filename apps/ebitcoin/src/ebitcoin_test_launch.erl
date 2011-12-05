@@ -25,5 +25,7 @@ start() ->
     ok = application:start(sasl),
     ok = application:start(crypto),
     ok = application:start(log4erl),
+    ok = application:start(ibrowse),
+    ok = application:start(couchbeam),
     ok = application:start(ebitcoin),
     ebitcoin_sup:start_client(bitcoin, "127.0.0.1", 8333).

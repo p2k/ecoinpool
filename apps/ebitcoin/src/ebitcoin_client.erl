@@ -24,7 +24,8 @@
 -include("btc_protocol_records.hrl").
 
 -export([
-    start_link/3
+    start_link/3,
+    getdata_single/3
 ]).
 
 % Callbacks from gen_server
@@ -48,6 +49,9 @@
 start_link(Name, PeerHost, PeerPort) when Name =:= bitcoin; Name =:= bitcoin_testnet; Name =:= namecoin; Name =:= namecoin_testnet ->
     gen_server:start_link({local, Name}, ?MODULE, [Name, PeerHost, PeerPort], []).
 
+getdata_single(Name, Type, Hash) ->
+    gen_server:cast(Name, {getdata_single, Name, Type, Hash}).
+
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
@@ -55,6 +59,8 @@ start_link(Name, PeerHost, PeerPort) when Name =:= bitcoin; Name =:= bitcoin_tes
 init([Name, PeerHost, PeerPort]) ->
     % Trap exit
     process_flag(trap_exit, true),
+    % Setup the chain database
+    ok = ebitcoin_db:setup_chain_db(Name),
     % Connect
     log4erl:warn(ebitcoin, "~p: Connecting to ~s:~b...", [Name, PeerHost, PeerPort]),
     Socket = case gen_tcp:connect(PeerHost, PeerPort, [binary, inet, {packet, raw}]) of
@@ -86,6 +92,11 @@ handle_cast(start_handshake, State=#state{name=Name, node_nonce=NodeNonce, socke
         start_height = 0
     },
     gen_tcp:send(Socket, pack_message(Name, Version)),
+    {noreply, State};
+
+handle_cast({getdata_single, Name, Type, BSHash}, State=#state{name=Name, socket=Socket}) ->
+    Getdata = #btc_getdata{inventory=[#btc_inv_vect{type=Type, hash=ecoinpool_util:hexbin_to_bin(BSHash)}]},
+    gen_tcp:send(Socket, pack_message(Name, Getdata)),
     {noreply, State};
 
 handle_cast(_Message, State) ->
@@ -124,6 +135,12 @@ code_change(_OldVersion, State, _Extra) ->
 handle_bitcoin(#btc_version{}, State) ->
     % Just send verack, no matter what
     {reply, verack, State};
+
+handle_bitcoin(Block=#btc_block{}, State=#state{name=Name}) ->
+    % TODO: Verify the block
+    ebitcoin_db:store_block(Name, 0, Block),
+    {noreply, State};
+
 handle_bitcoin(Message, State=#state{name=Name}) ->
     log4erl:warn(ebitcoin, "~p: Unhandled message:~n~p", [Name, Message]),
     {noreply, State}.
@@ -216,7 +233,7 @@ pack_message(Name, Message) ->
 
 pack_message(Name, verack, _) ->
     Magic = network_magic(Name),
-    <<Magic/binary, "verack",0,0,0,0,0, 0:32>>;
+    <<Magic/binary, "verack",0,0,0,0,0,0, 0:32>>;
 pack_message(Name, version, Payload) ->
     Magic = network_magic(Name),
     Length = byte_size(Payload),
