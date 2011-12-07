@@ -334,16 +334,23 @@ encode_var_int(V) ->
 
 encode_var_list(Elements, EncodeElementFun) ->
     BLength = encode_var_int(length(Elements)),
-    encode_var_list(Elements, EncodeElementFun, BLength).
+    encode_var_list(Elements, EncodeElementFun, true, BLength).
 
-encode_var_list([], _, Acc) ->
+encode_var_list_noskip(Elements, EncodeElementFun) ->
+    BLength = encode_var_int(length(Elements)),
+    encode_var_list(Elements, EncodeElementFun, false, BLength).
+
+encode_var_list([], _, _, Acc) ->
     Acc;
-encode_var_list([H|T], EncodeElementFun, Acc) ->
+encode_var_list([H|T], EncodeElementFun, true, Acc) ->
     BElement = if % Skip already encoded parts
         is_binary(H) -> H;
         true -> EncodeElementFun(H)
     end,
-    encode_var_list(T, EncodeElementFun, <<Acc/binary, BElement/binary>>).
+    encode_var_list(T, EncodeElementFun, true, <<Acc/binary, BElement/binary>>);
+encode_var_list([H|T], EncodeElementFun, false, Acc) ->
+    BElement = EncodeElementFun(H),
+    encode_var_list(T, EncodeElementFun, false, <<Acc/binary, BElement/binary>>).
 
 encode_var_str(Str) ->
     BLength = encode_var_int(byte_size(Str)),
@@ -548,11 +555,11 @@ encode_getdata(#btc_getdata{inventory=Inventory}) ->
     encode_var_list(Inventory, fun encode_inv_vect/1).
 
 encode_getblocks(#btc_getblocks{version = Version, block_locator_hashes = BlockLocatorHashes, hash_stop = <<HashStop:256/big>>}) ->
-    BBlockLocatorHashes = encode_var_list(BlockLocatorHashes, fun encode_hash/1),
+    BBlockLocatorHashes = encode_var_list_noskip(BlockLocatorHashes, fun encode_hash/1),
     <<Version:32/unsigned-little, BBlockLocatorHashes/binary, HashStop:256/little>>.
 
 encode_getheaders(#btc_getheaders{hash_start = HashStart, hash_stop = <<HashStop:256/big>>}) ->
-    BHashStart = encode_var_list(HashStart, fun encode_hash/1),
+    BHashStart = encode_var_list_noskip(HashStart, fun encode_hash/1),
     <<BHashStart/binary, HashStop:256/little>>.
 
 encode_headers(#btc_headers{headers=Headers}) ->

@@ -50,10 +50,10 @@ start_link(SubpoolId, Config) ->
     gen_server:start_link(?MODULE, [SubpoolId, Config], []).
 
 get_aux_work(PID) ->
-    gen_server:call(PID, get_aux_work).
+    gen_server:call(PID, get_aux_work, infinity).
 
 send_aux_pow(PID, AuxHash, AuxPOW) ->
-    gen_server:call(PID, {send_aux_pow, AuxHash, AuxPOW}).
+    gen_server:call(PID, {send_aux_pow, AuxHash, AuxPOW}, infinity).
 
 %% ===================================================================
 %% Gen_Server callbacks

@@ -25,11 +25,15 @@
 
 -export([
     start_link/1,
-    setup_chain_db/1,
+    setup_chain_dbs/1,
     store_block/3,
     store_header/3,
     store_header/4,
-    set_view_update_interval/1
+    get_last_block_info/1,
+    get_block_height/2,
+    get_block_locator_hashes/2,
+    set_view_update_interval/1,
+    force_view_updates/1
 ]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -50,8 +54,8 @@
 start_link({DBHost, DBPort, DBPrefix, DBOptions}) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [{DBHost, DBPort, DBPrefix, DBOptions}], []).
 
-setup_chain_db(Chain) ->
-    gen_server:call(?MODULE, {setup_chain_db, Chain}).
+setup_chain_dbs(Chain) ->
+    gen_server:call(?MODULE, {setup_chain_dbs, Chain}).
 
 store_block(Chain, BlockNum, Block) ->
     gen_server:cast(?MODULE, {store_block, Chain, BlockNum, Block}).
@@ -62,8 +66,22 @@ store_header(Chain, BlockNum, Header) ->
 store_header(Chain, BlockNum, Header, AuxPOW) ->
     gen_server:cast(?MODULE, {store_header, Chain, BlockNum, Header, AuxPOW}).
 
+get_last_block_info(Chain) ->
+    gen_server:call(?MODULE, {get_last_block_info, Chain}, infinity).
+
+get_block_height(Chain, Hash) when byte_size(Hash) =:= 32 ->
+    gen_server:call(?MODULE, {get_block_height, Chain, ecoinpool_util:bin_to_hexbin(Hash)}, infinity);
+get_block_height(Chain, HexHash) when byte_size(HexHash) =:= 64 ->
+    gen_server:call(?MODULE, {get_block_height, Chain, HexHash}, infinity).
+
+get_block_locator_hashes(Chain, StartBlockNum) ->
+    gen_server:call(?MODULE, {get_block_locator_hashes, Chain, StartBlockNum}, infinity).
+
 set_view_update_interval(Seconds) ->
     gen_server:cast(?MODULE, {set_view_update_interval, Seconds}).
+
+force_view_updates(Chain) ->
+    gen_server:cast(?MODULE, {force_view_updates, Chain}).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -75,86 +93,150 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
     % Return initial state
     {ok, #state{srv_conn=S}}.
 
-handle_call({setup_chain_db, Chain}, _From, State=#state{srv_conn=S}) ->
+handle_call({setup_chain_dbs, Chain}, _From, State=#state{srv_conn=S}) ->
     SChain = atom_to_list(Chain),
+    SChainTx = SChain ++ "-tx",
     case couchbeam:db_exists(S, SChain) of
         true ->
             {reply, ok, State};
         _ ->
-            case couchbeam:create_db(S, SChain) of
-                {ok, DB} ->
-                    {ok, _} = couchbeam:save_doc(DB, {[
+            case couchbeam:db_exists(S, SChainTx) of
+                true -> {ok, _} = couchbeam:delete_db(S, SChainTx);
+                _ -> ok
+            end,
+            case {couchbeam:create_db(S, SChain), couchbeam:create_db(S, SChainTx)} of
+                {{ok, ChainDB}, {ok, ChainTxDB}} ->
+                    AuthDoc = {[
+                        {<<"_id">>, <<"_design/auth">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
+                    ]},
+                    {ok, _} = couchbeam:save_doc(ChainDB, AuthDoc),
+                    {ok, _} = couchbeam:save_doc(ChainTxDB, AuthDoc),
+                    {ok, _} = couchbeam:save_doc(ChainDB, {[
                         {<<"_id">>, <<"_design/headers">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
                             {<<"by_block_num">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.type === \"header\") emit(doc.block_num, null);}">>}
+                                {<<"map">>, <<"function(doc) {emit(doc.block_num, null);}">>}
+                            ]}},
+                            {<<"missing_tx">>, {[
+                                {<<"map">>, <<"function(doc) {if (doc.n_tx == 0) emit(null, null);}">>}
                             ]}},
                             {<<"next_header">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.type === \"header\") emit(doc.prev_block, null);}">>}
+                                {<<"map">>, <<"function(doc) {emit(doc.prev_block, null);}">>}
                             ]}}
                         ]}}
                     ]}),
-                    {ok, _} = couchbeam:save_doc(DB, {[
+                    {ok, _} = couchbeam:save_doc(ChainTxDB, {[
                         {<<"_id">>, <<"_design/transactions">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
-                            {<<"by_block_num">>, {[
+                            {<<"by_block_hash">>, {[
                                 {<<"map">>, <<"function(doc) {if (doc.type === \"tx\") emit([doc.block_hash, doc.index], null);}">>}
                             ]}}
                         ]}}
                     ]}),
-                    log4erl:info(ebitcoin, "Chain database \"~p\" created!", [Chain]),
+                    save_genesis_block(Chain, ChainDB, ChainTxDB),
+                    log4erl:info(ebitcoin, "Chain databases \"~s\" and \"~s\" created!", [SChain, SChainTx]),
                     {reply, ok, State};
-                {error, Error} ->
-                    log4erl:error(ebitcoin, "chain_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]),
+                _ ->
+                    log4erl:error(ebitcoin, "chain_db - errors occurred while creating chain databases!"),
                     {reply, error, State}
             end
     end;
+
+handle_call({get_last_block_info, Chain}, _From, State=#state{srv_conn=S}) ->
+    {ok, ChainDB} = couchbeam:open_db(S, atom_to_list(Chain)),
+    case couchbeam_view:fetch(ChainDB, {"headers", "by_block_num"}, [{limit, 1}, descending]) of
+        {ok, []} ->
+            {reply, error, State};
+        {ok, [{RowProps}]} ->
+            BlockNum = proplists:get_value(<<"key">>, RowProps),
+            BlockHash = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"id">>, RowProps)),
+            {reply, {BlockNum, BlockHash}, State}
+    end;
+
+handle_call({get_block_height, Chain, HexHash}, _From, State=#state{srv_conn=S}) ->
+    {ok, ChainDB} = couchbeam:open_db(S, atom_to_list(Chain)),
+    case couchbeam:open_doc(ChainDB, HexHash) of
+        {error, Reason} ->
+            {reply, {error, Reason}, State};
+        {ok, {DocProps}} ->
+            {reply, {ok, proplists:get_value(<<"block_num">>, DocProps)}, State}
+    end;
+
+handle_call({get_block_locator_hashes, Chain, StartBlockNum}, _From, State=#state{srv_conn=S}) ->
+    {ok, ChainDB} = couchbeam:open_db(S, atom_to_list(Chain)),
+    BLN = block_locator_numbers(StartBlockNum),
+    {ok, Rows} = couchbeam_view:fetch(ChainDB, {"headers", "by_block_num"}, [{keys, BLN}]),
+    {Hashes, _} = lists:foldr(
+        fun ({RowProps}, {Acc, LastBN}) ->
+            ThisBN = proplists:get_value(<<"key">>, RowProps),
+            if
+                ThisBN =/= LastBN ->
+                    Hash = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"id">>, RowProps)),
+                    {[Hash|Acc], ThisBN};
+                true ->
+                    {Acc, LastBN}
+            end
+        end,
+        {[], undefined},
+        Rows
+    ),
+    {reply, Hashes, State};
 
 handle_call(_Message, _From, State=#state{}) ->
     {reply, error, State}.
 
 handle_cast({store_block, Chain, BlockNum, Block}, State=#state{srv_conn=S}) ->
-    SChain = atom_to_list(Chain),
-    {ok, ChainDB} = couchbeam:open_db(S, SChain),
+    ChainDBName = atom_to_list(Chain),
+    {ok, ChainDB} = couchbeam:open_db(S, ChainDBName),
     
     #btc_block{header=Header, auxpow=AuxPOW, txns=Txns} = Block,
     BlockHash = get_hash(Header),
     
-    HeaderDocSaved = case couchbeam:doc_exists(ChainDB, BlockHash) of
-        false ->
-            case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, AuxPOW)) of
+    StoreTransactions = case couchbeam:open_doc(ChainDB, BlockHash) of
+        {error, _} -> % Create new, full header
+            case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, length(Txns), AuxPOW)) of
                 ok ->
                     true;
                 _ ->
                     false
             end;
-        true ->
-            true
+        {ok, Doc} -> % Update existing partial header
+            case couchbeam_doc:get_value(<<"n_tx">>, Doc) of
+                0 ->
+                    save_doc(ChainDB, couchbeam_doc:set_value(<<"n_tx">>, length(Txns), Doc));
+                _ ->
+                    log4erl:info(ebitcoin, "store_block: Skipping an already existing block."),
+                    false
+            end
     end,
     if
-        HeaderDocSaved ->
+        StoreTransactions ->
+            {ok, ChainTxDB} = couchbeam:open_db(S, ChainDBName ++ "-tx"),
             lists:foldl(
                 fun (Tx, Index) ->
-                    save_doc(ChainDB, make_tx_document(BlockHash, Index, Tx)),
+                    save_doc(ChainTxDB, make_tx_document(BlockHash, Index, Tx)),
                     Index + 1
                 end,
                 0,
                 Txns
             ),
-            {noreply, store_view_update(ChainDB, erlang:now(), State)};
+            {noreply, store_view_update(ChainDBName, erlang:now(), State)};
         true ->
             {noreply, State}
     end;
 
 handle_cast({store_header, Chain, BlockNum, Header, AuxPOW}, State=#state{srv_conn=S}) ->
-    SChain = atom_to_list(Chain),
-    {ok, ChainDB} = couchbeam:open_db(S, SChain),
+    ChainDBName = atom_to_list(Chain),
+    {ok, ChainDB} = couchbeam:open_db(S, ChainDBName),
     BlockHash = get_hash(Header),
-    case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, AuxPOW)) of
+    % Store partial header
+    case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, 0, AuxPOW)) of
         ok ->
-            {noreply, store_view_update(ChainDB, erlang:now(), State)};
+            {noreply, store_view_update(ChainDBName, erlang:now(), State)};
         _ ->
             {noreply, State}
     end;
@@ -180,13 +262,25 @@ handle_cast({set_view_update_interval, Seconds}, State=#state{view_update_interv
             end
     end;
 
+handle_cast({force_view_updates, Chain}, State=#state{srv_conn=S, view_update_running=ViewUpdateRunning}) ->
+    DBName = atom_to_list(Chain),
+    case ViewUpdateRunning of
+        false ->
+            PID = self(),
+            spawn(fun () -> do_update_views([DBName], S, PID) end),
+            {noreply, State#state{view_update_running=erlang:now()}};
+        _ ->
+            ok % Cannot force update while already running
+    end,
+    {noreply, State};
+
 handle_cast(_Message, State) ->
     {noreply, State}.
 
 handle_info(update_views, State=#state{view_update_dbs=undefined}) ->
     {noreply, State};
 
-handle_info(update_views, State=#state{view_update_interval=ViewUpdateInterval, view_update_running=ViewUpdateRunning, view_update_dbs=ViewUpdateDBS}) ->
+handle_info(update_views, State=#state{srv_conn=S, view_update_interval=ViewUpdateInterval, view_update_running=ViewUpdateRunning, view_update_dbs=ViewUpdateDBS}) ->
     case ViewUpdateRunning of
         false ->
             Now = erlang:now(),
@@ -201,7 +295,7 @@ handle_info(update_views, State=#state{view_update_interval=ViewUpdateInterval, 
                 _ ->
                     DBS = dict:fetch_keys(NewViewUpdateDBS),
                     PID = self(),
-                    spawn(fun () -> do_update_views(DBS, PID) end),
+                    spawn(fun () -> do_update_views(DBS, S, PID) end),
                     {noreply, State#state{view_update_running=erlang:now(), view_update_dbs=NewViewUpdateDBS}}
             end;
         _ ->
@@ -230,12 +324,14 @@ code_change(_OldVersion, State=#state{}, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-do_update_views(DBS, PID) ->
+do_update_views(DBS, S, PID) ->
     try
         lists:foreach(
-            fun (DB) ->
-                couchbeam_view:fetch(DB, {"headers", "by_block_num"}),
-                couchbeam_view:fetch(DB, {"transactions", "by_block_hash"})
+            fun (DBName) ->
+                {ok, DB} = couchbeam:open_db(S, DBName),
+                couchbeam_view:fetch(DB, {"headers", "by_block_num"}, [{limit, 1}]),
+                {ok, TxDB} = couchbeam:open_db(S, DBName ++ "-tx"),
+                couchbeam_view:fetch(TxDB, {"transactions", "by_block_hash"}, [{limit, 1}])
             end,
             DBS
         )
@@ -341,12 +437,12 @@ make_btc_aux_pow_part(AuxPOW) ->
         {<<"parent_header">>, make_btc_header_part(ParentHeader)}
     ]}.
 
-make_block_header_document(BlockNum, BlockHash, Header=#btc_header{}, AuxPOW) ->
+make_block_header_document(BlockNum, BlockHash, Header=#btc_header{}, NTx, AuxPOW) ->
     {HeaderPart} = make_btc_header_part(Header),
     DocProps = [
         {<<"_id">>, BlockHash},
-        {<<"type">>, <<"header">>},
-        {<<"block_num">>, BlockNum}
+        {<<"block_num">>, BlockNum},
+        {<<"n_tx">>, NTx}
     ] ++ HeaderPart,
     
     case AuxPOW of
@@ -360,9 +456,8 @@ make_tx_document(BlockHash, Index, Tx=#btc_tx{}) ->
     {TxPart} = make_btc_tx_part(Tx),
     {[
         {<<"_id">>, get_hash(Tx)},
-        {<<"type">>, <<"tx">>},
-        {<<"index">>, Index},
-        {<<"block_hash">>, BlockHash}
+        {<<"block_hash">>, BlockHash},
+        {<<"index">>, Index}
     ] ++ TxPart}.
 
 save_doc(DB, Doc) ->
@@ -376,5 +471,46 @@ save_doc(DB, Doc) ->
 
 store_view_update(_, _, State=#state{view_update_dbs=undefined}) ->
     State;
-store_view_update(DB, TS, State=#state{view_update_dbs=ViewUpdateDBS}) ->
-    State#state{view_update_dbs=dict:store(DB, TS, ViewUpdateDBS)}.
+store_view_update(DBName, TS, State=#state{view_update_dbs=ViewUpdateDBS}) ->
+    State#state{view_update_dbs=dict:store(DBName, TS, ViewUpdateDBS)}.
+
+save_genesis_block(bitcoin, ChainDB, ChainTxDB) ->
+    ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
+    Header = #btc_header{
+        version = 1,
+        hash_prev_block = ZeroHash,
+        hash_merkle_root = base64:decode(<<"Sl4eS6q4nzoyUYqIwxvIf2GPdmc+LMd6shJ7ev3tozs=">>),
+        timestamp = 16#495fab29,
+        bits = 16#1d00ffff,
+        nonce = 16#7c2bac1d
+    },
+    Tx = #btc_tx{
+        version = 1,
+        tx_in = [#btc_tx_in{
+            prev_output_hash = ZeroHash,
+            prev_output_index = 16#ffffffff,
+            signature_script = [16#1d00ffff, <<4>>, <<"The Times 03/Jan/2009 Chancellor on brink of second bailout for banks">>],
+            sequence = 16#ffffffff
+        }],
+        tx_out = [#btc_tx_out{
+            value = 5000000000,
+            pk_script = base64:decode(<<"QQRniv2w/lVIJxln8aZxMLcQXNaoKOA5CaZ5YuDqH2Hetkn2vD9M7zjE81UE5R7BEt5cOE33uguNV4pMcCtr8R1frA==">>)
+        }],
+        lock_time = 0
+    },
+    BlockHash = <<"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f">>,
+    ok = save_doc(ChainDB, make_block_header_document(0, BlockHash, Header, 1, undefined)),
+    ok = save_doc(ChainTxDB, make_tx_document(BlockHash, 0, Tx)).
+
+block_locator_numbers(StartBlockNum) ->
+    if
+        StartBlockNum =< 12 ->
+            lists:seq(StartBlockNum, 0, -1);
+        true ->
+            lists:reverse(block_locator_numbers(StartBlockNum-11, 2, lists:seq(StartBlockNum-10, StartBlockNum, 1)))
+    end.
+
+block_locator_numbers(0, _, Acc) ->
+    [0|Acc];
+block_locator_numbers(BN, S, Acc) ->
+    block_locator_numbers(max(0, BN-S), S*2, [BN|Acc]).
