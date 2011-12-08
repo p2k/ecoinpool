@@ -231,7 +231,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{chain=Chain,
                     gen_server:cast(self(), {resync, FinalBlock}),
                     {Got+StoredNow, undefined, FinalBlock}
             end;
-        {Got, ToGo, _} when Got+StoredNow =:= ToGo ->
+        {Got, ToGo, _} when Got+StoredNow >= ToGo ->
             log4erl:info(ebitcoin, "~p: Resync: Received final block header #~b", [Chain, LastBlockNum]),
             ebitcoin_db:force_view_updates(Chain),
             false;
