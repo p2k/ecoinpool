@@ -104,7 +104,7 @@ analyze_result([<<Data:160/bytes, _/binary>>]) ->
             error;
         BDataBigEndian ->
             BData = ecoinpool_util:endian_swap(BDataBigEndian),
-            Header = btc_protocol:decode_header(BData),
+            {Header, <<>>} = btc_protocol:decode_header(BData),
             WorkunitId = workunit_id_from_btc_header(Header),
             Hash = ecoinpool_hash:dsha256_hash(BData),
             [{WorkunitId, Hash, BData}]
@@ -168,7 +168,7 @@ init([SubpoolId, Config]) ->
     {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, timer=Timer, txtbl=TxTbl, worktbl=WorkTbl}}.
 
 handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, worktbl=WorkTbl, txtbl=TxTbl}) ->
-    Header = btc_protocol:decode_header(BData),
+    {Header, <<>>} = btc_protocol:decode_header(BData),
     WorkunitId = workunit_id_from_btc_header(Header),
     case ets:lookup(WorkTbl, WorkunitId) of
         [{_, CoinbaseTx, TxIndex, _}] ->
@@ -407,8 +407,7 @@ workunit_id_from_btc_header(#btc_header{hash_prev_block=HashPrevBlock, hash_merk
     crypto:sha(Data).
 
 make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, bits=Bits, first_tree_branches=FT}, CoinbaseTx) ->
-    EncTx = btc_protocol:encode_tx(CoinbaseTx),
-    HashedTx = ecoinpool_hash:dsha256_hash(EncTx),
+    HashedTx = btc_protocol:get_hash(CoinbaseTx),
     HashMerkleRoot = ecoinpool_hash:fold_tree_branches_dsha256_hash(HashedTx, FT),
     #btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
 
@@ -429,7 +428,7 @@ increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
     Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script = [Tag, Timestamp, ExtraNonce+1 | ScriptSigTrailer]}]}.
 
 make_workunit(Header=#btc_header{bits=Bits}, BlockNum, AuxWork) ->
-    BHeader = btc_protocol:encode_header(Header),
+    BHeader = btc_protocol:encode_main_header(Header),
     WUId = workunit_id_from_btc_header(Header),
     Target = ecoinpool_util:bits_to_target(Bits),
     #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BHeader, aux_work=AuxWork}.

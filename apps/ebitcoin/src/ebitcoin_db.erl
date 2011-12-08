@@ -28,7 +28,7 @@
     setup_chain_dbs/1,
     store_block/3,
     store_header/3,
-    store_header/4,
+    cut_branch/2,
     get_last_block_info/1,
     get_block_height/2,
     get_block_locator_hashes/2,
@@ -61,10 +61,10 @@ store_block(Chain, BlockNum, Block) ->
     gen_server:cast(?MODULE, {store_block, Chain, BlockNum, Block}).
 
 store_header(Chain, BlockNum, Header) ->
-    gen_server:cast(?MODULE, {store_header, Chain, BlockNum, Header, undefined}).
+    gen_server:cast(?MODULE, {store_header, Chain, BlockNum, Header}).
 
-store_header(Chain, BlockNum, Header, AuxPOW) ->
-    gen_server:cast(?MODULE, {store_header, Chain, BlockNum, Header, AuxPOW}).
+cut_branch(Chain, Height) ->
+    gen_server:cast(?MODULE, {cut_branch, Chain, Height}).
 
 get_last_block_info(Chain) ->
     gen_server:call(?MODULE, {get_last_block_info, Chain}, infinity).
@@ -121,7 +121,7 @@ handle_call({setup_chain_dbs, Chain}, _From, State=#state{srv_conn=S}) ->
                                 {<<"map">>, <<"function(doc) {emit(doc.block_num, null);}">>}
                             ]}},
                             {<<"missing_tx">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.n_tx == 0) emit(null, null);}">>}
+                                {<<"map">>, <<"function(doc) {if (doc.n_tx == 0) emit(doc.block_num, null);}">>}
                             ]}},
                             {<<"next_header">>, {[
                                 {<<"map">>, <<"function(doc) {emit(doc.prev_block, null);}">>}
@@ -133,7 +133,7 @@ handle_call({setup_chain_dbs, Chain}, _From, State=#state{srv_conn=S}) ->
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
                             {<<"by_block_hash">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.type === \"tx\") emit([doc.block_hash, doc.index], null);}">>}
+                                {<<"map">>, <<"function(doc) {emit([doc.block_hash, doc.index], null);}">>}
                             ]}}
                         ]}}
                     ]}),
@@ -193,12 +193,12 @@ handle_cast({store_block, Chain, BlockNum, Block}, State=#state{srv_conn=S}) ->
     ChainDBName = atom_to_list(Chain),
     {ok, ChainDB} = couchbeam:open_db(S, ChainDBName),
     
-    #btc_block{header=Header, auxpow=AuxPOW, txns=Txns} = Block,
-    BlockHash = get_hash(Header),
+    #btc_block{header=Header, txns=Txns} = Block,
+    BlockHash = ecoinpool_util:bin_to_hexbin(btc_protocol:get_hash(Header)),
     
     StoreTransactions = case couchbeam:open_doc(ChainDB, BlockHash) of
         {error, _} -> % Create new, full header
-            case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, length(Txns), AuxPOW)) of
+            case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, length(Txns))) of
                 ok ->
                     true;
                 _ ->
@@ -229,17 +229,50 @@ handle_cast({store_block, Chain, BlockNum, Block}, State=#state{srv_conn=S}) ->
             {noreply, State}
     end;
 
-handle_cast({store_header, Chain, BlockNum, Header, AuxPOW}, State=#state{srv_conn=S}) ->
+handle_cast({store_header, Chain, BlockNum, Header}, State=#state{srv_conn=S}) ->
     ChainDBName = atom_to_list(Chain),
     {ok, ChainDB} = couchbeam:open_db(S, ChainDBName),
-    BlockHash = get_hash(Header),
+    BlockHash = ecoinpool_util:bin_to_hexbin(btc_protocol:get_hash(Header)),
     % Store partial header
-    case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, 0, AuxPOW)) of
+    case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, 0)) of
         ok ->
             {noreply, store_view_update(ChainDBName, erlang:now(), State)};
         _ ->
             {noreply, State}
     end;
+
+handle_cast({cut_branch, Chain, Height}, State=#state{srv_conn=S}) ->
+    ChainDBName = atom_to_list(Chain),
+    {ok, ChainDB} = couchbeam:open_db(S, ChainDBName),
+    case couchbeam_view:fetch(ChainDB, {"headers", "by_block_num"}, [{start_key, Height}, include_docs]) of
+        {ok, []} ->
+            ok;
+        {ok, Rows} ->
+            {Hashes, Docs} = lists:unzip(lists:map(
+                fun ({RowProps}) ->
+                    Doc = proplists:get_value(<<"doc">>, RowProps),
+                    Hash = case couchbeam_doc:get_value(<<"n_tx">>, Doc) of
+                        0 -> undefined;
+                        _ -> proplists:get_value(<<"id">>, RowProps)
+                    end,
+                    {Hash, Doc}
+                end,
+                Rows
+            )),
+            couchbeam:delete_docs(ChainDB, Docs),
+            {ok, ChainTxDB} = couchbeam:open_db(S, ChainDBName ++ "-tx"),
+            lists:foreach(
+                fun
+                    (undefined) -> ok;
+                    (Hash) ->
+                        {ok, Rows2} = couchbeam_view:fetch(ChainTxDB, {"transactions", "by_block_hash"}, [{start_key, [Hash, 0]}, {end_key, [Hash, {[]}]}, include_docs]),
+                        Docs2 = lists:map(fun ({RowProps}) -> proplists:get_value(<<"doc">>, RowProps) end, Rows2),
+                        couchbeam:delete_docs(ChainDB, Docs2)
+                end,
+                Hashes
+            )
+    end,
+    {noreply, State};
 
 handle_cast({set_view_update_interval, Seconds}, State=#state{view_update_interval=OldViewUpdateInterval, view_update_timer=OldViewUpdateTimer, view_update_dbs=OldViewUpdateDBS}) ->
     if
@@ -270,9 +303,8 @@ handle_cast({force_view_updates, Chain}, State=#state{srv_conn=S, view_update_ru
             spawn(fun () -> do_update_views([DBName], S, PID) end),
             {noreply, State#state{view_update_running=erlang:now()}};
         _ ->
-            ok % Cannot force update while already running
-    end,
-    {noreply, State};
+            {noreply, State} % Cannot force update while already running
+    end;
 
 handle_cast(_Message, State) ->
     {noreply, State}.
@@ -342,13 +374,6 @@ do_update_views(DBS, S, PID) ->
             log4erl:error(ebitcoin, "Exception in do_update_views:~n~p", [Reason])
     end,
     PID ! view_update_complete.
-
-get_hash(Bin) when is_binary(Bin) ->
-    ecoinpool_util:bin_to_hexbin(ecoinpool_hash:dsha256_hash(Bin));
-get_hash(Header=#btc_header{}) ->
-    get_hash(btc_protocol:encode_header(Header));
-get_hash(Tx=#btc_tx{}) ->
-    get_hash(btc_protocol:encode_tx(Tx)).
 
 make_btc_header_part(Header) ->
     #btc_header{
@@ -437,7 +462,7 @@ make_btc_aux_pow_part(AuxPOW) ->
         {<<"parent_header">>, make_btc_header_part(ParentHeader)}
     ]}.
 
-make_block_header_document(BlockNum, BlockHash, Header=#btc_header{}, NTx, AuxPOW) ->
+make_block_header_document(BlockNum, BlockHash, Header=#btc_header{}, NTx) ->
     {HeaderPart} = make_btc_header_part(Header),
     DocProps = [
         {<<"_id">>, BlockHash},
@@ -445,17 +470,17 @@ make_block_header_document(BlockNum, BlockHash, Header=#btc_header{}, NTx, AuxPO
         {<<"n_tx">>, NTx}
     ] ++ HeaderPart,
     
-    case AuxPOW of
+    case Header#btc_header.auxpow of
         undefined ->
             {DocProps};
-        _ ->
+        AuxPOW ->
             {DocProps ++ [{<<"aux_pow">>, make_btc_aux_pow_part(AuxPOW)}]}
     end.
 
 make_tx_document(BlockHash, Index, Tx=#btc_tx{}) ->
     {TxPart} = make_btc_tx_part(Tx),
     {[
-        {<<"_id">>, get_hash(Tx)},
+        {<<"_id">>, ecoinpool_util:bin_to_hexbin(btc_protocol:get_hash(Tx))},
         {<<"block_hash">>, BlockHash},
         {<<"index">>, Index}
     ] ++ TxPart}.
@@ -499,7 +524,7 @@ save_genesis_block(bitcoin, ChainDB, ChainTxDB) ->
         lock_time = 0
     },
     BlockHash = <<"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f">>,
-    ok = save_doc(ChainDB, make_block_header_document(0, BlockHash, Header, 1, undefined)),
+    ok = save_doc(ChainDB, make_block_header_document(0, BlockHash, Header, 1)),
     ok = save_doc(ChainTxDB, make_tx_document(BlockHash, 0, Tx)).
 
 block_locator_numbers(StartBlockNum) ->

@@ -54,7 +54,7 @@ send_aux_pow(#auxwork{aux_hash=AuxHash}, CoinbaseTx, BlockHash, TxTreeBranches, 
     
     AuxPOW = #btc_auxpow{
         coinbase_tx = CoinbaseTx,
-        block_hash = ecoinpool_util:byte_reverse(BlockHash),
+        block_hash = BlockHash,
         tx_tree_branches = TxTreeBranches,
         parent_header = ParentHeader
     },

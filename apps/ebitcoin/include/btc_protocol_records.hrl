@@ -24,7 +24,8 @@
     hash_merkle_root :: binary(),
     timestamp :: integer(),
     bits :: integer(),
-    nonce = 0 :: integer()
+    nonce = 0 :: integer(),
+    auxpow :: btc_auxpow() | undefined
 }).
 -type btc_header() :: #btc_header{}.
 
@@ -63,7 +64,6 @@
 
 -record(btc_block, {
     header :: btc_header(),
-    auxpow :: btc_auxpow() | undefined,
     txns :: [btc_tx()]
 }).
 -type btc_block() :: #btc_block{}.
@@ -117,12 +117,13 @@
 -type btc_getblocks() :: #btc_getblocks{}.
 
 -record(btc_getheaders, {
-    hash_start :: [binary()],
+    version :: integer(),
+    block_locator_hashes :: [binary()],
     hash_stop :: binary()
 }).
 -type btc_getheaders() :: #btc_getheaders{}.
 
 -record(btc_headers, {
-    headers :: [btc_header()]
+    long_headers :: [{btc_header(), integer()}]
 }).
 -type btc_headers() :: #btc_headers{}.

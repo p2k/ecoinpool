@@ -24,8 +24,7 @@
 -include("btc_protocol_records.hrl").
 
 -export([
-    start_link/3,
-    getdata_single/3
+    start_link/3
 ]).
 
 % Callbacks from gen_server
@@ -54,9 +53,6 @@
 
 start_link(Chain, PeerHost, PeerPort) when Chain =:= bitcoin; Chain =:= bitcoin_testnet; Chain =:= namecoin; Chain =:= namecoin_testnet ->
     gen_server:start_link({local, Chain}, ?MODULE, [Chain, PeerHost, PeerPort], []).
-
-getdata_single(Chain, Type, Hash) ->
-    gen_server:cast(Chain, {getdata_single, Chain, Type, Hash}).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -88,8 +84,6 @@ init([Chain, PeerHost, PeerPort]) ->
         socket = Socket,
         last_block_num = BlockNum,
         last_block_hash = BlockHash,
-        block_invq = [],
-        getdataq = [],
         pkt_buf = <<>>
     },
     {ok, InitialState}.
@@ -114,11 +108,6 @@ handle_cast(start_handshake, State=#state{chain=Chain, node_nonce=NodeNonce, soc
     gen_tcp:send(Socket, pack_message(Chain, Version)),
     {noreply, State};
 
-handle_cast({getdata_single, Chain, Type, BSHash}, State=#state{chain=Chain, socket=Socket}) ->
-    Getdata = #btc_getdata{inventory=[#btc_inv_vect{type=Type, hash=ecoinpool_util:hexbin_to_bin(BSHash)}]},
-    gen_tcp:send(Socket, pack_message(Chain, Getdata)),
-    {noreply, State};
-
 handle_cast({resync, FinalBlock}, State=#state{chain=Chain, socket=Socket, last_block_num=BlockNum, resync_mode=R}) ->
     NewR = case R of
         {_, _, FinalBlock} ->
@@ -134,14 +123,8 @@ handle_cast({resync, FinalBlock}, State=#state{chain=Chain, socket=Socket, last_
                     {0, FinalBlock-BlockNum, FinalBlock}
             end
     end,
-    BLH = ebitcoin_db:get_block_locator_hashes(Chain, BlockNum),
-    GetBlock = #btc_getblocks{
-        version = 50000,
-        block_locator_hashes = BLH,
-        hash_stop = binary:list_to_bin(lists:duplicate(32,0))
-    },
-    gen_tcp:send(Socket, pack_message(Chain, GetBlock)),
-    log4erl:debug(ebitcoin, "~p: Resync: Block locator object size: ~b", [Chain, length(BLH)]),
+    GetHeaders = make_getheaders(Chain, BlockNum),
+    gen_tcp:send(Socket, pack_message(Chain, GetHeaders)),
     {noreply, State#state{resync_mode=NewR}};
 
 handle_cast(_Message, State) ->
@@ -188,89 +171,82 @@ handle_bitcoin(#btc_version{version=Version, start_height=TheirBlockNum}, State=
     % Always send verack
     {reply, verack, State};
 
-handle_bitcoin(Block=#btc_block{header=Header}, State=#state{chain=Chain, last_block_num=LastBlockNum, last_block_hash=OurHashPrevBlock, block_invq=BlockInvQ, getdataq=[GetDataH|GetDataT], resync_mode=R}) ->
+handle_bitcoin(Block=#btc_block{header=Header}, State=#state{chain=Chain}) ->
     % TODO: Verify the block
-    
-    #btc_inv_vect{hash=GetDataHash} = GetDataH,
-    #btc_header{hash_prev_block=HashPrevBlock} = Header,
-    BlockHash = ecoinpool_hash:dsha256_hash(btc_protocol:encode_header(Header)),
-    
-    BlockNum = if
-        BlockHash =/= GetDataHash ->
-            log4erl:warn(ebitcoin, "~p: Received a block out of getdata order, skipping!", [Chain]),
-            undefined;
-        HashPrevBlock =:= OurHashPrevBlock ->
-            LastBlockNum + 1;
-        R =:= false ->
-            log4erl:debug(ebitcoin, "~p: Searching for a prev block...", [Chain]),
-            case ebitcoin_db:get_block_height(Chain, HashPrevBlock) of
-                {ok, BN} ->
-                    log4erl:warn(ebitcoin, "~p: Branching detected! Difference: ~b blocks", [Chain, LastBlockNum-BN]),
-                    BN + 1;
-                {error, _} ->
-                    log4erl:warn(ebitcoin, "~p: Received an unknown or orphan block, triggering resync!", [Chain]),
-                    case R of
-                        {_, _, FB} ->
-                            gen_server:cast(self(), {resync, FB});
-                        _ ->
-                            gen_server:cast(self(), {resync, undefined})
-                    end,
-                    skip
-            end;
-        true ->
-            % Resync running, continue
-            {_, _, FB} = R,
-            gen_server:cast(self(), {resync, FB}),
-            skip
+    BlockHash = btc_protocol:get_hash(Header),
+    case ebitcoin_db:get_block_height(Chain, BlockHash) of
+        {ok, BlockNum} ->
+            log4erl:info(ebitcoin, "~p: Storing full block #~b", [Chain, BlockNum]),
+            ebitcoin_db:store_block(Chain, BlockNum, Block);
+        {error, _} ->
+            log4erl:warn(ebitcoin, "~p: Could not store full block, header not found!", [Chain])
     end,
-    case BlockNum of
-        skip ->
-            {noreply, State#state{getdataq=GetDataT}};
-        undefined ->
-            {noreply, State};
-        _ ->
-            ebitcoin_db:store_block(Chain, BlockNum, Block),
-            NewR = case R of
-                {Got, undefined, FinalBlock} ->
-                    case FinalBlock of
-                        BlockHash ->
-                            log4erl:info(ebitcoin, "~p: Resync: Received final block #~b", [Chain, BlockNum]),
-                            ebitcoin_db:force_view_updates(Chain),
-                            false;
-                        _ ->
-                            log4erl:info(ebitcoin, "~p: Resync: Received block #~b - got ~b", [Chain, BlockNum, Got+1]),
-                            {Got+1, undefined, FinalBlock}
-                    end;
-                {Got, ToGo, _} when Got+1 =:= ToGo ->
-                    log4erl:info(ebitcoin, "~p: Resync: Received final block #~b", [Chain, BlockNum]),
+    {noreply, State};
+
+handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{chain=Chain, last_block_num=OldLastBlockNum, last_block_hash=OldLastBlockHash, resync_mode=R}) ->
+    {LastBlockNum, LastBlockHash, _} = lists:foldl(
+        fun
+            (_, {LBN, LBH, true}) ->
+                {LBN, LBH, true};
+            ({Header, _}, {LBN, LBH, false}) ->
+                #btc_header{hash_prev_block=HashPrevBlock} = Header,
+                BlockNum = case LBH of
+                    undefined ->
+                        undefined;
+                    HashPrevBlock ->
+                        LBN + 1;
+                    _ ->
+                        log4erl:debug(ebitcoin, "~p: Searching for a prev block...", [Chain]),
+                        case ebitcoin_db:get_block_height(Chain, HashPrevBlock) of
+                            {ok, FoundBN} ->
+                                log4erl:warn(ebitcoin, "~p: Branching detected! Difference: ~b block(s)", [Chain, LBN-FoundBN]),
+                                ebitcoin_db:cut_branch(Chain, FoundBN + 1),
+                                FoundBN + 1;
+                            {error, _} ->
+                                log4erl:error(ebitcoin, "~p: Received an orphan block in headers message!", [Chain]),
+                                undefined
+                        end
+                end,
+                case BlockNum of
+                    undefined ->
+                        {LBN, LBH, true};
+                    _ ->
+                        ebitcoin_db:store_header(Chain, BlockNum, Header),
+                        {BlockNum, btc_protocol:get_hash(Header), false}
+                end
+        end,
+        {OldLastBlockNum, OldLastBlockHash, false},
+        LongHeaders
+    ),
+    StoredNow = LastBlockNum-OldLastBlockNum,
+    NewR = case R of
+        {Got, undefined, FinalBlock} ->
+            case FinalBlock of
+                LastBlockHash ->
+                    log4erl:info(ebitcoin, "~p: Resync: Received final block header #~b", [Chain, LastBlockNum]),
                     ebitcoin_db:force_view_updates(Chain),
                     false;
-                {Got, ToGo, FinalBlock} ->
-                    log4erl:info(ebitcoin, "~p: Resync: Received block #~b - ~.2f%", [Chain, BlockNum, (Got+1) * 100.0 / ToGo]),
-                    {Got+1, ToGo, FinalBlock};
-                false ->
-                    log4erl:info(ebitcoin, "~p: Received block #~b", [Chain, BlockNum]),
-                    false
-            end,
-            NewState = State#state{last_block_num=BlockNum, last_block_hash=BlockHash, resync_mode=NewR},
-            case GetDataT of
-                [] ->
-                    log4erl:info(ebitcoin, "~p: getdata queue finished", [Chain]),
-                    case BlockInvQ of
-                        [] ->
-                            {noreply, NewState#state{getdataq=[]}};
-                        _ ->
-                            NextGetDataQ = lists:reverse(BlockInvQ),
-                            log4erl:info(ebitcoin, "~p: Requesting ~b queued block(s)", [Chain, length(NextGetDataQ)]),
-                            {reply, #btc_getdata{inventory=NextGetDataQ}, NewState#state{block_invq=[], getdataq=NextGetDataQ}}
-                    end;
                 _ ->
-                    {noreply, NewState#state{getdataq=GetDataT}}
-            end
-    end;
+                    log4erl:info(ebitcoin, "~p: Resync: Now at block header #~b - got ~b", [Chain, LastBlockNum, Got+StoredNow]),
+                    gen_server:cast(self(), {resync, FinalBlock}),
+                    {Got+StoredNow, undefined, FinalBlock}
+            end;
+        {Got, ToGo, _} when Got+StoredNow =:= ToGo ->
+            log4erl:info(ebitcoin, "~p: Resync: Received final block header #~b", [Chain, LastBlockNum]),
+            ebitcoin_db:force_view_updates(Chain),
+            false;
+        {Got, ToGo, FinalBlock} ->
+            log4erl:info(ebitcoin, "~p: Resync: Now at block header #~b - ~.2f%", [Chain, LastBlockNum, (Got+StoredNow) * 100.0 / ToGo]),
+            gen_server:cast(self(), {resync, FinalBlock}),
+            {Got+StoredNow, ToGo, FinalBlock};
+        false ->
+            log4erl:info(ebitcoin, "~p: Now at block header #~b", [Chain, LastBlockNum]),
+            false
+    end,
+    {noreply, State#state{last_block_num=LastBlockNum, last_block_hash=LastBlockHash, resync_mode=NewR}};
 
-handle_bitcoin(#btc_inv{inventory=Inv}, State=#state{chain=Chain, block_invq=OldBlockInvQ, getdataq=OldGetDataQ}) ->
-    BlockInvQ = lists:foldl(
+handle_bitcoin(#btc_inv{inventory=Inv}, State=#state{chain=Chain, last_block_num=LastBlockNum}) ->
+    BlockInvs = lists:foldl(
         fun
             (IV=#btc_inv_vect{type=msg_block}, Acc) ->
                 [IV|Acc];
@@ -280,22 +256,20 @@ handle_bitcoin(#btc_inv{inventory=Inv}, State=#state{chain=Chain, block_invq=Old
                 log4erl:warn(ebitcoin, "~p: Received unknown inv type \"~p\", skipping!", [Chain, Type]),
                 Acc
         end,
-        OldBlockInvQ,
+        [],
         Inv
     ),
-    case {BlockInvQ, OldGetDataQ} of
-        {[], _} ->
-            {noreply, State};
-        {_, []} ->
-            GetDataQ = lists:reverse(BlockInvQ),
-            log4erl:info(ebitcoin, "~p: Requesting ~b block(s)", [Chain, length(GetDataQ)]),
-            {reply, #btc_getdata{inventory=GetDataQ}, State#state{block_invq=[], getdataq=GetDataQ}};
-        {OldBlockInvQ, _} ->
+    case BlockInvs of
+        [] ->
             {noreply, State};
         _ ->
-            log4erl:info(ebitcoin, "~p: Queued ~b more block request(s)", [Chain, length(BlockInvQ)-length(OldBlockInvQ)]),
-            {noreply, State#state{block_invq=BlockInvQ}}
+            % If we got a blockchange, send getheaders in all cases
+            log4erl:info(ebitcoin, "~p: Detected a potentially new block", [Chain]),
+            {reply, make_getheaders(Chain, LastBlockNum), State}
     end;
+
+handle_bitcoin(#btc_addr{}, State) ->
+    {noreply, State}; % Ignore addr messages
 
 handle_bitcoin(Message, State=#state{chain=Chain}) ->
     log4erl:warn(ebitcoin, "~p: Unhandled message:~n~p", [Chain, Message]),
@@ -327,7 +301,7 @@ handle_stream_data(Data, State=#state{chain=Chain, socket=Socket}) ->
                             log4erl:error(ebitcoin, "~p: Error while decoding a message:~n~p", [Chain, Reason]),
                             log4erl:debug(ebitcoin, "~p: Message data was:~n~p - ~s", [Chain, Command, ecoinpool_util:bin_to_hexbin(Payload)]),
                             State;
-                        Message ->
+                        {Message, <<>>} ->
                             case handle_bitcoin(Message, State) of
                                 {noreply, NewState} ->
                                     NewState;
@@ -335,7 +309,11 @@ handle_stream_data(Data, State=#state{chain=Chain, socket=Socket}) ->
                                     {ReplyCommand, ReplyPayload} = encode_message(ReplyMessage),
                                     gen_tcp:send(Socket, pack_message(Chain, ReplyCommand, ReplyPayload)),
                                     NewState
-                            end
+                            end;
+                        {_, Trailer} ->
+                            log4erl:error(ebitcoin, "~p: Error while decoding a message:~n~b trailing byte(s) found", [Chain, byte_size(Trailer)]),
+                            log4erl:debug(ebitcoin, "~p: Message data was:~n~p - ~s", [Chain, Command, ecoinpool_util:bin_to_hexbin(Payload)]),
+                            State
                     end);
                 true ->
                     log4erl:error(ebitcoin, "~p: Message checksum mismatch.", [Chain]),
@@ -413,8 +391,10 @@ decode_message(getblocks, Data) ->
     btc_protocol:decode_getblocks(Data);
 decode_message(getheaders, Data) ->
     btc_protocol:decode_getheaders(Data);
+decode_message(headers, Data) ->
+    btc_protocol:decode_headers(Data);
 decode_message(tx, Data) ->
-    {Tx, <<>>} = btc_protocol:decode_tx(Data), Tx;
+    btc_protocol:decode_tx(Data);
 decode_message(block, Data) ->
     btc_protocol:decode_block(Data);
 decode_message(ping, _) ->
@@ -436,6 +416,8 @@ encode_message(Message=#btc_getblocks{}) ->
     {getblocks, btc_protocol:encode_getblocks(Message)};
 encode_message(Message=#btc_getheaders{}) ->
     {getheaders, btc_protocol:encode_getheaders(Message)};
+encode_message(Message=#btc_headers{}) ->
+    {headers, btc_protocol:encode_headers(Message)};
 encode_message(Message=#btc_tx{}) ->
     {tx, btc_protocol:encode_tx(Message)};
 encode_message(Message=#btc_block{}) ->
@@ -455,3 +437,12 @@ network_magic(namecoin) ->
     <<249,190,180,254>>;
 network_magic(namecoin_testnet) ->
     <<250,191,181,254>>.
+
+make_getheaders(Chain, BlockNum) ->
+    BLH = ebitcoin_db:get_block_locator_hashes(Chain, BlockNum),
+    %log4erl:debug(ebitcoin, "~p: Block locator object size: ~b", [Chain, length(BLH)]),
+    #btc_getheaders{
+        version = 50000,
+        block_locator_hashes = BLH,
+        hash_stop = binary:list_to_bin(lists:duplicate(32,0))
+    }.
