@@ -28,7 +28,7 @@
 
 -module(ecoinpool_mmm, [AuxDaemons]).
 
--include_lib("ebitcoin/include/btc_protocol_records.hrl").
+-include("../ebitcoin/include/btc_protocol_records.hrl").
 -include("ecoinpool_workunit.hrl").
 
 -export([get_new_aux_work/1, send_aux_pow/5]).

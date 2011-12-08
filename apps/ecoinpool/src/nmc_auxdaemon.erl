@@ -22,7 +22,7 @@
 -behaviour(gen_auxdaemon).
 -behaviour(gen_server).
 
--include_lib("ebitcoin/include/btc_protocol_records.hrl").
+-include("../ebitcoin/include/btc_protocol_records.hrl").
 -include("ecoinpool_workunit.hrl").
 
 -export([start_link/2, get_aux_work/1, send_aux_pow/3]).
