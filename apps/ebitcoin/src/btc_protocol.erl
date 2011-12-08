@@ -133,9 +133,9 @@ decode_header(BData) ->
         T1/binary
     >> = BData,
     
-    {AuxPOW, T2} = case Version of
-        1 -> {undefined, T1};
-        16#10101 -> decode_auxpow(T1)
+    {AuxPOW, T2} = if
+        Version band 16#100 =/= 0 -> decode_auxpow(T1);
+        true -> {undefined, T1}
     end,
     
     {#btc_header{
@@ -362,9 +362,9 @@ encode_header(BTCHeader) ->
         auxpow = AuxPOW
     } = BTCHeader,
     
-    BAuxPOW = case Version of
-        1 -> <<>>;
-        16#10101 -> encode_auxpow(AuxPOW)
+    BAuxPOW = if
+        Version band 16#100 =/= 0 -> encode_auxpow(AuxPOW);
+        true -> <<>>
     end,
     
     <<

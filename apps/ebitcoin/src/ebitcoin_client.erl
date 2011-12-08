@@ -245,7 +245,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{chain=Chain,
     end,
     {noreply, State#state{last_block_num=LastBlockNum, last_block_hash=LastBlockHash, resync_mode=NewR}};
 
-handle_bitcoin(#btc_inv{inventory=Inv}, State=#state{chain=Chain, last_block_num=LastBlockNum}) ->
+handle_bitcoin(#btc_inv{inventory=Inv}, State=#state{chain=Chain, last_block_num=LastBlockNum, resync_mode=R}) ->
     BlockInvs = lists:foldl(
         fun
             (IV=#btc_inv_vect{type=msg_block}, Acc) ->
@@ -262,10 +262,13 @@ handle_bitcoin(#btc_inv{inventory=Inv}, State=#state{chain=Chain, last_block_num
     case BlockInvs of
         [] ->
             {noreply, State};
-        _ ->
+        _ when R =:= false ->
             % If we got a blockchange, send getheaders in all cases
             log4erl:info(ebitcoin, "~p: Detected a potentially new block", [Chain]),
-            {reply, make_getheaders(Chain, LastBlockNum), State}
+            {reply, make_getheaders(Chain, LastBlockNum), State};
+        _ ->
+            log4erl:info(ebitcoin, "~p: Ignored blockchange during resync", [Chain]),
+            {noreply, State}
     end;
 
 handle_bitcoin(#btc_addr{}, State) ->

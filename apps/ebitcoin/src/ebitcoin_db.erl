@@ -525,6 +525,34 @@ save_genesis_block(bitcoin, ChainDB, ChainTxDB) ->
     },
     BlockHash = <<"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f">>,
     ok = save_doc(ChainDB, make_block_header_document(0, BlockHash, Header, 1)),
+    ok = save_doc(ChainTxDB, make_tx_document(BlockHash, 0, Tx));
+
+save_genesis_block(namecoin, ChainDB, ChainTxDB) ->
+    ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
+    Header = #btc_header{
+        version = 1,
+        hash_prev_block = ZeroHash,
+        hash_merkle_root = base64:decode(<<"QcYtvZBoyJpElSXjzVrGGyDs4ow8OLPzWyFh8ObTyw0=">>),
+        timestamp = 16#4daa33c1,
+        bits = 16#1c007fff,
+        nonce = 16#a21ea192
+    },
+    Tx = #btc_tx{
+        version = 1,
+        tx_in = [#btc_tx_in{
+            prev_output_hash = ZeroHash,
+            prev_output_index = 16#ffffffff,
+            signature_script = [16#1c007fff, 522, <<"... choose what comes next.  Lives of your own, or a return to chains. -- V">>],
+            sequence = 16#ffffffff
+        }],
+        tx_out = [#btc_tx_out{
+            value = 5000000000,
+            pk_script = base64:decode(<<"QQS2IDaQUM2Jn/u8To7lHoxFNKhVu0Y0OdY9I11HeWhdi29IcKI4zzZayU+hPvmioizZnQ1e6G3K\nvK/ONses9DzlrA==">>)
+        }],
+        lock_time = 0
+    },
+    BlockHash = <<"000000000062b72c5e2ceb45fbc8587e807c155b0da735e6483dfba2f0a9c770">>,
+    ok = save_doc(ChainDB, make_block_header_document(0, BlockHash, Header, 1)),
     ok = save_doc(ChainTxDB, make_tx_document(BlockHash, 0, Tx)).
 
 block_locator_numbers(StartBlockNum) ->
