@@ -23,7 +23,15 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/1, running_clients/0, start_client/3, stop_client/1]).
+-export([
+    start_link/1,
+    running_clients/0,
+    start_client/3,
+    stop_client/1,
+    crash_store/2,
+    crash_fetch/1,
+    crash_transfer_ets/1
+]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -60,11 +68,21 @@ stop_client(Name) ->
         Error -> Error
     end.
 
+crash_store(Key, Value) ->
+    ebitcoin_crash_repo:store(ebitcoin_crash_repo, Key, Value).
+
+crash_fetch(Key) ->
+    ebitcoin_crash_repo:fetch(ebitcoin_crash_repo, Key).
+
+crash_transfer_ets(Key) ->
+    ebitcoin_crash_repo:transfer_ets(ebitcoin_crash_repo, Key).
+
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
 
 init([DBConfig]) ->
     {ok, { {one_for_one, 5, 10}, [
+        {ebitcoin_crash_repo, {ebitcoin_crash_repo, start_link, [{local, ebitcoin_crash_repo}]}, permanent, 5000, worker, [ebitcoin_crash_repo]},
         {ebitcoin_db, {ebitcoin_db_sup, start_link, [DBConfig]}, permanent, 5000, supervisor, [ebitcoin_db_sup]}
     ]} }.

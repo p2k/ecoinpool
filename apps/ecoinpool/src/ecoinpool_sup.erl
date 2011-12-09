@@ -25,7 +25,16 @@
 -include("ecoinpool_db_records.hrl").
 
 %% API
--export([start_link/1, running_subpools/0, start_subpool/1, reload_subpool/1, stop_subpool/1]).
+-export([
+    start_link/1,
+    running_subpools/0,
+    start_subpool/1,
+    reload_subpool/1,
+    stop_subpool/1,
+    crash_store/2,
+    crash_fetch/1,
+    crash_transfer_ets/1
+]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -69,12 +78,22 @@ stop_subpool(SubpoolId) ->
         Error -> Error
     end.
 
+crash_store(Key, Value) ->
+    ebitcoin_crash_repo:store(ecoinpool_crash_repo, Key, Value).
+
+crash_fetch(Key) ->
+    ebitcoin_crash_repo:fetch(ecoinpool_crash_repo, Key).
+
+crash_transfer_ets(Key) ->
+    ebitcoin_crash_repo:transfer_ets(ecoinpool_crash_repo, Key).
+
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
 
 init([DBConfig]) ->
     {ok, { {one_for_one, 5, 10}, [
+        {ecoinpool_crash_repo, {ebitcoin_crash_repo, start_link, [{local, ecoinpool_crash_repo}]}, permanent, 5000, worker, [ebitcoin_crash_repo]},
         {ecoinpool_rpc, {ecoinpool_rpc, start_link, []}, permanent, 5000, worker, [ecoinpool_rpc]},
         {ecoinpool_db, {ecoinpool_db_sup, start_link, [DBConfig]}, permanent, 5000, supervisor, [ecoinpool_db_sup]}
     ]} }.

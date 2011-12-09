@@ -24,7 +24,10 @@
 -include("btc_protocol_records.hrl").
 
 -export([
-    start_link/3
+    start_link/3,
+    last_block_num/1,
+    add_blockchange_listener/2,
+    remove_blockchange_listener/2
 ]).
 
 % Callbacks from gen_server
@@ -37,6 +40,8 @@
     peer_host,
     peer_port,
     socket,
+    
+    bc_listeners,
     
     last_block_num,
     last_block_hash,
@@ -53,6 +58,16 @@
 
 start_link(Chain, PeerHost, PeerPort) when Chain =:= bitcoin; Chain =:= bitcoin_testnet; Chain =:= namecoin; Chain =:= namecoin_testnet ->
     gen_server:start_link({local, Chain}, ?MODULE, [Chain, PeerHost, PeerPort], []).
+
+last_block_num(Chain) ->
+    gen_server:call(Chain, last_block_num).
+
+% Note: The listener will receive a gen_server cast {ebitcoin_blockchange, Chain, BlockNum}
+add_blockchange_listener(Chain, ListenerRef) ->
+    gen_server:cast(Chain, {add_blockchange_listener, ListenerRef}).
+
+remove_blockchange_listener(Chain, ListenerRef) ->
+    gen_server:cast(Chain, {remove_blockchange_listener, ListenerRef}).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -75,6 +90,10 @@ init([Chain, PeerHost, PeerPort]) ->
             log4erl:fatal(ebitcoin, "~p: Could not connect!", [Chain]),
             error(Reason)
     end,
+    BCListeners = case ebitcoin_sup:crash_fetch(Chain) of
+        error -> [];
+        {ok, Value} -> log4erl:info(ebitcoin, "~p: Recovered ~b listener(s) from the crash repo", [Chain, length(Value)]), Value
+    end,
     gen_server:cast(Chain, start_handshake),
     InitialState = #state{
         chain = Chain,
@@ -82,11 +101,15 @@ init([Chain, PeerHost, PeerPort]) ->
         peer_host = PeerHost,
         peer_port = PeerPort,
         socket = Socket,
+        bc_listeners = BCListeners,
         last_block_num = BlockNum,
         last_block_hash = BlockHash,
         pkt_buf = <<>>
     },
     {ok, InitialState}.
+
+handle_call(last_block_num, _From, State=#state{last_block_num=LastBlockNum}) ->
+    {reply, LastBlockNum, State};
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
@@ -127,6 +150,22 @@ handle_cast({resync, FinalBlock}, State=#state{chain=Chain, socket=Socket, last_
     gen_tcp:send(Socket, pack_message(Chain, GetHeaders)),
     {noreply, State#state{resync_mode=NewR}};
 
+handle_cast({add_blockchange_listener, ListenerRef}, State=#state{bc_listeners=BCListeners}) ->
+    case lists:member(ListenerRef, BCListeners) of
+        true ->
+            {noreply, State};
+        false ->
+            {noreply, State#state{bc_listeners=[ListenerRef|BCListeners]}}
+    end;
+
+handle_cast({remove_blockchange_listener, ListenerRef}, State=#state{bc_listeners=BCListeners}) ->
+    case lists:member(ListenerRef, BCListeners) of
+        true ->
+            {noreply, State#state{bc_listeners=lists:delete(ListenerRef, BCListeners)}};
+        false ->
+            {noreply, State}
+    end;
+
 handle_cast(_Message, State) ->
     {noreply, State}.
 
@@ -150,7 +189,17 @@ handle_info({tcp_error, _Socket, Reason}, State=#state{chain=Chain}) ->
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(normal, _) ->
+    ok;
+terminate(shutdown, _) ->
+    ok;
+terminate({shutdown, _}, _) ->
+    ok;
+terminate(_, #state{bc_listeners=[]}) ->
+    ok;
+terminate(_Reason, #state{chain=Chain, bc_listeners=BCListeners}) ->
+    log4erl:error(ebitcoin, "~p: Storing ~b listener(s) in the crash repo", [Chain, length(BCListeners)]),
+    ebitcoin_sup:crash_store(Chain, BCListeners),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -183,7 +232,7 @@ handle_bitcoin(Block=#btc_block{header=Header}, State=#state{chain=Chain}) ->
     end,
     {noreply, State};
 
-handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{chain=Chain, last_block_num=OldLastBlockNum, last_block_hash=OldLastBlockHash, resync_mode=R}) ->
+handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{chain=Chain, bc_listeners=BCListeners, last_block_num=OldLastBlockNum, last_block_hash=OldLastBlockHash, resync_mode=R}) ->
     {LastBlockNum, LastBlockHash, _} = lists:foldl(
         fun
             (_, {LBN, LBH, true}) ->
@@ -224,6 +273,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{chain=Chain,
             case FinalBlock of
                 LastBlockHash ->
                     log4erl:info(ebitcoin, "~p: Resync: Received final block header #~b", [Chain, LastBlockNum]),
+                    broadcast_blockchange(BCListeners, Chain, LastBlockNum),
                     ebitcoin_db:force_view_updates(Chain),
                     false;
                 _ ->
@@ -233,6 +283,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{chain=Chain,
             end;
         {Got, ToGo, _} when Got+StoredNow >= ToGo ->
             log4erl:info(ebitcoin, "~p: Resync: Received final block header #~b", [Chain, LastBlockNum]),
+            broadcast_blockchange(BCListeners, Chain, LastBlockNum),
             ebitcoin_db:force_view_updates(Chain),
             false;
         {Got, ToGo, FinalBlock} ->
@@ -240,6 +291,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{chain=Chain,
             gen_server:cast(self(), {resync, FinalBlock}),
             {Got+StoredNow, ToGo, FinalBlock};
         false ->
+            broadcast_blockchange(BCListeners, Chain, LastBlockNum),
             log4erl:info(ebitcoin, "~p: Now at block header #~b", [Chain, LastBlockNum]),
             false
     end,
@@ -449,3 +501,8 @@ make_getheaders(Chain, BlockNum) ->
         block_locator_hashes = BLH,
         hash_stop = binary:list_to_bin(lists:duplicate(32,0))
     }.
+
+broadcast_blockchange([], _, _) ->
+    ok;
+broadcast_blockchange(BCListeners, Chain, BlockNum) ->
+    lists:foreach(fun (ListenerRef) -> gen_server:cast(ListenerRef, {ebitcoin_blockchange, Chain, BlockNum}) end, BCListeners).
