@@ -21,7 +21,7 @@
 -module(ebitcoin_db_sup).
 -behaviour(supervisor).
 
--export([start_link/1]).
+-export([start_link/1, start_cfg_monitor/1]).
 
 % Callbacks from supervisor
 -export([init/1]).
@@ -32,6 +32,14 @@
 
 start_link(DBConfig) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, [DBConfig]).
+
+start_cfg_monitor(ConfDb) ->
+    case supervisor:start_child(?MODULE, {ebitcoin_cfg_monitor, {ebitcoin_cfg_monitor, start_link, [ConfDb]}, permanent, 5000, worker, [ebitcoin_cfg_monitor]}) of
+        {ok, _} -> ok;
+        {ok, _, _} -> ok;
+        {error, {already_started, _}} -> ok;
+        Error -> Error
+    end.
 
 %% ===================================================================
 %% Supervisor callbacks

@@ -66,40 +66,40 @@
 %% ===================================================================
 
 start_link(SubpoolId) ->
-    gen_server:start_link({global, {subpool, SubpoolId}}, ?MODULE, [SubpoolId], []).
+    gen_server:start_link({global, {?MODULE, SubpoolId}}, ?MODULE, [SubpoolId], []).
 
-reload_config(Subpool=#subpool{id=Id}) ->
-    gen_server:cast({global, {subpool, Id}}, {reload_config, Subpool}).
+reload_config(Subpool=#subpool{id=SubpoolId}) ->
+    gen_server:cast({global, {?MODULE, SubpoolId}}, {reload_config, Subpool}).
 
 coindaemon_ready(SubpoolId, PID) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {coindaemon_ready, PID}).
+    gen_server:cast({global, {?MODULE, SubpoolId}}, {coindaemon_ready, PID}).
 
 auxdaemon_ready(SubpoolId, Module, PID) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {auxdaemon_ready, Module, PID}).
+    gen_server:cast({global, {?MODULE, SubpoolId}}, {auxdaemon_ready, Module, PID}).
 
 rpc_request(PID, Req) ->
     gen_server:cast(PID, {rpc_request, Req}).
 
 update_worker(SubpoolId, Worker) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {update_worker, Worker}).
+    gen_server:cast({global, {?MODULE, SubpoolId}}, {update_worker, Worker}).
 
 remove_worker(SubpoolId, WorkerId) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {remove_worker, WorkerId}).
+    gen_server:cast({global, {?MODULE, SubpoolId}}, {remove_worker, WorkerId}).
 
 % Returns a list of sub-pools for which notifications should be sent
 % For simple configurations, this just returns the SubpoolId again, but for
 % multi-pool-configurations this may return a longer list
 get_worker_notifications(SubpoolId) ->
-    gen_server:call({global, {subpool, SubpoolId}}, get_worker_notifications).
+    gen_server:call({global, {?MODULE, SubpoolId}}, get_worker_notifications).
 
 store_workunit(SubpoolId, Workunit) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {store_workunit, Workunit}).
+    gen_server:cast({global, {?MODULE, SubpoolId}}, {store_workunit, Workunit}).
 
 new_block_detected(SubpoolId) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {new_block_detected, main}).
+    gen_server:cast({global, {?MODULE, SubpoolId}}, {new_block_detected, main}).
 
 new_aux_block_detected(SubpoolId, _Module) ->
-    gen_server:cast({global, {subpool, SubpoolId}}, {new_block_detected, aux}).
+    gen_server:cast({global, {?MODULE, SubpoolId}}, {new_block_detected, aux}).
 
 %% ===================================================================
 %% Gen_Server callbacks

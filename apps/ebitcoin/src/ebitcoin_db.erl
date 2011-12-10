@@ -22,10 +22,13 @@
 -behaviour(gen_server).
 
 -include("btc_protocol_records.hrl").
+-include("ebitcoin_db_records.hrl").
 
 -export([
     start_link/1,
-    setup_chain_dbs/1,
+    get_configuration/0,
+    get_client_record/1,
+    setup_client_dbs/1,
     store_block/3,
     store_header/3,
     cut_branch/2,
@@ -41,6 +44,7 @@
 % Internal state record
 -record(state, {
     srv_conn,
+    conf_db,
     view_update_interval = 0,
     view_update_timer,
     view_update_dbs,
@@ -54,66 +58,137 @@
 start_link({DBHost, DBPort, DBPrefix, DBOptions}) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [{DBHost, DBPort, DBPrefix, DBOptions}], []).
 
-setup_chain_dbs(Chain) ->
-    gen_server:call(?MODULE, {setup_chain_dbs, Chain}).
+get_configuration() ->
+    gen_server:call(?MODULE, get_configuration).
 
-store_block(Chain, BlockNum, Block) ->
-    gen_server:cast(?MODULE, {store_block, Chain, BlockNum, Block}).
+get_client_record(ClientId) ->
+    gen_server:call(?MODULE, {get_client_record, ClientId}).
 
-store_header(Chain, BlockNum, Header) ->
-    gen_server:cast(?MODULE, {store_header, Chain, BlockNum, Header}).
+setup_client_dbs(#client{name=ClientName, chain=Chain}) ->
+    gen_server:call(?MODULE, {setup_client_dbs, ClientName, Chain}).
 
-cut_branch(Chain, Height) ->
-    gen_server:cast(?MODULE, {cut_branch, Chain, Height}).
+store_block(#client{name=ClientName}, BlockNum, Block) ->
+    gen_server:cast(?MODULE, {store_block, ClientName, BlockNum, Block}).
 
-get_last_block_info(Chain) ->
-    gen_server:call(?MODULE, {get_last_block_info, Chain}, infinity).
+store_header(#client{name=ClientName}, BlockNum, Header) ->
+    gen_server:cast(?MODULE, {store_header, ClientName, BlockNum, Header}).
 
-get_block_height(Chain, Hash) when byte_size(Hash) =:= 32 ->
-    gen_server:call(?MODULE, {get_block_height, Chain, ecoinpool_util:bin_to_hexbin(Hash)}, infinity);
-get_block_height(Chain, HexHash) when byte_size(HexHash) =:= 64 ->
-    gen_server:call(?MODULE, {get_block_height, Chain, HexHash}, infinity).
+cut_branch(#client{name=ClientName}, Height) ->
+    gen_server:cast(?MODULE, {cut_branch, ClientName, Height}).
 
-get_block_locator_hashes(Chain, StartBlockNum) ->
-    gen_server:call(?MODULE, {get_block_locator_hashes, Chain, StartBlockNum}, infinity).
+get_last_block_info(#client{name=ClientName}) ->
+    gen_server:call(?MODULE, {get_last_block_info, ClientName}, infinity).
+
+get_block_height(#client{name=ClientName}, Hash) when byte_size(Hash) =:= 32 ->
+    gen_server:call(?MODULE, {get_block_height, ClientName, ecoinpool_util:bin_to_hexbin(Hash)}, infinity);
+get_block_height(#client{name=ClientName}, HexHash) when byte_size(HexHash) =:= 64 ->
+    gen_server:call(?MODULE, {get_block_height, ClientName, HexHash}, infinity).
+
+get_block_locator_hashes(#client{name=ClientName}, StartBlockNum) ->
+    gen_server:call(?MODULE, {get_block_locator_hashes, ClientName, StartBlockNum}, infinity).
 
 set_view_update_interval(Seconds) ->
     gen_server:cast(?MODULE, {set_view_update_interval, Seconds}).
 
-force_view_updates(Chain) ->
-    gen_server:cast(?MODULE, {force_view_updates, Chain}).
+force_view_updates(#client{name=ClientName}) ->
+    gen_server:cast(?MODULE, {force_view_updates, ClientName}).
 
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
 
 init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
-    % Connect to database
+    % Connect to server
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
+    % Open config database
+    ConfDb = case couchbeam:db_exists(S, "ebitcoin") of
+        true ->
+            {ok, TheConfDb} = couchbeam:open_db(S, "ebitcoin"),
+            TheConfDb;
+        _ ->
+            case couchbeam:create_db(S, "ebitcoin") of
+                {ok, NewConfDb} -> % Create basic views and auth lock-out
+                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
+                        {<<"_id">>, <<"_design/doctypes">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"views">>, {[
+                            {<<"doctypes">>, {[{<<"map">>, <<"function (doc) {if (doc.type !== undefined) emit(doc.type, doc._id);}">>}]}}
+                        ]}},
+                        {<<"filters">>, {[
+                            {<<"clients_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \"configuration\" || doc.type == \"client\";}">>}
+                        ]}}
+                    ]}),
+                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
+                        {<<"_id">>, <<"_design/auth">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
+                    ]}),
+                    log4erl:info(ebitcoin, "Config database created!"),
+                    NewConfDb;
+                {error, Error} ->
+                    log4erl:fatal(ebitcoin, "config_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]), throw({error, Error})
+            end
+    end,
+    % Start config monitor (asynchronously)
+    gen_server:cast(?MODULE, start_cfg_monitor),
     % Return initial state
-    {ok, #state{srv_conn=S}}.
+    {ok, #state{srv_conn=S, conf_db=ConfDb}}.
 
-handle_call({setup_chain_dbs, Chain}, _From, State=#state{srv_conn=S}) ->
-    SChain = atom_to_list(Chain),
-    SChainTx = SChain ++ "-tx",
-    case couchbeam:db_exists(S, SChain) of
+handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
+    case couchbeam:open_doc(ConfDb, "configuration") of
+        {ok, {DocProps}} ->
+            % Unpack and parse data
+            DocType = proplists:get_value(<<"type">>, DocProps),
+            ActiveClientsIds = proplists:get_value(<<"active_clients">>, DocProps, []),
+            ViewUpdateInterval = proplists:get_value(<<"view_update_interval">>, DocProps, 300),
+            ActiveClientsIdsCheck = if is_list(ActiveClientsIds) -> lists:all(fun is_binary/1, ActiveClientsIds); true -> false end,
+            
+            if % Validate data
+                DocType =:= <<"configuration">>,
+                is_integer(ViewUpdateInterval),
+                ActiveClientsIdsCheck ->
+                    % Create record
+                    Configuration = #configuration{
+                        active_clients=ActiveClientsIds,
+                        view_update_interval=if ViewUpdateInterval > 0 -> ViewUpdateInterval; true -> 0 end
+                    },
+                    {reply, {ok, Configuration}, State};
+                true ->
+                    {reply, {error, invalid}, State}
+            end;
+        _ ->
+            {reply, {error, missing}, State}
+    end;
+
+handle_call({get_client_record, ClientId}, _From, State=#state{conf_db=ConfDb}) ->
+    case couchbeam:open_doc(ConfDb, ClientId) of
+        {ok, Doc} ->
+            {reply, parse_client_document(ClientId, Doc), State};
+        _ ->
+            {reply, {error, missing}, State}
+    end;
+
+handle_call({setup_client_dbs, ClientName, Chain}, _From, State=#state{srv_conn=S}) ->
+    SClientDB = binary:bin_to_list(ClientName),
+    SClientTxDB = SClientDB ++ "-tx",
+    case couchbeam:db_exists(S, SClientDB) of
         true ->
             {reply, ok, State};
         _ ->
-            case couchbeam:db_exists(S, SChainTx) of
-                true -> {ok, _} = couchbeam:delete_db(S, SChainTx);
+            case couchbeam:db_exists(S, SClientTxDB) of
+                true -> {ok, _} = couchbeam:delete_db(S, SClientTxDB);
                 _ -> ok
             end,
-            case {couchbeam:create_db(S, SChain), couchbeam:create_db(S, SChainTx)} of
-                {{ok, ChainDB}, {ok, ChainTxDB}} ->
+            case {couchbeam:create_db(S, SClientDB), couchbeam:create_db(S, SClientTxDB)} of
+                {{ok, ClientDB}, {ok, ClientTxDB}} ->
                     AuthDoc = {[
                         {<<"_id">>, <<"_design/auth">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
                     ]},
-                    {ok, _} = couchbeam:save_doc(ChainDB, AuthDoc),
-                    {ok, _} = couchbeam:save_doc(ChainTxDB, AuthDoc),
-                    {ok, _} = couchbeam:save_doc(ChainDB, {[
+                    {ok, _} = couchbeam:save_doc(ClientDB, AuthDoc),
+                    {ok, _} = couchbeam:save_doc(ClientTxDB, AuthDoc),
+                    {ok, _} = couchbeam:save_doc(ClientDB, {[
                         {<<"_id">>, <<"_design/headers">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
@@ -128,7 +203,7 @@ handle_call({setup_chain_dbs, Chain}, _From, State=#state{srv_conn=S}) ->
                             ]}}
                         ]}}
                     ]}),
-                    {ok, _} = couchbeam:save_doc(ChainTxDB, {[
+                    {ok, _} = couchbeam:save_doc(ClientTxDB, {[
                         {<<"_id">>, <<"_design/transactions">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"views">>, {[
@@ -137,18 +212,18 @@ handle_call({setup_chain_dbs, Chain}, _From, State=#state{srv_conn=S}) ->
                             ]}}
                         ]}}
                     ]}),
-                    save_genesis_block(Chain, ChainDB, ChainTxDB),
-                    log4erl:info(ebitcoin, "Chain databases \"~s\" and \"~s\" created!", [SChain, SChainTx]),
+                    save_genesis_block(Chain, ClientDB, ClientTxDB),
+                    log4erl:info(ebitcoin, "Client databases \"~s\" and \"~s\" created!", [SClientDB, SClientTxDB]),
                     {reply, ok, State};
                 _ ->
-                    log4erl:error(ebitcoin, "chain_db - errors occurred while creating chain databases!"),
+                    log4erl:error(ebitcoin, "client_db - errors occurred while creating client databases!"),
                     {reply, error, State}
             end
     end;
 
-handle_call({get_last_block_info, Chain}, _From, State=#state{srv_conn=S}) ->
-    {ok, ChainDB} = couchbeam:open_db(S, atom_to_list(Chain)),
-    case couchbeam_view:fetch(ChainDB, {"headers", "by_block_num"}, [{limit, 1}, descending]) of
+handle_call({get_last_block_info, ClientName}, _From, State=#state{srv_conn=S}) ->
+    {ok, ClientDB} = couchbeam:open_db(S, binary:bin_to_list(ClientName)),
+    case couchbeam_view:fetch(ClientDB, {"headers", "by_block_num"}, [{limit, 1}, descending]) of
         {ok, []} ->
             {reply, error, State};
         {ok, [{RowProps}]} ->
@@ -157,19 +232,19 @@ handle_call({get_last_block_info, Chain}, _From, State=#state{srv_conn=S}) ->
             {reply, {BlockNum, BlockHash}, State}
     end;
 
-handle_call({get_block_height, Chain, HexHash}, _From, State=#state{srv_conn=S}) ->
-    {ok, ChainDB} = couchbeam:open_db(S, atom_to_list(Chain)),
-    case couchbeam:open_doc(ChainDB, HexHash) of
+handle_call({get_block_height, ClientName, HexHash}, _From, State=#state{srv_conn=S}) ->
+    {ok, ClientDB} = couchbeam:open_db(S, binary:bin_to_list(ClientName)),
+    case couchbeam:open_doc(ClientDB, HexHash) of
         {error, Reason} ->
             {reply, {error, Reason}, State};
         {ok, {DocProps}} ->
             {reply, {ok, proplists:get_value(<<"block_num">>, DocProps)}, State}
     end;
 
-handle_call({get_block_locator_hashes, Chain, StartBlockNum}, _From, State=#state{srv_conn=S}) ->
-    {ok, ChainDB} = couchbeam:open_db(S, atom_to_list(Chain)),
+handle_call({get_block_locator_hashes, ClientName, StartBlockNum}, _From, State=#state{srv_conn=S}) ->
+    {ok, ClientDB} = couchbeam:open_db(S, binary:bin_to_list(ClientName)),
     BLN = block_locator_numbers(StartBlockNum),
-    {ok, Rows} = couchbeam_view:fetch(ChainDB, {"headers", "by_block_num"}, [{keys, BLN}]),
+    {ok, Rows} = couchbeam_view:fetch(ClientDB, {"headers", "by_block_num"}, [{keys, BLN}]),
     {Hashes, _} = lists:foldr(
         fun ({RowProps}, {Acc, LastBN}) ->
             ThisBN = proplists:get_value(<<"key">>, RowProps),
@@ -189,16 +264,23 @@ handle_call({get_block_locator_hashes, Chain, StartBlockNum}, _From, State=#stat
 handle_call(_Message, _From, State=#state{}) ->
     {reply, error, State}.
 
-handle_cast({store_block, Chain, BlockNum, Block}, State=#state{srv_conn=S}) ->
-    ChainDBName = atom_to_list(Chain),
-    {ok, ChainDB} = couchbeam:open_db(S, ChainDBName),
+handle_cast(start_cfg_monitor, State=#state{conf_db=ConfDb}) ->
+    case ebitcoin_db_sup:start_cfg_monitor(ConfDb) of
+        ok -> ok;
+        {error, {already_started, _}} -> ok
+    end,
+    {noreply, State};
+
+handle_cast({store_block, ClientName, BlockNum, Block}, State=#state{srv_conn=S}) ->
+    ClientDBName = binary:bin_to_list(ClientName),
+    {ok, ClientDB} = couchbeam:open_db(S, ClientDBName),
     
     #btc_block{header=Header, txns=Txns} = Block,
     BlockHash = ecoinpool_util:bin_to_hexbin(btc_protocol:get_hash(Header)),
     
-    StoreTransactions = case couchbeam:open_doc(ChainDB, BlockHash) of
+    StoreTransactions = case couchbeam:open_doc(ClientDB, BlockHash) of
         {error, _} -> % Create new, full header
-            case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, length(Txns))) of
+            case save_doc(ClientDB, make_block_header_document(BlockNum, BlockHash, Header, length(Txns))) of
                 ok ->
                     true;
                 _ ->
@@ -207,7 +289,7 @@ handle_cast({store_block, Chain, BlockNum, Block}, State=#state{srv_conn=S}) ->
         {ok, Doc} -> % Update existing partial header
             case couchbeam_doc:get_value(<<"n_tx">>, Doc) of
                 0 ->
-                    save_doc(ChainDB, couchbeam_doc:set_value(<<"n_tx">>, length(Txns), Doc));
+                    save_doc(ClientDB, couchbeam_doc:set_value(<<"n_tx">>, length(Txns), Doc));
                 _ ->
                     log4erl:info(ebitcoin, "store_block: Skipping an already existing block."),
                     false
@@ -215,36 +297,36 @@ handle_cast({store_block, Chain, BlockNum, Block}, State=#state{srv_conn=S}) ->
     end,
     if
         StoreTransactions ->
-            {ok, ChainTxDB} = couchbeam:open_db(S, ChainDBName ++ "-tx"),
+            {ok, ClientTxDB} = couchbeam:open_db(S, ClientDBName ++ "-tx"),
             lists:foldl(
                 fun (Tx, Index) ->
-                    save_doc(ChainTxDB, make_tx_document(BlockHash, Index, Tx)),
+                    save_doc(ClientTxDB, make_tx_document(BlockHash, Index, Tx)),
                     Index + 1
                 end,
                 0,
                 Txns
             ),
-            {noreply, store_view_update(ChainDBName, erlang:now(), State)};
+            {noreply, store_view_update(ClientDBName, erlang:now(), State)};
         true ->
             {noreply, State}
     end;
 
-handle_cast({store_header, Chain, BlockNum, Header}, State=#state{srv_conn=S}) ->
-    ChainDBName = atom_to_list(Chain),
-    {ok, ChainDB} = couchbeam:open_db(S, ChainDBName),
+handle_cast({store_header, ClientName, BlockNum, Header}, State=#state{srv_conn=S}) ->
+    ClientDBName = binary:bin_to_list(ClientName),
+    {ok, ClientDB} = couchbeam:open_db(S, ClientDBName),
     BlockHash = ecoinpool_util:bin_to_hexbin(btc_protocol:get_hash(Header)),
     % Store partial header
-    case save_doc(ChainDB, make_block_header_document(BlockNum, BlockHash, Header, 0)) of
+    case save_doc(ClientDB, make_block_header_document(BlockNum, BlockHash, Header, 0)) of
         ok ->
-            {noreply, store_view_update(ChainDBName, erlang:now(), State)};
+            {noreply, store_view_update(ClientDBName, erlang:now(), State)};
         _ ->
             {noreply, State}
     end;
 
-handle_cast({cut_branch, Chain, Height}, State=#state{srv_conn=S}) ->
-    ChainDBName = atom_to_list(Chain),
-    {ok, ChainDB} = couchbeam:open_db(S, ChainDBName),
-    case couchbeam_view:fetch(ChainDB, {"headers", "by_block_num"}, [{start_key, Height}, include_docs]) of
+handle_cast({cut_branch, ClientName, Height}, State=#state{srv_conn=S}) ->
+    ClientDBName = binary:bin_to_list(ClientName),
+    {ok, ClientDB} = couchbeam:open_db(S, ClientDBName),
+    case couchbeam_view:fetch(ClientDB, {"headers", "by_block_num"}, [{start_key, Height}, include_docs]) of
         {ok, []} ->
             ok;
         {ok, Rows} ->
@@ -259,15 +341,15 @@ handle_cast({cut_branch, Chain, Height}, State=#state{srv_conn=S}) ->
                 end,
                 Rows
             )),
-            couchbeam:delete_docs(ChainDB, Docs),
-            {ok, ChainTxDB} = couchbeam:open_db(S, ChainDBName ++ "-tx"),
+            couchbeam:delete_docs(ClientDB, Docs),
+            {ok, ClientTxDB} = couchbeam:open_db(S, ClientDBName ++ "-tx"),
             lists:foreach(
                 fun
                     (undefined) -> ok;
                     (Hash) ->
-                        {ok, Rows2} = couchbeam_view:fetch(ChainTxDB, {"transactions", "by_block_hash"}, [{start_key, [Hash, 0]}, {end_key, [Hash, {[]}]}, include_docs]),
+                        {ok, Rows2} = couchbeam_view:fetch(ClientTxDB, {"transactions", "by_block_hash"}, [{start_key, [Hash, 0]}, {end_key, [Hash, {[]}]}, include_docs]),
                         Docs2 = lists:map(fun ({RowProps}) -> proplists:get_value(<<"doc">>, RowProps) end, Rows2),
-                        couchbeam:delete_docs(ChainDB, Docs2)
+                        couchbeam:delete_docs(ClientDB, Docs2)
                 end,
                 Hashes
             )
@@ -295,8 +377,8 @@ handle_cast({set_view_update_interval, Seconds}, State=#state{view_update_interv
             end
     end;
 
-handle_cast({force_view_updates, Chain}, State=#state{srv_conn=S, view_update_running=ViewUpdateRunning}) ->
-    DBName = atom_to_list(Chain),
+handle_cast({force_view_updates, ClientName}, State=#state{srv_conn=S, view_update_running=ViewUpdateRunning}) ->
+    DBName = binary:bin_to_list(ClientName),
     case ViewUpdateRunning of
         false ->
             PID = self(),
@@ -374,6 +456,42 @@ do_update_views(DBS, S, PID) ->
             log4erl:error(ebitcoin, "Exception in do_update_views:~n~p", [Reason])
     end,
     PID ! view_update_complete.
+
+parse_client_document(ClientId, {DocProps}) ->
+    DocType = proplists:get_value(<<"type">>, DocProps),
+    Name = proplists:get_value(<<"name">>, DocProps),
+    {Chain, DefaultPort} = case proplists:get_value(<<"chain">>, DocProps) of
+        <<"bitcoin">> -> {bitcoin, 8333};
+        <<"bitcoin_testnet">> -> {bitcoin_testnet, 18333};
+        <<"namecoin">> -> {namecoin, 8334};
+        <<"namecoin_testnet">> -> {namecoin_testnet, 18334};
+        _ -> undefined
+    end,
+    Host = proplists:get_value(<<"host">>, DocProps, <<"localhost">>),
+    Port = proplists:get_value(<<"port">>, DocProps, DefaultPort),
+    
+    if
+        DocType =:= <<"client">>,
+        is_binary(Name),
+        Name =/= <<>>,
+        Chain =/= undefined,
+        is_binary(Host),
+        Host =/= <<>>,
+        is_integer(Port) ->
+            
+            % Create record
+            Client = #client{
+                id=ClientId,
+                name=Name,
+                chain=Chain,
+                host=Host,
+                port=Port
+            },
+            {ok, Client};
+        
+        true ->
+            {error, invalid}
+    end.
 
 make_btc_header_part(Header) ->
     #btc_header{
@@ -499,7 +617,7 @@ store_view_update(_, _, State=#state{view_update_dbs=undefined}) ->
 store_view_update(DBName, TS, State=#state{view_update_dbs=ViewUpdateDBS}) ->
     State#state{view_update_dbs=dict:store(DBName, TS, ViewUpdateDBS)}.
 
-save_genesis_block(bitcoin, ChainDB, ChainTxDB) ->
+save_genesis_block(bitcoin, ClientDB, ClientTxDB) ->
     ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
     Header = #btc_header{
         version = 1,
@@ -524,10 +642,10 @@ save_genesis_block(bitcoin, ChainDB, ChainTxDB) ->
         lock_time = 0
     },
     BlockHash = <<"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f">>,
-    ok = save_doc(ChainDB, make_block_header_document(0, BlockHash, Header, 1)),
-    ok = save_doc(ChainTxDB, make_tx_document(BlockHash, 0, Tx));
+    ok = save_doc(ClientDB, make_block_header_document(0, BlockHash, Header, 1)),
+    ok = save_doc(ClientTxDB, make_tx_document(BlockHash, 0, Tx));
 
-save_genesis_block(namecoin, ChainDB, ChainTxDB) ->
+save_genesis_block(namecoin, ClientDB, ClientTxDB) ->
     ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
     Header = #btc_header{
         version = 1,
@@ -552,8 +670,8 @@ save_genesis_block(namecoin, ChainDB, ChainTxDB) ->
         lock_time = 0
     },
     BlockHash = <<"000000000062b72c5e2ceb45fbc8587e807c155b0da735e6483dfba2f0a9c770">>,
-    ok = save_doc(ChainDB, make_block_header_document(0, BlockHash, Header, 1)),
-    ok = save_doc(ChainTxDB, make_tx_document(BlockHash, 0, Tx)).
+    ok = save_doc(ClientDB, make_block_header_document(0, BlockHash, Header, 1)),
+    ok = save_doc(ClientTxDB, make_tx_document(BlockHash, 0, Tx)).
 
 block_locator_numbers(StartBlockNum) ->
     if

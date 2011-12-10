@@ -21,9 +21,9 @@
 {application, ecoinpool,
  [
   {description, "A pool mining software for cryptographic currencies"},
-  {vsn, "0.2.2"},
+  {vsn, "0.3.0"},
   {registered, [ecoinpool_app]},
-  {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, couchbeam]},
+  {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, couchbeam, ebitcoin]},
   {mod, {ecoinpool_app, []}},
   {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
  ]}.

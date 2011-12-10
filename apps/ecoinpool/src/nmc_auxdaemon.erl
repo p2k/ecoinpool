@@ -35,7 +35,8 @@
     url,
     auth,
     
-    timer,
+    poll_timer,
+    ebtc_id,
     block_num,
     
     last_fetch,
@@ -69,11 +70,18 @@ init([SubpoolId, Config]) ->
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
     
-    {ok, Timer} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
+    {PollTimer, EBtcId} = case proplists:get_value(ebitcoin_client_id, Config) of
+        undefined ->
+            {ok, T} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
+            {T, undefined};
+        Id ->
+            ebitcoin_client:add_blockchange_listener(Id, self()),
+            {undefined, Id}
+    end,
     
     ecoinpool_server:auxdaemon_ready(SubpoolId, ?MODULE, self()),
     
-    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, timer=Timer}}.
+    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, poll_timer=PollTimer, ebtc_id=EBtcId}}.
 
 handle_call(get_aux_work, _From, OldState) ->
     % Check if a new block must be fetched
@@ -98,6 +106,9 @@ handle_call({send_aux_pow, AuxHash, AuxPOW}, _From, State=#state{url=URL, auth=A
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
+handle_cast({ebitcoin_blockchange, _, BlockNum}, State) ->
+    {noreply, fetch_block_with_state(State#state{block_num={pushed, BlockNum}})};
+
 handle_cast(_Message, State) ->
     {noreply, State}.
 
@@ -107,8 +118,13 @@ handle_info(poll_daemon, State) ->
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{timer=Timer}) ->
-    timer:cancel(Timer),
+terminate(_Reason, #state{poll_timer=PollTimer, ebtc_id=EBtcId}) ->
+    case PollTimer of
+        undefined ->
+            ebitcoin_client:remove_blockchange_listener(EBtcId, self());
+        _ ->
+            timer:cancel(PollTimer)
+    end,
     log4erl:warn(daemon, "NMC AuxDaemon terminated."),
     ok.
 
@@ -139,7 +155,19 @@ check_fetch_now(_, #state{last_fetch=undefined}) ->
     {true, starting};
 check_fetch_now(_, #state{block_num=undefined}) ->
     {true, starting};
-check_fetch_now(Now, #state{url=URL, auth=Auth, block_num=BlockNum, last_fetch=LastFetch}) ->
+check_fetch_now(Now, #state{poll_timer=undefined, block_num=BlockNum, last_fetch=LastFetch}) -> % Non-polling
+    case BlockNum of
+        {pushed, NewBlockNum} ->
+            {true, {new_block, NewBlockNum}};
+        _ ->
+            case timer:now_diff(Now, LastFetch) of
+                Diff when Diff > 15000000 -> % Force data fetch every 15s
+                    {true, timeout};
+                _ ->
+                    false
+            end
+    end;
+check_fetch_now(Now, #state{url=URL, auth=Auth, block_num=BlockNum, last_fetch=LastFetch}) -> % Polling
     case timer:now_diff(Now, LastFetch) of
         Diff when Diff < 200000 -> % Prevent rpc call if less than 200ms passed
             false;
@@ -158,7 +186,7 @@ check_fetch_now(Now, #state{url=URL, auth=Auth, block_num=BlockNum, last_fetch=L
             end
     end.
 
-fetch_block_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth}) ->
+fetch_block_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, ebtc_id=EBtcId}) ->
     Now = erlang:now(),
     case check_fetch_now(Now, State) of
         false ->
@@ -177,7 +205,13 @@ fetch_block_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth}) ->
                 {new_block, BlockNum} ->
                     State#state{block_num=BlockNum, last_fetch=Now, auxblock_data=AuxblockData};
                 starting ->
-                    State#state{block_num=get_block_number(URL, Auth), last_fetch=Now, auxblock_data=AuxblockData};
+                    TheBlockNum = case EBtcId of
+                        undefined ->
+                            get_block_number(URL, Auth);
+                        _ ->
+                            ebitcoin_client:last_block_num(EBtcId)
+                    end,
+                    State#state{block_num=TheBlockNum, last_fetch=Now, auxblock_data=AuxblockData};
                 _ ->
                     State#state{last_fetch=Now, auxblock_data=AuxblockData}
             end

@@ -18,13 +18,15 @@
 %% along with ebitcoin.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(ebitcoin_test_launch).
--export([start/0]).
+-record(configuration, {
+    active_clients :: [binary()],
+    view_update_interval :: integer()
+}).
 
-start() ->
-    ok = application:start(sasl),
-    ok = application:start(crypto),
-    ok = application:start(log4erl),
-    ok = application:start(ibrowse),
-    ok = application:start(couchbeam),
-    ok = application:start(ebitcoin).
+-record(client, {
+    id :: binary(),
+    name :: binary(),
+    chain :: atom(),
+    host :: binary(),
+    port :: integer()
+}).

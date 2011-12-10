@@ -98,9 +98,9 @@ set_view_update_interval(Seconds) ->
 %% ===================================================================
 
 init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
-    % Connect to database
+    % Connect to server
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
-    % Open database
+    % Open config database
     ConfDb = case couchbeam:db_exists(S, "ecoinpool") of
         true ->
             {ok, TheConfDb} = couchbeam:open_db(S, "ecoinpool"),
@@ -152,7 +152,7 @@ handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
             DocType = proplists:get_value(<<"type">>, DocProps),
             ActiveSubpoolIds = proplists:get_value(<<"active_subpools">>, DocProps, []),
             ViewUpdateInterval = proplists:get_value(<<"view_update_interval">>, DocProps, 300),
-            ActiveSubpoolIdsCheck = lists:all(fun is_binary/1, ActiveSubpoolIds),
+            ActiveSubpoolIdsCheck = if is_list(ActiveSubpoolIds) -> lists:all(fun is_binary/1, ActiveSubpoolIds); true -> false end,
             
             if % Validate data
                 DocType =:= <<"configuration">>,
@@ -167,7 +167,6 @@ handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
                 true ->
                     {reply, {error, invalid}, State}
             end;
-            
         _ ->
             {reply, {error, missing}, State}
     end;

@@ -26,7 +26,8 @@
 -export([
     start_link/1,
     running_clients/0,
-    start_client/3,
+    start_client/1,
+    reload_client/1,
     stop_client/1,
     crash_store/2,
     crash_fetch/1,
@@ -45,26 +46,29 @@ start_link(DBConfig) ->
 
 running_clients() ->
     lists:foldl(
-        fun (Spec, ClientNameAcc) ->
+        fun (Spec, ClientIdAcc) ->
             case Spec of
-                {ClientName, _, _, _} -> [ClientName | ClientNameAcc];
-                _ -> ClientNameAcc
+                {{client, ClientId}, _, _, _} -> [ClientId | ClientIdAcc];
+                _ -> ClientIdAcc
             end
         end,
         [],
         supervisor:which_children(?MODULE)
     ).
 
-start_client(Name, PeerHost, PeerPort) ->
-    case supervisor:start_child(?MODULE, {Name, {ebitcoin_client, start_link, [Name, PeerHost, PeerPort]}, transient, 5000, worker, [ebitcoin_client]}) of
+start_client(ClientId) ->
+    case supervisor:start_child(?MODULE, {{client, ClientId}, {ebitcoin_client, start_link, [ClientId]}, transient, 5000, worker, [ebitcoin_client]}) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         Error -> Error
     end.
 
-stop_client(Name) ->
-    case supervisor:terminate_child(?MODULE, Name) of
-        ok -> supervisor:delete_child(?MODULE, Name);
+reload_client(Client) ->
+    ebitcoin_client:reload_config(Client).
+
+stop_client(ClientId) ->
+    case supervisor:terminate_child(?MODULE, {client, ClientId}) of
+        ok -> supervisor:delete_child(?MODULE, {client, ClientId});
         Error -> Error
     end.
 
