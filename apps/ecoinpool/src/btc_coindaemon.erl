@@ -159,8 +159,14 @@ init([SubpoolId, Config]) ->
             <<"ecoinpool">>
     end,
     
-    TxTbl = ets:new(txtbl, [set, protected]),
-    WorkTbl = ets:new(worktbl, [set, protected]),
+    {TxTbl, WorkTbl} = case ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, txtbl}) of
+        ok ->
+            log4erl:info(daemon, "BTC CoinDaemon is recovering from a crash"),
+            ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, worktbl}),
+            {undefined, undefined};
+        error ->
+            {ets:new(txtbl, [set, protected]), ets:new(worktbl, [set, protected])}
+    end,
     
     {PollTimer, EBtcId} = case proplists:get_value(ebitcoin_client_id, Config) of
         undefined ->
@@ -240,10 +246,25 @@ handle_info(poll_daemon, State) ->
 handle_info(retry_post_workunit, State) ->
     handle_cast(post_workunit, State);
 
+handle_info({'ETS-TRANSFER', TxTbl, _FromPid, {?MODULE, SubpoolId, txtbl}}, State=#state{subpool=SubpoolId}) ->
+    {noreply, State#state{txtbl=TxTbl}};
+
+handle_info({'ETS-TRANSFER', WorkTbl, _FromPid, {?MODULE, SubpoolId, worktbl}}, State=#state{subpool=SubpoolId}) ->
+    {noreply, State#state{worktbl=WorkTbl}};
+
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{poll_timer=PollTimer, ebtc_id=EBtcId}) ->
+terminate(Reason, #state{subpool=SubpoolId, poll_timer=PollTimer, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}) ->
+    case Reason of
+        normal -> ok;
+        shutdown -> ok;
+        {shutdown, _} -> ok;
+        _ ->
+            CrashRepoPid = ecoinpool_sup:crash_repo_pid(),
+            ets:give_away(TxTbl, CrashRepoPid, {?MODULE, SubpoolId, txtbl}),
+            ets:give_away(WorkTbl, CrashRepoPid, {?MODULE, SubpoolId, worktbl})
+    end,
     case PollTimer of
         undefined ->
             ebitcoin_client:remove_blockchange_listener(EBtcId, self());

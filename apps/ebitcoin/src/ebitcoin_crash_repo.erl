@@ -76,7 +76,7 @@ handle_call({fetch, Key}, _From, State=#state{kvstorage=KVStorage}) ->
 handle_call({transfer_ets, Key}, {Pid, _}, State=#state{etsstorage=ETSStorage}) ->
     case dict:find(Key, ETSStorage) of
         {ok, Tab} ->
-            ets:give_away(Tab, Pid, crash_repo),
+            ets:give_away(Tab, Pid, Key),
             {reply, ok, State#state{etsstorage=dict:erase(Key, ETSStorage)}};
         error ->
             {reply, error, State}

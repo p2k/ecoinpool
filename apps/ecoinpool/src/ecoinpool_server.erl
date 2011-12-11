@@ -109,13 +109,19 @@ init([SubpoolId]) ->
     log4erl:warn(server, "Subpool ~s starting...", [SubpoolId]),
     % Trap exit
     process_flag(trap_exit, true),
-    % Setup the work table, the duplicate hashes table and worker tables
-    WorkTbl = ets:new(worktbl, [set, protected, {keypos, #workunit.id}]),
-    HashTbl = ets:new(hashtbl, [set, protected]),
-    WorkerTbl = ets:new(workertbl, [set, protected, {keypos, #worker.name}]),
-    WorkerLookupTbl = ets:new(workerltbl, [set, protected]),
     % Get Subpool record; terminate on error
     {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
+    % Check if crash recovery is in effect
+    {WorkTbl, HashTbl} = case ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, worktbl}) of
+        ok ->
+            ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, hashtbl}),
+            {undefined, undefined};
+        error ->
+            {ets:new(worktbl, [set, protected, {keypos, #workunit.id}]),
+            ets:new(hashtbl, [set, protected])}
+    end,
+    WorkerTbl = ets:new(workertbl, [set, protected, {keypos, #worker.name}]),
+    WorkerLookupTbl = ets:new(workerltbl, [set, protected]),
     % Schedule config reload
     gen_server:cast(self(), {reload_config, Subpool}),
     % Create work check timer
@@ -430,10 +436,26 @@ handle_info(check_work_age, State) ->
     end,
     {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
 
+handle_info({'ETS-TRANSFER', WorkTbl, _FromPid, {?MODULE, SubpoolId, worktbl}}, State=#state{subpool=#subpool{id=SubpoolId}}) ->
+    {noreply, State#state{worktbl=WorkTbl}};
+
+handle_info({'ETS-TRANSFER', HashTbl, _FromPid, {?MODULE, SubpoolId, hashtbl}}, State=#state{subpool=#subpool{id=SubpoolId}}) ->
+    {noreply, State#state{hashtbl=HashTbl}};
+
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, workq_size=WorkQueueSize, lp_queue=LPQueue, work_checker=WorkChecker}) ->
+terminate(Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue, work_checker=WorkChecker}) ->
+    % Check for crashes
+    case Reason of
+        normal -> ok;
+        shutdown -> ok;
+        {shutdown, _} -> ok;
+        _ ->
+            CrashRepoPid = ecoinpool_sup:crash_repo_pid(),
+            ets:give_away(WorkTbl, CrashRepoPid, {?MODULE, Id, worktbl}),
+            ets:give_away(HashTbl, CrashRepoPid, {?MODULE, Id, hashtbl})
+    end,
     % Stop the RPC
     ecoinpool_rpc:stop_rpc(Port),
     % Cancel open connections

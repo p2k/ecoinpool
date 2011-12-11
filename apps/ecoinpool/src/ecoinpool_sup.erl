@@ -33,6 +33,7 @@
     stop_subpool/1,
     crash_store/2,
     crash_fetch/1,
+    crash_repo_pid/0,
     crash_transfer_ets/1
 ]).
 
@@ -83,6 +84,9 @@ crash_store(Key, Value) ->
 
 crash_fetch(Key) ->
     ebitcoin_crash_repo:fetch(ecoinpool_crash_repo, Key).
+
+crash_repo_pid() ->
+    whereis(ecoinpool_crash_repo).
 
 crash_transfer_ets(Key) ->
     ebitcoin_crash_repo:transfer_ets(ecoinpool_crash_repo, Key).
