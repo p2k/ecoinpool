@@ -98,6 +98,8 @@ set_view_update_interval(Seconds) ->
 %% ===================================================================
 
 init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
+    % Trap exit
+    process_flag(trap_exit, true),
     % Connect to server
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
     % Open config database

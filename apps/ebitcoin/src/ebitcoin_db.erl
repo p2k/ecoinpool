@@ -98,6 +98,8 @@ force_view_updates(#client{name=ClientName}) ->
 %% ===================================================================
 
 init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
+    % Trap exit
+    process_flag(trap_exit, true),
     % Connect to server
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
     % Open config database

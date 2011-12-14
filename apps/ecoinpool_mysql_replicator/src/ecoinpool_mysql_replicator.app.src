@@ -1,0 +1,41 @@
+
+%%
+%% Copyright (C) 2011  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
+%%
+%% This file is part of ecoinpool.
+%%
+%% ecoinpool is free software: you can redistribute it and/or modify
+%% it under the terms of the GNU General Public License as published by
+%% the Free Software Foundation, either version 3 of the License, or
+%% (at your option) any later version.
+%%
+%% ecoinpool is distributed in the hope that it will be useful,
+%% but WITHOUT ANY WARRANTY; without even the implied warranty of
+%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+%% GNU General Public License for more details.
+%%
+%% You should have received a copy of the GNU General Public License
+%% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
+%%
+
+{application, ecoinpool_mysql_replicator,
+ [
+  {description, "Replicates user configuration and shares between CouchDB and MySQL"},
+  {vsn, "0.1.0"},
+  {registered, [ecoinpool_mysql_replicator_app]},
+  {applications, [kernel, stdlib, sasl, crypto, ibrowse, couchbeam, mysql]},
+  {mod, {ecoinpool_mysql_replicator_app, []}},
+  {env, [
+   {couchdb_host, "localhost"},
+   {couchdb_port, 5984},
+   {couchdb_prefix, ""},
+   {couchdb_options, []},
+   {couchdb_database, "ecoinpool"},
+   {mysql_host, "localhost"},
+   {mysql_port, 3306},
+   {mysql_prefix, ""},
+   {mysql_options, []},
+   {mysql_database, "ecoinpool"},
+   {replicator_configs, []}
+  ]}
+ ]}.
