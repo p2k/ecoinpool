@@ -33,14 +33,14 @@
 module_init() ->
     SoName = case code:priv_dir(ecoinpool) of
         {error, bad_name} ->
-            case filelib:is_dir(filename:join(["..", priv])) of
+            case filelib:is_dir(filename:join(["..", "priv"])) of
                 true ->
-                    filename:join(["..", priv, ?MODULE]);
+                    filename:join(["..", "priv", atom_to_list(?MODULE)]);
                 false ->
-                    filename:join([priv, ?MODULE])
+                    filename:join(["priv", atom_to_list(?MODULE)])
             end;
         Dir ->
-            filename:join(Dir, ?MODULE)
+            filename:join(Dir, atom_to_list(?MODULE))
     end,
     ok = erlang:load_nif(SoName, 0).
 
@@ -48,16 +48,16 @@ init() ->
     ok.
 
 dsha256_hash(_) ->
-    exit(nif_library_not_loaded).
+    erlang:nif_error(nif_library_not_loaded).
 
 tree_pair_dsha256_hash(_, _) ->
-    exit(nif_library_not_loaded).
+    erlang:nif_error(nif_library_not_loaded).
 
 sha256_midstate(_) ->
-    exit(nif_library_not_loaded).
+    erlang:nif_error(nif_library_not_loaded).
 
 rs_hash(_) ->
-    exit(nif_library_not_loaded).
+    erlang:nif_error(nif_library_not_loaded).
 
 tree_dsha256_hash([Hash]) ->
     Hash;
@@ -76,17 +76,19 @@ tree_level_dsha256_hash([H1,H2,H3], Acc) ->
 tree_level_dsha256_hash([H1,H2|T], Acc) ->
     tree_level_dsha256_hash(T, Acc ++ [tree_pair_dsha256_hash(H1, H2)]).
 
+-spec first_tree_branches_dsha256_hash(Hashlist :: [binary()]) -> [binary()].
 first_tree_branches_dsha256_hash([]) ->
     [];
 first_tree_branches_dsha256_hash([Hash]) ->
     [Hash];
 first_tree_branches_dsha256_hash(Hashlist) ->
-    l_tree_dsha256([dummy|Hashlist], fullsize(length(Hashlist)+1, 2)).
+    l_tree_dsha256([<<"dummy">>|Hashlist], fullsize(length(Hashlist)+1, 2)).
 
+-spec fold_tree_branches_dsha256_hash(TopHash :: binary(), Hashlist :: [binary()]) -> binary().
 fold_tree_branches_dsha256_hash(TopHash, []) ->
     TopHash;
-fold_tree_branches_dsha256_hash(TopHash, Hashes) ->
-    lists:foldl(fun (Hash, Acc) -> tree_pair_dsha256_hash(Acc, Hash) end, TopHash, Hashes).
+fold_tree_branches_dsha256_hash(TopHash, Hashlist) ->
+    lists:foldl(fun (Hash, Acc) -> tree_pair_dsha256_hash(Acc, Hash) end, TopHash, Hashlist).
 
 fullsize(N, V) ->
     if
@@ -94,6 +96,7 @@ fullsize(N, V) ->
         true -> fullsize(N, V*2)
     end.
 
+-spec l_tree_dsha256(Hashlist :: [binary()], Size :: integer()) -> [binary()].
 l_tree_dsha256([_, Hash], 2) ->
     [Hash];
 l_tree_dsha256(Hashlist, Size) ->

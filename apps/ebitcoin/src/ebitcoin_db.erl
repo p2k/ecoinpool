@@ -552,7 +552,8 @@ make_btc_tx_out_part(#btc_tx_out{value=Value, pk_script=PKScript}) ->
     ]}.
 
 make_btc_tx_part(Tx) when is_binary(Tx) ->
-    make_btc_tx_part(btc_protocol:decode_tx(Tx));
+    {DecodedTx, _} = btc_protocol:decode_tx(Tx),
+    make_btc_tx_part(DecodedTx);
 make_btc_tx_part(#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}) ->
     {[
         {<<"ver">>, Version},

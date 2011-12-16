@@ -23,6 +23,7 @@
 
 -include("ecoinpool_db_records.hrl").
 -include("ecoinpool_workunit.hrl").
+-include("ecoinpool_misc_types.hrl").
 
 -export([
     start_link/1,
@@ -45,20 +46,20 @@
 
 % Internal state record
 -record(state, {
-    subpool,
-    cdaemon,
-    mmm,
-    gw_method,
-    sw_method,
-    share_target,
-    workq,
-    workq_size,
-    worktbl,
-    hashtbl,
-    workertbl,
-    workerltbl,
-    lp_queue,
-    work_checker
+    subpool :: subpool(),
+    cdaemon :: abstract_coindaemon(),
+    mmm :: mmm(),
+    gw_method :: atom(),
+    sw_method :: atom(),
+    share_target :: binary(),
+    workq :: queue(),
+    workq_size :: integer(),
+    worktbl :: ets:tid(),
+    hashtbl :: ets:tid(),
+    workertbl :: ets:tid(),
+    workerltbl :: ets:tid(),
+    lp_queue :: queue(),
+    work_checker :: timer:tref()
 }).
 
 %% ===================================================================
@@ -105,6 +106,7 @@ new_aux_block_detected(SubpoolId, _Module) ->
 %% Gen_Server callbacks
 %% ===================================================================
 
+-spec init([binary(), ...]) -> {ok, #state{}}.
 init([SubpoolId]) ->
     log4erl:warn(server, "Subpool ~s starting...", [SubpoolId]),
     % Trap exit
@@ -181,7 +183,6 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     {ok, CoinDaemon} = if
         StartCoinDaemon ->
             case ecoinpool_server_sup:start_coindaemon(SubpoolId, CoinDaemonModule, CoinDaemonConfig) of
-                {ok, NewCoinDaemon, _} -> {ok, NewCoinDaemon};
                 {ok, NewCoinDaemon} -> {ok, NewCoinDaemon};
                 Error -> log4erl:fatal(server, "~s: Could not start CoinDaemon!", [SubpoolName]), ecoinpool_rpc:stop_rpc(Port), Error % Fail but close the RPC beforehand
             end;
@@ -546,7 +547,7 @@ check_work(Req, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerNa
     Peer = Req:get(peer),
     case CoinDaemon:analyze_result(Req:get(params)) of
         error ->
-            log4erl:warn(server, "~s: Wrong data from ~s/~s: ~p", [SubpoolName, WorkerName, Peer, Req:get(params)]),
+            log4erl:warn(server, "~s: Wrong data from ~s/~s: ~p", [SubpoolName, WorkerName, element(1, Peer), Req:get(params)]),
             ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
             Req:error(invalid_request),
             [];
@@ -627,11 +628,11 @@ process_results(Req, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker
         fun (C={Chain, _, _, _}) ->
             case send_candidate(C, CoinDaemon, MMM) of
                 accepted ->
-                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got accepted!", [SubpoolName, WorkerName, Peer, Chain]);
+                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got accepted!", [SubpoolName, WorkerName, element(1, Peer), Chain]);
                 rejected ->
-                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got rejected!", [SubpoolName, WorkerName, Peer, Chain]);
+                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got rejected!", [SubpoolName, WorkerName, element(1, Peer), Chain]);
                 {error, Message} ->
-                    log4erl:error(server, "~s: Upstream error from ~s/~s to ~p chain! Message: ~p", [SubpoolName, WorkerName, Peer, Chain, Message])
+                    log4erl:error(server, "~s: Upstream error from ~s/~s to ~p chain! Message: ~p", [SubpoolName, WorkerName, element(1, Peer), Chain, Message])
             end
         end,
         Candidates
@@ -726,7 +727,7 @@ check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool, Start
 
 check_for_candidate(SubpoolName, Workunit=#workunit{aux_work=AuxWork, aux_work_stale=AuxWorkStale}, Hash, BData, WorkerName, Peer) ->
     MainCandidate = case hash_is_below_target(Hash, Workunit) of
-        true -> log4erl:warn(server, "~s: +++ Main candidate share from ~s/~s! +++", [SubpoolName, WorkerName, Peer]), [main];
+        true -> log4erl:warn(server, "~s: +++ Main candidate share from ~s/~s! +++", [SubpoolName, WorkerName, element(1, Peer)]), [main];
         _ -> []
     end,
     AuxCandidate = if
@@ -734,7 +735,7 @@ check_for_candidate(SubpoolName, Workunit=#workunit{aux_work=AuxWork, aux_work_s
             [];
         true ->
             case hash_is_below_target(Hash, AuxWork) of
-                true -> log4erl:warn(server, "~s: +++ Aux candidate share from ~s/~s! +++", [SubpoolName, WorkerName, Peer]), [aux];
+                true -> log4erl:warn(server, "~s: +++ Aux candidate share from ~s/~s! +++", [SubpoolName, WorkerName, element(1, Peer)]), [aux];
                 _ -> []
             end
     end,

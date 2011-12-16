@@ -27,14 +27,14 @@
 module_init() ->
     SoName = case code:priv_dir(ecoinpool) of
         {error, bad_name} ->
-            case filelib:is_dir(filename:join(["..", priv])) of
+            case filelib:is_dir(filename:join(["..", "priv"])) of
                 true ->
-                    filename:join(["..", priv, ?MODULE]);
+                    filename:join(["..", "priv", atom_to_list(?MODULE)]);
                 false ->
-                    filename:join([priv, ?MODULE])
+                    filename:join(["priv", atom_to_list(?MODULE)])
             end;
         Dir ->
-            filename:join(Dir, ?MODULE)
+            filename:join(Dir, atom_to_list(?MODULE))
     end,
     ok = erlang:load_nif(SoName, 0).
 

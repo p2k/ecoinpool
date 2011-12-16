@@ -22,6 +22,7 @@
     active_subpools :: [binary()],
     view_update_interval :: integer()
 }).
+-type configuration() :: #configuration{}.
 
 -record(auxpool, {
     name :: binary(),
@@ -29,6 +30,7 @@
     round :: integer() | undefined,
     aux_daemon_config :: [tuple()]
 }).
+-type auxpool() :: #auxpool{}.
 
 -record(subpool, {
     id :: binary(),
@@ -40,8 +42,9 @@
     round :: integer() | undefined,
     worker_share_subpools :: [binary()],
     coin_daemon_config :: [tuple()],
-    aux_pool :: #auxpool{} | undefined
+    aux_pool :: auxpool() | undefined
 }).
+-type subpool() :: #subpool{}.
 
 -record(worker, {
     id :: binary(),
@@ -52,3 +55,4 @@
     lp :: boolean(),
     lp_heartbeat :: boolean()
 }).
+-type worker() :: #worker{}.

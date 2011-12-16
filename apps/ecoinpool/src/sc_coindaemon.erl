@@ -29,6 +29,8 @@
 
 -include("ecoinpool_workunit.hrl").
 
+-include("gen_coindaemon_spec.hrl").
+
 -export([
     start_link/2,
     getwork_method/0,

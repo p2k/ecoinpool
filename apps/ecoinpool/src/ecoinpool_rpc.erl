@@ -192,7 +192,7 @@ handle_post(SubpoolPID, Req, Auth, LP) ->
                             Method ->
                                 case proplists:get_value(<<"params">>, Properties, []) of
                                     Params when is_list(Params) ->
-                                        ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), Req:get(peer), Method, Params, Auth, LP));
+                                        ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, Params, Auth, LP));
                                     _ ->
                                         self() ! {error, invalid_request}
                                 end
@@ -230,7 +230,7 @@ handle_request(SubpoolPID, Req) ->
                 'GET' ->
                     case parse_path(Req:get(path)) of
                         {ok, LP} ->
-                            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), Req:get(peer), default, [], Auth, LP));
+                            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, default, [], Auth, LP));
                         _ ->
                             self() ! {error, method_not_found}
                     end,

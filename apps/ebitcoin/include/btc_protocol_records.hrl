@@ -32,14 +32,14 @@
 -record(btc_tx_in, {
     prev_output_hash :: binary(),
     prev_output_index :: integer(),
-    signature_script :: binary(),
+    signature_script :: binary() | [term()],
     sequence = 16#ffffffff :: integer()
 }).
 -type btc_tx_in() :: #btc_tx_in{}.
 
 -record(btc_tx_out, {
     value :: integer(),
-    pk_script :: binary()
+    pk_script :: binary() | [term()]
 }).
 -type btc_tx_out() :: #btc_tx_out{}.
 
@@ -71,7 +71,7 @@
 -record(btc_net_addr, {
     time :: integer() | undefined,
     services :: integer(),
-    ip :: {ip4 | ip6, string()},
+    ip :: {ip4 | ip6, string()} | inet:ip_address(),
     port :: integer()
 }).
 -type btc_net_addr() :: #btc_net_addr{}.

@@ -21,6 +21,10 @@
 -module(ecoinpool_server_sup).
 -behaviour(supervisor).
 
+-include("ecoinpool_misc_types.hrl").
+
+-define(MakeSupRef(X), list_to_atom(lists:concat([?MODULE, '_', binary_to_list(X)]))).
+
 -export([start_link/1, start_coindaemon/3, stop_coindaemon/1, add_auxdaemon/4, remove_auxdaemon/3]).
 
 % Callbacks from supervisor
@@ -30,25 +34,30 @@
 %% API functions
 %% ===================================================================
 
+-spec start_link(SubpoolId :: binary()) -> {ok, pid()} | ignore | {error, {already_started, pid()} | shutdown | term()}.
 start_link(SubpoolId) ->
-    supervisor:start_link({global, {?MODULE, SubpoolId}}, ?MODULE, [SubpoolId]).
+    supervisor:start_link({global, ?MakeSupRef(SubpoolId)}, ?MODULE, [SubpoolId]).
 
+-spec start_coindaemon(SubpoolId :: binary(), CoinDaemonModule :: module(), CoinDaemonConfig :: [conf_property()]) -> {ok, abstract_coindaemon()} | {error, term()}.
 start_coindaemon(SubpoolId, CoinDaemonModule, CoinDaemonConfig) ->
-    case supervisor:start_child({global, {?MODULE, SubpoolId}}, {coindaemon, {CoinDaemonModule, start_link, [SubpoolId, CoinDaemonConfig]}, permanent, 5000, worker, [CoinDaemonModule]}) of
+    case supervisor:start_child({global, ?MakeSupRef(SubpoolId)}, {coindaemon, {CoinDaemonModule, start_link, [SubpoolId, CoinDaemonConfig]}, permanent, 5000, worker, [CoinDaemonModule]}) of
         {ok, PID} -> {ok, abstract_coindaemon:new(CoinDaemonModule, PID)};
         {ok, PID, _} -> {ok, abstract_coindaemon:new(CoinDaemonModule, PID)};
         {error, {already_started, PID}} -> {ok, abstract_coindaemon:new(CoinDaemonModule, PID)};
         Other -> Other
     end.
 
+-spec stop_coindaemon(SubpoolId :: binary()) -> ok | {error, term()}.
 stop_coindaemon(SubpoolId) ->
-    case supervisor:terminate_child({global, {?MODULE, SubpoolId}}, coindaemon) of
-        ok -> supervisor:delete_child({global, {?MODULE, SubpoolId}}, coindaemon);
+    SupRef = ?MakeSupRef(SubpoolId),
+    case supervisor:terminate_child({global, SupRef}, coindaemon) of
+        ok -> supervisor:delete_child({global, SupRef}, coindaemon);
         Error -> Error
     end.
 
+-spec add_auxdaemon(SubpoolId :: binary(), AuxDaemonModule :: module(), AuxDaemonConfig :: [conf_property()], MMM :: mmm() | undefined) -> {ok, mmm()} | {error, term()}.
 add_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig, MMM) ->
-    Result = case supervisor:start_child({global, {?MODULE, SubpoolId}}, {{auxdaemon, AuxDaemonModule}, {AuxDaemonModule, start_link, [SubpoolId, AuxDaemonConfig]}, permanent, 5000, worker, [AuxDaemonModule]}) of
+    Result = case supervisor:start_child({global, ?MakeSupRef(SubpoolId)}, {{auxdaemon, AuxDaemonModule}, {AuxDaemonModule, start_link, [SubpoolId, AuxDaemonConfig]}, permanent, 5000, worker, [AuxDaemonModule]}) of
         {ok, PID} -> {ok, PID};
         {ok, PID, _} -> {ok, PID};
         {error, {already_started, PID}} -> {ok, PID};
@@ -66,10 +75,12 @@ add_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig, MMM) ->
             Result
     end.
 
+-spec remove_auxdaemon(SubpoolId :: binary(), AuxDaemonModule :: module(), MMM :: mmm()) -> {ok, mmm()} | {error, term()}.
 remove_auxdaemon(SubpoolId, AuxDaemonModule, MMM) ->
-    case supervisor:terminate_child({global, {?MODULE, SubpoolId}}, {auxdaemon, AuxDaemonModule}) of
+    SupRef = ?MakeSupRef(SubpoolId),
+    case supervisor:terminate_child({global, SupRef}, {auxdaemon, AuxDaemonModule}) of
         ok ->
-            supervisor:delete_child({global, {?MODULE, SubpoolId}}, {auxdaemon, AuxDaemonModule}),
+            supervisor:delete_child({global, SupRef}, {auxdaemon, AuxDaemonModule}),
             {ok, MMM:remove_aux_daemon(AuxDaemonModule)};
         Error ->
             Error

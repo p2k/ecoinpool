@@ -228,6 +228,7 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
+-spec handle_bitcoin(Message :: term(), State :: #state{}) -> {reply, term(), State :: #state{}} | {noreply, State :: #state{}}.
 handle_bitcoin(#btc_version{version=Version, start_height=TheirBlockNum}, State=#state{client=#client{name=Name}, last_block_num=OurBlockNum}) ->
     log4erl:info(ebitcoin, "~s: Peer version: ~b; Our block count: ~b; Peer block count: ~b", [Name, Version, OurBlockNum, TheirBlockNum]),
     if
@@ -494,26 +495,26 @@ decode_message(_, _) ->
 
 encode_message(Message=#btc_version{}) ->
     {version, btc_protocol:encode_version(Message)};
-encode_message(Message=#btc_inv{}) ->
-    {inv, btc_protocol:encode_inv(Message)};
-encode_message(Message=#btc_addr{}) ->
-    {addr, btc_protocol:encode_addr(Message)};
-encode_message(Message=#btc_getdata{}) ->
-    {getdata, btc_protocol:encode_getdata(Message)};
-encode_message(Message=#btc_getblocks{}) ->
-    {getblocks, btc_protocol:encode_getblocks(Message)};
+%encode_message(Message=#btc_inv{}) ->
+%    {inv, btc_protocol:encode_inv(Message)};
+%encode_message(Message=#btc_addr{}) ->
+%    {addr, btc_protocol:encode_addr(Message)};
+%encode_message(Message=#btc_getdata{}) ->
+%    {getdata, btc_protocol:encode_getdata(Message)};
+%encode_message(Message=#btc_getblocks{}) ->
+%    {getblocks, btc_protocol:encode_getblocks(Message)};
 encode_message(Message=#btc_getheaders{}) ->
     {getheaders, btc_protocol:encode_getheaders(Message)};
-encode_message(Message=#btc_headers{}) ->
-    {headers, btc_protocol:encode_headers(Message)};
-encode_message(Message=#btc_tx{}) ->
-    {tx, btc_protocol:encode_tx(Message)};
-encode_message(Message=#btc_block{}) ->
-    {block, btc_protocol:encode_block(Message)};
-encode_message(ping) ->
-    {ping, <<>>};
-encode_message(getaddr) ->
-    {getaddr, <<>>};
+%encode_message(Message=#btc_headers{}) ->
+%    {headers, btc_protocol:encode_headers(Message)};
+%encode_message(Message=#btc_tx{}) ->
+%    {tx, btc_protocol:encode_tx(Message)};
+%encode_message(Message=#btc_block{}) ->
+%    {block, btc_protocol:encode_block(Message)};
+%encode_message(ping) ->
+%    {ping, <<>>};
+%encode_message(getaddr) ->
+%    {getaddr, <<>>};
 encode_message(verack) ->
     {verack, <<>>}.
 

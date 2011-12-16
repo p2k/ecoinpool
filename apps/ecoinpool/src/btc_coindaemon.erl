@@ -25,6 +25,9 @@
 -include("ecoinpool_workunit.hrl").
 -include("../ebitcoin/include/btc_protocol_records.hrl").
 
+-define(COINDAEMON_SUPPORTS_MM, true).
+-include("gen_coindaemon_spec.hrl").
+
 -export([
     start_link/2,
     getwork_method/0,
@@ -186,7 +189,7 @@ handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, worktb
     WorkunitId = workunit_id_from_btc_header(Header),
     case ets:lookup(WorkTbl, WorkunitId) of
         [{_, CoinbaseTx, TxIndex, _}] ->
-            {_, Transactions} = ets:lookup(TxTbl, TxIndex),
+            [{_, Transactions}] = ets:lookup(TxTbl, TxIndex),
             try
                 {reply, send_block(URL, Auth, Header, [CoinbaseTx | Transactions]), State}
             catch error:_ ->
