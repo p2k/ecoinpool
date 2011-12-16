@@ -25,5 +25,5 @@
   {registered, [ebitcoin_app]},
   {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, couchbeam]},
   {mod, {ebitcoin_app, []}},
-  {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
+  {env, [{enabled, true}, {db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
  ]}.

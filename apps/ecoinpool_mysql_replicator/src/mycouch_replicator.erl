@@ -69,6 +69,10 @@
 %   as parameter and return one (possibly converted) property list as result.
 start_link(CouchDb, CouchFilter, MyPoolId, MyTable, MyInterval, CouchToMy, MyToCouch) ->
     InitParams = [CouchDb, MyPoolId, MyTable, MyInterval, CouchToMy, MyToCouch],
+    if
+        MyInterval < 1 -> error(interval_less_than_one);
+        true -> ok
+    end,
     case CouchFilter of
         undefined ->
             gen_changes:start_link(?MODULE, CouchDb, [continuous, heartbeat], InitParams);

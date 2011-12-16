@@ -36,6 +36,7 @@
    {mysql_prefix, ""},
    {mysql_options, []},
    {mysql_database, "ecoinpool"},
-   {replicator_configs, []}
+   {replicator_configs, []},
+   {shares_configs, []}
   ]}
  ]}.

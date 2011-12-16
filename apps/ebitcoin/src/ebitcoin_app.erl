@@ -32,14 +32,19 @@
 start(_StartType, _StartArgs) ->
     % Init hash library
     ok = ecoinpool_hash:init(),
-    % Load configuration
-    {ok, DBHost} = application:get_env(ebitcoin, db_host),
-    {ok, DBPort} = application:get_env(ebitcoin, db_port),
-    {ok, DBPrefix} = application:get_env(ebitcoin, db_prefix),
-    {ok, DBOptions} = application:get_env(ebitcoin, db_options),
     % log4erl
     log4erl:conf(filename:join(code:priv_dir(ebitcoin), "log4erl.conf")),
-    ebitcoin_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions}).
+    % Load configuration
+    case application:get_env(ebitcoin, enabled) of
+        {ok, true} ->
+            {ok, DBHost} = application:get_env(ebitcoin, db_host),
+            {ok, DBPort} = application:get_env(ebitcoin, db_port),
+            {ok, DBPrefix} = application:get_env(ebitcoin, db_prefix),
+            {ok, DBOptions} = application:get_env(ebitcoin, db_options),
+            ebitcoin_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions});
+        _ ->
+            log4erl:warn(ebitcoin, "The service has been disabled by configuration.")
+    end.
 
 stop(_State) ->
     ok.

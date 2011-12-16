@@ -27,17 +27,18 @@
 -export([init/1]).
 
 
-start_link(CouchDbConfig, MySQLConfig, ReplicatorConfigs) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, [CouchDbConfig, MySQLConfig, ReplicatorConfigs]).
+start_link(CouchDbConfig, MySQLConfig, ReplicatorConfigs, SharesConfigs) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [CouchDbConfig, MySQLConfig, ReplicatorConfigs, SharesConfigs]).
 
 
-init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}, {MySQLHost, MySQLPort, MySQLPrefix, MySQLOptions, MySQLDatabase}, ReplicatorConfigs]) ->
+init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}, {MySQLHost, MySQLPort, MySQLPrefix, MySQLOptions, MySQLDatabase}, ReplicatorConfigs, SharesConfigs]) ->
     CouchServer = couchbeam:server_connection(CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions),
     {ok, CouchDb} = couchbeam:open_db(CouchServer, CouchDBDatabase),
     {MySQLUser, MySQLPassword} = proplists:get_value(auth, MySQLOptions, {"root", ""}),
     
     Replicators = lists:map(
         fun ({SSubPoolId, MyTable, MyInterval}) ->
+            if MyInterval =< 0 -> error(replicator_interval_zero_or_less); true -> ok end,
             SubPoolId = if is_binary(SSubPoolId) -> SSubPoolId; is_list(SSubPoolId) -> list_to_binary(SSubPoolId) end,
             {mycouch_replicator, {mycouch_replicator, start_link, [
                 CouchDb,
