@@ -37,6 +37,6 @@
    {mysql_options, []},
    {mysql_database, "ecoinpool"},
    {replicator_configs, []},
-   {shares_configs, []}
+   {share_deployer_configs, []}
   ]}
  ]}.

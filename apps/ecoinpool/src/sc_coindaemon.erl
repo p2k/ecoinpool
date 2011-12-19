@@ -331,8 +331,8 @@ sendwork(URL, Auth, BData) ->
 decode_sc_data(SCData) ->
     <<
         Version:32/little,
-        HashPrevBlock:32/bytes,
-        HashMerkleRoot:32/bytes,
+        HashPrevBlock:256/little,
+        HashMerkleRoot:256/little,
         BlockNum:64/little,
         Time:64/little,
         Nonce1:64/unsigned-little,
@@ -343,35 +343,38 @@ decode_sc_data(SCData) ->
         Bits:32/unsigned-little
     >> = SCData,
     
-    #sc_data{version=Version,
-        hash_prev_block=HashPrevBlock,
-        hash_merkle_root=HashMerkleRoot,
-        block_num=BlockNum,
-        time=Time,
-        nonce1=Nonce1,
-        nonce2=Nonce2,
-        nonce3=Nonce3,
-        nonce4=Nonce4,
-        miner_id=MinerId,
-        bits=Bits}.
+    #sc_data{
+        version = Version,
+        hash_prev_block = <<HashPrevBlock:256/big>>,
+        hash_merkle_root = <<HashMerkleRoot:256/big>>,
+        block_num = BlockNum,
+        time = Time,
+        nonce1 = Nonce1,
+        nonce2 = Nonce2,
+        nonce3 = Nonce3,
+        nonce4 = Nonce4,
+        miner_id = MinerId,
+        bits = Bits}.
 
 encode_sc_data(SCData) ->
-    #sc_data{version=Version,
-        hash_prev_block=HashPrevBlock,
-        hash_merkle_root=HashMerkleRoot,
-        block_num=BlockNum,
-        time=Time,
-        nonce1=Nonce1,
-        nonce2=Nonce2,
-        nonce3=Nonce3,
-        nonce4=Nonce4,
-        miner_id=MinerId,
-        bits=Bits} = SCData,
+    #sc_data{
+        version = Version,
+        hash_prev_block = <<HashPrevBlock:256/big>>,
+        hash_merkle_root = <<HashMerkleRoot:256/big>>,
+        block_num = BlockNum,
+        time = Time,
+        nonce1 = Nonce1,
+        nonce2 = Nonce2,
+        nonce3 = Nonce3,
+        nonce4 = Nonce4,
+        miner_id = MinerId,
+        bits = Bits
+    } = SCData,
     
     <<
         Version:32/little,
-        HashPrevBlock:32/bytes,
-        HashMerkleRoot:32/bytes,
+        HashPrevBlock:256/little,
+        HashMerkleRoot:256/little,
         BlockNum:64/little,
         Time:64/little,
         Nonce1:64/unsigned-little,
@@ -387,11 +390,11 @@ workunit_id_from_sc_data(#sc_data{hash_prev_block=HashPrevBlock, hash_merkle_roo
     Data = <<HashPrevBlock/bytes, HashMerkleRoot/bytes, Nonce2Masked:64/unsigned-little>>,
     crypto:sha(Data).
 
-make_workunit(SCData=#sc_data{bits=Bits, block_num=BlockNum}) ->
+make_workunit(SCData=#sc_data{bits=Bits, block_num=BlockNum, hash_prev_block=PrevBlock}) ->
     BData = encode_sc_data(SCData),
     WUId = workunit_id_from_sc_data(SCData),
     Target = ecoinpool_util:bits_to_target(Bits),
-    #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BData}.
+    #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, prev_block=PrevBlock, data=BData}.
 
 -ifdef(TEST).
 

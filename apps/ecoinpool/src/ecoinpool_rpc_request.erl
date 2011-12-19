@@ -24,6 +24,10 @@
 
 get(peer) ->
     Peer;
+get(ip) ->
+    element(1, Peer);
+get(user_agent) ->
+    element(2, Peer);
 get(method) ->
     Method;
 get(params) ->

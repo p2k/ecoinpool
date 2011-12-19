@@ -22,15 +22,17 @@
     aux_hash :: binary(),
     target :: binary(),
     chain_id :: integer(),
-    block_num :: integer()
+    block_num :: integer(),
+    prev_block :: binary() | undefined
 }).
 -type auxwork() :: #auxwork{}.
 
 -record(workunit, {
     id :: binary(),
-    ts :: tuple(),
+    ts :: erlang:timestamp(),
     target :: binary(),
     block_num :: integer(),
+    prev_block :: binary(),
     data :: binary(),
     worker_id :: binary(),
     aux_work :: auxwork() | undefined,

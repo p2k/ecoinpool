@@ -237,8 +237,8 @@ handle_cast(post_workunit, OldState) ->
     % Update state
     {noreply, State#state{coinbase_tx=CoinbaseTx}};
 
-handle_cast({ebitcoin_blockchange, _, BlockNum}, State) ->
-    {noreply, fetch_work_with_state(State#state{block_num={pushed, BlockNum}})};
+handle_cast({ebitcoin_blockchange, _, _, BlockNum}, State) ->
+    {noreply, fetch_work_with_state(State#state{block_num={pushed, BlockNum + 1}})};
 
 handle_cast(_Message, State) ->
     {noreply, State}.
@@ -485,11 +485,11 @@ increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
     #btc_tx_in{signature_script = [Tag, Timestamp, ExtraNonce | ScriptSigTrailer]} = TxIn,
     Tx#btc_tx{tx_in=[TxIn#btc_tx_in{signature_script = [Tag, Timestamp, ExtraNonce+1 | ScriptSigTrailer]}]}.
 
-make_workunit(Header=#btc_header{bits=Bits}, BlockNum, AuxWork) ->
+make_workunit(Header=#btc_header{bits=Bits, hash_prev_block=PrevBlock}, BlockNum, AuxWork) ->
     BHeader = btc_protocol:encode_main_header(Header),
     WUId = workunit_id_from_btc_header(Header),
     Target = ecoinpool_util:bits_to_target(Bits),
-    #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, data=BHeader, aux_work=AuxWork}.
+    #workunit{id=WUId, ts=erlang:now(), target=Target, block_num=BlockNum, prev_block=PrevBlock, data=BHeader, aux_work=AuxWork}.
 
 make_script_sig_trailer(undefined) ->
     [];

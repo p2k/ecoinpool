@@ -21,9 +21,9 @@
 -module(ecoinpool_server).
 -behaviour(gen_server).
 
+-include("ecoinpool_misc_types.hrl").
 -include("ecoinpool_db_records.hrl").
 -include("ecoinpool_workunit.hrl").
--include("ecoinpool_misc_types.hrl").
 
 -export([
     start_link/1,
@@ -275,7 +275,7 @@ handle_cast({rpc_request, Req}, State) ->
             LP = Req:get(lp),
             case Action of % Now match for the action
                 getwork when LP ->
-                    log4erl:info(server, "~s: LP requested by ~s/~s", [SubpoolName, WorkerName, Req:get(peer)]),
+                    log4erl:info(server, "~s: LP requested by ~s/~s", [SubpoolName, WorkerName, Req:get(ip)]),
                     Req:start(WithHeartbeat),
                     {noreply, State#state{lp_queue=queue:in({Worker, Req}, LPQueue)}};
                 getwork ->
@@ -326,7 +326,7 @@ handle_cast({new_block_detected, Chain}, State) ->
                 ok ->
                     true;
                 _ ->
-                    log4erl:debug(server, "~s: LP connection for ~s/~s was dropped, skipping.", [SubpoolName, WorkerName, Req:get(peer)]),
+                    log4erl:debug(server, "~s: LP connection for ~s/~s was dropped, skipping.", [SubpoolName, WorkerName, Req:get(ip)]),
                     false
             end
         end,
@@ -506,14 +506,14 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
             % Check authentication
             case Req:get(auth) of
                 unauthorized ->
-                    log4erl:warn(server, "~s: rpc_request: ~s: Unauthorized!", [SubpoolName, Req:get(peer)]),
+                    log4erl:warn(server, "~s: rpc_request: ~s: Unauthorized!", [SubpoolName, Req:get(ip)]),
                     {error, authorization_required};
                 {User, Password} ->
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
                             {ok, Worker, Action};
                         [] ->
-                            log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Req:get(peer), User]),
+                            log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Req:get(ip), User]),
                             {error, authorization_required}
                     end
             end
@@ -531,14 +531,14 @@ assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, Worker=#worker{id=W
                         _ -> ok
                     end,
                     Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit)),
-                    log4erl:info(server, "~s: Cache hit by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(peer), WorkQueueSize-1, MaxCacheSize]),
+                    log4erl:info(server, "~s: Cache hit by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(ip), WorkQueueSize-1, MaxCacheSize]),
                     {NewWorkQueue, WorkQueueSize-1};
                 _ -> % Try again if too old (tail recursive)
                     log4erl:debug(server, "~s: assign_work: discarded an old workunit.", [SubpoolName]),
                     assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, Worker, NewWorkQueue, WorkQueueSize-1, WorkTbl, CoinDaemon)
             end;
         true -> % Cache miss, append to waiting queue
-            log4erl:info(server, "~s: Cache miss by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(peer), WorkQueueSize-1, MaxCacheSize]),
+            log4erl:info(server, "~s: Cache miss by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(ip), WorkQueueSize-1, MaxCacheSize]),
             {queue:in({Worker, Req}, WorkQueue), WorkQueueSize-1}
     end.
 
@@ -569,7 +569,7 @@ check_work(Req, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerNa
                                     end
                             end;
                         _ -> % Not found
-                            stale
+                            {stale, Hash}
                     end
                 end,
                 Results
@@ -594,8 +594,8 @@ process_results(Req, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker
     Peer = Req:get(peer),
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
-            (stale, {AccReplyItems, _, AccCandidates}) ->
-                ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, stale),
+            ({stale, Hash}, {AccReplyItems, _, AccCandidates}) ->
+                ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Hash, stale),
                 {[invalid | AccReplyItems], "Stale or unknown work", AccCandidates};
             ({duplicate, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
                 ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, duplicate),

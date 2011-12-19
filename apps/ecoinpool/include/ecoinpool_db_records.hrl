@@ -28,7 +28,7 @@
     name :: binary(),
     pool_type :: atom(),
     round :: integer() | undefined,
-    aux_daemon_config :: [tuple()]
+    aux_daemon_config :: [conf_property()]
 }).
 -type auxpool() :: #auxpool{}.
 
@@ -41,7 +41,7 @@
     max_work_age :: integer(),
     round :: integer() | undefined,
     worker_share_subpools :: [binary()],
-    coin_daemon_config :: [tuple()],
+    coin_daemon_config :: [conf_property()],
     aux_pool :: auxpool() | undefined
 }).
 -type subpool() :: #subpool{}.

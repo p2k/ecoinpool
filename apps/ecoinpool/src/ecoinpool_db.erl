@@ -21,9 +21,9 @@
 -module(ecoinpool_db).
 -behaviour(gen_server).
 
+-include("ecoinpool_misc_types.hrl").
 -include("ecoinpool_db_records.hrl").
 -include("ecoinpool_workunit.hrl").
--include("ecoinpool_misc_types.hrl").
 
 -export([
     start_link/1,
@@ -36,6 +36,7 @@
     setup_shares_db/1,
     store_share/6,
     store_invalid_share/4,
+    store_invalid_share/5,
     store_invalid_share/6,
     set_view_update_interval/1
 ]).
@@ -94,11 +95,15 @@ setup_shares_db(#auxpool{name=AuxpoolName}) ->
 store_share(Subpool, Peer, Worker, Workunit, Hash, Candidates) ->
     gen_server:cast(?MODULE, {store_share, Subpool, Peer, Worker, Workunit, Hash, Candidates}).
 
--spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Reason :: atom()) -> ok.
+-spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Reason :: reject_reason()) -> ok.
 store_invalid_share(Subpool, Peer, Worker, Reason) ->
     store_invalid_share(Subpool, Peer, Worker, undefined, undefined, Reason).
 
--spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Workunit :: workunit() | undefined, Hash :: binary() | undefined, Reason :: atom()) -> ok.
+-spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Hash :: binary(), Reason :: reject_reason()) -> ok.
+store_invalid_share(Subpool, Peer, Worker, Hash, Reason) ->
+    store_invalid_share(Subpool, Peer, Worker, undefined, Hash, Reason).
+
+-spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Workunit :: workunit() | undefined, Hash :: binary() | undefined, Reason :: reject_reason()) -> ok.
 store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, Reason) ->
     gen_server:cast(?MODULE, {store_invalid_share, Subpool, Peer, Worker, Workunit, Hash, Reason}).
 
@@ -321,7 +326,7 @@ handle_cast({store_share,
             #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool},
             Peer,
             #worker{id=WorkerId, user_id=UserId, name=WorkerName},
-            #workunit{target=Target, block_num=BlockNum, data=BData, aux_work=AuxWork, aux_work_stale=AuxWorkStale},
+            #workunit{target=Target, block_num=BlockNum, prev_block=PrevBlock, data=BData, aux_work=AuxWork, aux_work_stale=AuxWorkStale},
             Hash,
             Candidates}, State=#state{srv_conn=S}) ->
     % This code will change if multi aux chains are supported
@@ -342,12 +347,12 @@ handle_cast({store_share,
             if
                 AuxWorkStale ->
                     log4erl:debug(db, "~s&~s: Storing ~p&stale share from ~s/~s", [SubpoolName, AuxpoolName, MainState, WorkerName, element(1, Peer)]),
-                    store_invalid_share_in_db(WorkerId, UserId, Peer, stale, AuxRound, AuxDB),
+                    store_invalid_share_in_db(WorkerId, UserId, Peer, stale, undefined, Hash, undefined, undefined, undefined, Round, AuxDB),
                     State;
                 true ->
-                    #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum} = AuxWork,
+                    #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum, prev_block=AuxPrevBlock} = AuxWork,
                     log4erl:debug(db, "~s&~s: Storing ~p&~p share from ~s/~s", [SubpoolName, AuxpoolName, MainState, AuxState, WorkerName, element(1, Peer)]),
-                    case store_share_in_db(WorkerId, UserId, Peer, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, BData, AuxRound, AuxDB) of
+                    case store_share_in_db(WorkerId, UserId, Peer, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, BData, AuxRound, AuxDB) of
                         ok ->
                             store_view_update(AuxDB, Now, State);
                         _ ->
@@ -360,7 +365,7 @@ handle_cast({store_share,
     end,
     
     {ok, DB} = couchbeam:open_db(S, SubpoolName),
-    case store_share_in_db(WorkerId, UserId, Peer, MainState, Hash, Target, BlockNum, BData, Round, DB) of
+    case store_share_in_db(WorkerId, UserId, Peer, MainState, Hash, Target, BlockNum, PrevBlock, BData, Round, DB) of
         ok ->
             {noreply, store_view_update(DB, Now, NewState)};
         _ ->
@@ -374,10 +379,10 @@ handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round, aux_po
             log4erl:debug(db, "~s&~s: Storing invalid share from ~s/~s, reason: ~p", [SubpoolName, AuxpoolName, WorkerName, element(1, Peer), Reason]),
             {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
             case Workunit of
-                #workunit{aux_work=#auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum}} ->
-                    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxRound, AuxDB);
+                #workunit{aux_work=#auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum, prev_block=AuxPrevBlock}} ->
+                    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, AuxRound, AuxDB);
                 _ ->
-                    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, AuxRound, AuxDB)
+                    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, undefined, Hash, undefined, undefined, undefined, Round, AuxDB)
             end;
         _ ->
             log4erl:debug(db, "~s: Storing invalid share from ~s/~s, reason: ~p", [SubpoolName, WorkerName, element(1, Peer), Reason]),
@@ -386,10 +391,10 @@ handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round, aux_po
     
     {ok, DB} = couchbeam:open_db(S, SubpoolName),
     case Workunit of
-        #workunit{target=Target, block_num=BlockNum} ->
-            store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, Target, BlockNum, Round, DB);
+        #workunit{target=Target, block_num=BlockNum, prev_block=PrevBlock} ->
+            store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, Target, BlockNum, PrevBlock, Round, DB);
         _ ->
-            store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Round, DB)
+            store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, undefined, undefined, undefined, Round, DB)
     end,
     
     {noreply, State};
@@ -621,7 +626,8 @@ parse_worker_document(WorkerId, {DocProps}) ->
             {error, invalid}
     end.
 
-make_share_document(WorkerId, UserId, {IP, UserAgent}, State, Hash, ParentHash, Target, BlockNum, BData, Round) ->
+-spec make_share_document(WorkerId :: binary(), UserId :: term(), Peer :: peer(), State :: valid | candidate, Hash :: binary(), ParentHash :: binary() | undefined, Target :: binary(), BlockNum :: integer(), PrevBlock :: binary(), BData :: binary(), Round :: integer()) -> {[]}.
+make_share_document(WorkerId, UserId, {IP, UserAgent}, State, Hash, ParentHash, Target, BlockNum, PrevBlock, BData, Round) ->
     {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
     filter_undefined({[
         {<<"worker_id">>, WorkerId},
@@ -634,11 +640,13 @@ make_share_document(WorkerId, UserId, {IP, UserAgent}, State, Hash, ParentHash, 
         {<<"parent_hash">>, apply_if_defined(ParentHash, fun ecoinpool_util:bin_to_hexbin/1)},
         {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
         {<<"block_num">>, BlockNum},
+        {<<"prev_block">>, apply_if_defined(PrevBlock, fun ecoinpool_util:bin_to_hexbin/1)},
         {<<"round">>, Round},
         {<<"data">>, case State of valid -> undefined; candidate -> base64:encode(BData) end}
     ]}).
 
-make_reject_share_document(WorkerId, UserId, {IP, UserAgent}, Reason, Hash, ParentHash, Target, BlockNum, Round) ->
+-spec make_reject_share_document(WorkerId :: binary(), UserId :: term(), Peer :: peer(), Reason :: reject_reason(), Hash :: binary() | undefined, ParentHash :: binary() | undefined, Target :: binary() | undefined, BlockNum :: integer() | undefined, PrevBlock :: binary() | undefined, Round :: integer()) -> {[]}.
+make_reject_share_document(WorkerId, UserId, {IP, UserAgent}, Reason, Hash, ParentHash, Target, BlockNum, PrevBlock, Round) ->
     {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
     filter_undefined({[
         {<<"worker_id">>, WorkerId},
@@ -652,6 +660,7 @@ make_reject_share_document(WorkerId, UserId, {IP, UserAgent}, Reason, Hash, Pare
         {<<"parent_hash">>, apply_if_defined(ParentHash, fun ecoinpool_util:bin_to_hexbin/1)},
         {<<"target">>, apply_if_defined(Target, fun ecoinpool_util:bin_to_hexbin/1)},
         {<<"block_num">>, BlockNum},
+        {<<"prev_block">>, apply_if_defined(PrevBlock, fun ecoinpool_util:bin_to_hexbin/1)},
         {<<"round">>, Round}
     ]}).
 
@@ -668,11 +677,11 @@ is_binary_list(List) when is_list(List) ->
 is_binary_list(_) ->
     false.
 
-store_share_in_db(WorkerId, UserId, Peer, State, Hash, Target, BlockNum, BData, Round, DB) ->
-    store_share_in_db(WorkerId, UserId, Peer, State, Hash, undefined, Target, BlockNum, BData, Round, DB).
+store_share_in_db(WorkerId, UserId, Peer, State, Hash, Target, BlockNum, PrevBlock, BData, Round, DB) ->
+    store_share_in_db(WorkerId, UserId, Peer, State, Hash, undefined, Target, BlockNum, PrevBlock, BData, Round, DB).
 
-store_share_in_db(WorkerId, UserId, Peer, State, Hash, ParentHash, Target, BlockNum, BData, Round, DB) ->
-    Doc = make_share_document(WorkerId, UserId, Peer, State, Hash, ParentHash, Target, BlockNum, BData, Round),
+store_share_in_db(WorkerId, UserId, Peer, State, Hash, ParentHash, Target, BlockNum, PrevBlock, BData, Round, DB) ->
+    Doc = make_share_document(WorkerId, UserId, Peer, State, Hash, ParentHash, Target, BlockNum, PrevBlock, BData, Round),
     try
         couchbeam:save_doc(DB, Doc),
         ok
@@ -681,14 +690,13 @@ store_share_in_db(WorkerId, UserId, Peer, State, Hash, ParentHash, Target, Block
         error
     end.
 
-store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Round, DB) ->
-    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, undefined, undefined, undefined, undefined, Round, DB).
+-spec store_invalid_share_in_db(WorkerId :: binary(), UserId :: term(), Peer :: peer(), Reason :: reject_reason(), Hash :: binary() | undefined, Target :: binary() | undefined, BlockNum :: integer() | undefined, PrevBlock :: binary() | undefined, Round :: integer(), DB :: tuple()) -> ok | error.
+store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, Target, BlockNum, PrevBlock, Round, DB) ->
+    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, undefined, Target, BlockNum, PrevBlock, Round, DB).
 
-store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, Target, BlockNum, Round, DB) ->
-    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, undefined, Target, BlockNum, Round, DB).
-
-store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, ParentHash, Target, BlockNum, Round, DB) ->
-    Doc = make_reject_share_document(WorkerId, UserId, Peer, Reason, Hash, ParentHash, Target, BlockNum, Round),
+-spec store_invalid_share_in_db(WorkerId :: binary(), UserId :: term(), Peer :: peer(), Reason :: reject_reason(), Hash :: binary() | undefined, ParentHash :: binary() | undefined, Target :: binary() | undefined, BlockNum :: integer() | undefined, PrevBlock :: binary() | undefined, Round :: integer(), DB :: tuple()) -> ok | error.
+store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, ParentHash, Target, BlockNum, PrevBlock, Round, DB) ->
+    Doc = make_reject_share_document(WorkerId, UserId, Peer, Reason, Hash, ParentHash, Target, BlockNum, PrevBlock, Round),
     try
         couchbeam:save_doc(DB, Doc),
         ok

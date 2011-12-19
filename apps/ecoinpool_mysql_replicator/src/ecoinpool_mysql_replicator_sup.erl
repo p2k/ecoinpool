@@ -22,16 +22,16 @@
 
 -behaviour(supervisor).
 
--export([start_link/3]).
+-export([start_link/4]).
 
 -export([init/1]).
 
 
-start_link(CouchDbConfig, MySQLConfig, ReplicatorConfigs, SharesConfigs) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, [CouchDbConfig, MySQLConfig, ReplicatorConfigs, SharesConfigs]).
+start_link(CouchDbConfig, MySQLConfig, ReplicatorConfigs, ShareDeployerConfigs) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [CouchDbConfig, MySQLConfig, ReplicatorConfigs, ShareDeployerConfigs]).
 
 
-init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}, {MySQLHost, MySQLPort, MySQLPrefix, MySQLOptions, MySQLDatabase}, ReplicatorConfigs, SharesConfigs]) ->
+init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}, {MySQLHost, MySQLPort, MySQLPrefix, MySQLOptions, MySQLDatabase}, ReplicatorConfigs, ShareDeployerConfigs]) ->
     CouchServer = couchbeam:server_connection(CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions),
     {ok, CouchDb} = couchbeam:open_db(CouchServer, CouchDBDatabase),
     {MySQLUser, MySQLPassword} = proplists:get_value(auth, MySQLOptions, {"root", ""}),
@@ -40,7 +40,7 @@ init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}
         fun ({SSubPoolId, MyTable, MyInterval}) ->
             if MyInterval =< 0 -> error(replicator_interval_zero_or_less); true -> ok end,
             SubPoolId = if is_binary(SSubPoolId) -> SSubPoolId; is_list(SSubPoolId) -> list_to_binary(SSubPoolId) end,
-            {mycouch_replicator, {mycouch_replicator, start_link, [
+            {{replicator, SubPoolId, MyTable}, {mycouch_replicator, start_link, [
                 CouchDb,
                 {"workers/by_sub_pool", [{"sub_pool_id", SubPoolId}]},
                 ecoinpool_mysql_replicator,
@@ -53,9 +53,39 @@ init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}
         ReplicatorConfigs
     ),
     
+    ShareDeployers = lists:map(
+        fun
+            ({ConfigIdStr, PoolName, MyTable, MyInterval}) ->
+                if MyInterval < 0 -> error(share_deploy_interval_less_than_zero); true -> ok end,
+                {ok, MainPoolDb} = couchbeam:open_db(CouchServer, PoolName),
+                {{share_deployer, ConfigIdStr}, {ecoinpool_mysql_share_deployer, start_link, [
+                    ConfigIdStr,
+                    CouchDb,
+                    MainPoolDb,
+                    ecoinpool_mysql_replicator,
+                    MySQLPrefix ++ MyTable,
+                    MyInterval
+                ]}, permanent, 5000, worker, [ecoinpool_mysql_share_deployer]};
+            ({ConfigIdStr, MainPoolName, AuxPoolName, MyTable, MyInterval}) ->
+                if MyInterval < 0 -> error(share_deploy_interval_less_than_zero); true -> ok end,
+                {ok, MainPoolDb} = couchbeam:open_db(CouchServer, MainPoolName),
+                {ok, AuxPoolDb} = couchbeam:open_db(CouchServer, AuxPoolName),
+                {{share_deployer, ConfigIdStr}, {ecoinpool_mysql_share_deployer, start_link, [
+                    ConfigIdStr,
+                    CouchDb,
+                    MainPoolDb,
+                    AuxPoolDb,
+                    ecoinpool_mysql_replicator,
+                    MySQLPrefix ++ MyTable,
+                    MyInterval
+                ]}, permanent, 5000, worker, [ecoinpool_mysql_share_deployer]}
+        end,
+        ShareDeployerConfigs
+    ),
+    
     {ok, { {one_for_one, 5, 10}, [
         {mysql, {mysql, start_link, [ecoinpool_mysql_replicator, MySQLHost, MySQLPort, MySQLUser, MySQLPassword, MySQLDatabase]}, permanent, 5000, worker, [mysql]}
-    ] ++ Replicators} }.
+    ] ++ Replicators ++ ShareDeployers} }.
 
 
 ecoinpool_couch_to_my(CouchProps) ->

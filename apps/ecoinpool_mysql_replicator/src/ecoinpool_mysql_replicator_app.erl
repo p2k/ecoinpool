@@ -42,12 +42,12 @@ start(_StartType, _StartArgs) ->
     {ok, MySQLOptions} = application:get_env(ecoinpool_mysql_replicator, mysql_options),
     {ok, MySQLDatabase} = application:get_env(ecoinpool_mysql_replicator, mysql_database),
     {ok, ReplicatorConfigs} = application:get_env(ecoinpool_mysql_replicator, replicator_configs),
-    {ok, SharesConfigs} = application:get_env(ecoinpool_mysql_replicator, shares_configs),
+    {ok, ShareDeployerConfigs} = application:get_env(ecoinpool_mysql_replicator, share_deployer_configs),
     ecoinpool_mysql_replicator_sup:start_link(
         {CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase},
         {MySQLHost, MySQLPort, MySQLPrefix, MySQLOptions, MySQLDatabase},
         ReplicatorConfigs,
-        SharesConfigs
+        ShareDeployerConfigs
     ).
 
 stop(_State) ->

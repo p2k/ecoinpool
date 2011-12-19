@@ -27,3 +27,5 @@
 -type peer() :: {IP :: string(), UserAgent :: string() | undefined}.
 
 -type candidate() :: main | aux.
+
+-type reject_reason() :: stale | duplicate | target | data.

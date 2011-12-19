@@ -21,6 +21,7 @@
 -module(ecoinpool_cfg_monitor).
 -behaviour(gen_changes).
 
+-include("ecoinpool_misc_types.hrl").
 -include("ecoinpool_db_records.hrl").
 
 -export([start_link/1]).

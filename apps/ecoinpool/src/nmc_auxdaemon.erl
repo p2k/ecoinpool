@@ -38,6 +38,7 @@
     poll_timer,
     ebtc_id,
     block_num,
+    prev_block,
     
     last_fetch,
     auxblock_data
@@ -87,11 +88,11 @@ handle_call(get_aux_work, _From, OldState) ->
     % Check if a new block must be fetched
     State = fetch_block_with_state(OldState),
     % Extract state variables
-    #state{block_num=BlockNum, auxblock_data=AuxblockData} = State,
+    #state{block_num=BlockNum, prev_block=PrevBlock, auxblock_data=AuxblockData} = State,
     % Send reply
     case AuxblockData of
         {AuxHash, Target, ChainId} ->
-            {reply, #auxwork{aux_hash=AuxHash, target=Target, chain_id=ChainId, block_num=BlockNum}, State};
+            {reply, #auxwork{aux_hash=AuxHash, target=Target, chain_id=ChainId, block_num=BlockNum, prev_block=PrevBlock}, State};
         undefined ->
             {reply, {error, <<"aux block could not be created">>}, State}
     end;
@@ -106,8 +107,8 @@ handle_call({send_aux_pow, AuxHash, AuxPOW}, _From, State=#state{url=URL, auth=A
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
-handle_cast({ebitcoin_blockchange, _, BlockNum}, State) ->
-    {noreply, fetch_block_with_state(State#state{block_num={pushed, BlockNum}})};
+handle_cast({ebitcoin_blockchange, _, PrevBlock, BlockNum}, State) ->
+    {noreply, fetch_block_with_state(State#state{block_num={pushed, BlockNum + 1}, prev_block=PrevBlock})};
 
 handle_cast(_Message, State) ->
     {noreply, State}.

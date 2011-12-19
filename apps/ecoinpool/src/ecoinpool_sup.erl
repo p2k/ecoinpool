@@ -22,6 +22,7 @@
 
 -behaviour(supervisor).
 
+-include("ecoinpool_misc_types.hrl").
 -include("ecoinpool_db_records.hrl").
 
 %% API

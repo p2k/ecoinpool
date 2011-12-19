@@ -65,7 +65,7 @@ reload_config(Client=#client{id=ClientId}) ->
 last_block_num(ClientId) ->
     gen_server:call({global, {?MODULE, ClientId}}, last_block_num).
 
-% Note: This will call gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockNum}) on a blockchange
+% Note: This will call gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockHash, BlockNum}) on a blockchange
 add_blockchange_listener(ClientId, ListenerRef) ->
     gen_server:cast({global, {?MODULE, ClientId}}, {add_blockchange_listener, ListenerRef}).
 
@@ -121,7 +121,7 @@ handle_cast({reload_config, Client}, State=#state{client=OldClient, socket=OldSo
     % Blockchange through database?
     if
         OldBlockNum =/= BlockNum, OldBlockHash =/= BlockHash ->
-            broadcast_blockchange(BCListeners, ClientId, BlockNum);
+            broadcast_blockchange(BCListeners, ClientId, BlockHash, BlockNum);
         true ->
             ok
     end,
@@ -295,7 +295,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{client=Clien
             case FinalBlock of
                 LastBlockHash ->
                     log4erl:info(ebitcoin, "~s: Resync: Received final block header #~b", [Name, LastBlockNum]),
-                    broadcast_blockchange(BCListeners, ClientId, LastBlockNum),
+                    broadcast_blockchange(BCListeners, ClientId, LastBlockHash, LastBlockNum),
                     ebitcoin_db:force_view_updates(Client),
                     false;
                 _ ->
@@ -305,7 +305,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{client=Clien
             end;
         {Got, ToGo, _} when Got+StoredNow >= ToGo ->
             log4erl:info(ebitcoin, "~s: Resync: Received final block header #~b", [Name, LastBlockNum]),
-            broadcast_blockchange(BCListeners, ClientId, LastBlockNum),
+            broadcast_blockchange(BCListeners, ClientId, LastBlockHash, LastBlockNum),
             ebitcoin_db:force_view_updates(Client),
             false;
         {Got, ToGo, FinalBlock} ->
@@ -313,7 +313,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{client=Clien
             gen_server:cast(self(), {resync, FinalBlock}),
             {Got+StoredNow, ToGo, FinalBlock};
         false ->
-            broadcast_blockchange(BCListeners, ClientId, LastBlockNum),
+            broadcast_blockchange(BCListeners, ClientId, LastBlockHash, LastBlockNum),
             log4erl:info(ebitcoin, "~s: Now at block header #~b", [Name, LastBlockNum]),
             false
     end,
@@ -536,7 +536,7 @@ make_getheaders(Client, BlockNum) ->
         hash_stop = binary:list_to_bin(lists:duplicate(32,0))
     }.
 
-broadcast_blockchange([], _, _) ->
+broadcast_blockchange([], _, _, _) ->
     ok;
-broadcast_blockchange(BCListeners, ClientId, BlockNum) ->
-    lists:foreach(fun (ListenerRef) -> gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockNum}) end, BCListeners).
+broadcast_blockchange(BCListeners, ClientId, BlockHash, BlockNum) ->
+    lists:foreach(fun (ListenerRef) -> gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockHash, BlockNum}) end, BCListeners).
