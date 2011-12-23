@@ -166,6 +166,7 @@ compose_error(ReqId, Type) ->
 parse_method(<<"getwork">>) -> getwork;
 parse_method(<<"sc_getwork">>) -> sc_getwork;
 parse_method(<<"sc_testwork">>) -> sc_testwork;
+parse_method(<<"setup_user">>) -> setup_user;
 
 parse_method(Other) when is_binary(Other) -> unknown;
 parse_method(_) -> invalid.

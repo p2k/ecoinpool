@@ -463,10 +463,10 @@ parse_client_document(ClientId, {DocProps}) ->
     DocType = proplists:get_value(<<"type">>, DocProps),
     Name = proplists:get_value(<<"name">>, DocProps),
     {Chain, DefaultPort} = case proplists:get_value(<<"chain">>, DocProps) of
-        <<"bitcoin">> -> {bitcoin, 8333};
-        <<"bitcoin_testnet">> -> {bitcoin_testnet, 18333};
-        <<"namecoin">> -> {namecoin, 8334};
-        <<"namecoin_testnet">> -> {namecoin_testnet, 18334};
+        <<"btc">> -> {bitcoin, 8333};
+        <<"btc_testnet">> -> {bitcoin_testnet, 18333};
+        <<"nmc">> -> {namecoin, 8334};
+        <<"nmc_testnet">> -> {namecoin_testnet, 18334};
         _ -> undefined
     end,
     Host = proplists:get_value(<<"host">>, DocProps, <<"localhost">>),

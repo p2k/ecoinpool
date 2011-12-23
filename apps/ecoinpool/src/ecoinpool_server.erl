@@ -268,7 +268,7 @@ handle_cast({rpc_request, Req}, State) ->
         workertbl=WorkerTbl,
         lp_queue=LPQueue
     } = State,
-    #subpool{name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
+    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
     % Check the method and authentication
     case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod) of
         {ok, Worker=#worker{name=WorkerName, lp_heartbeat=WithHeartbeat}, Action} ->
@@ -297,6 +297,9 @@ handle_cast({rpc_request, Req}, State) ->
             end;
         {error, Type} ->
             Req:error(Type),
+            {noreply, State};
+        {setup_user, UserName} ->
+            ecoinpool_db:setup_sub_pool_user_id(SubpoolId, UserName, fun ({ok, UserId}) -> Req:ok(UserId, []); ({error, Reason}) -> Req:error({-1, Reason}) end),
             {noreply, State}
     end;
 
@@ -496,12 +499,21 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
             sendwork;
         default -> % Getwork is default
             getwork;
+        setup_user ->
+            setup_user;
         _ ->
             unknown
     end,
     case Action of % First, match for validity
         unknown -> % Bail out
             {error, method_not_found};
+        setup_user ->
+            case Req:get(params) of
+                [UserName] when is_binary(UserName) ->
+                    {setup_user, UserName};
+                _ ->
+                    {error, invalid_method_params}
+            end;
         _ ->
             % Check authentication
             case Req:get(auth) of

@@ -38,6 +38,7 @@
     store_invalid_share/4,
     store_invalid_share/5,
     store_invalid_share/6,
+    setup_sub_pool_user_id/3,
     set_view_update_interval/1
 ]).
 
@@ -106,6 +107,10 @@ store_invalid_share(Subpool, Peer, Worker, Hash, Reason) ->
 -spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Workunit :: workunit() | undefined, Hash :: binary() | undefined, Reason :: reject_reason()) -> ok.
 store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, Reason) ->
     gen_server:cast(?MODULE, {store_invalid_share, Subpool, Peer, Worker, Workunit, Hash, Reason}).
+
+-spec setup_sub_pool_user_id(SubpoolId :: binary(), UserName :: binary(), Callback :: fun(({ok, UserId :: integer()} | {error, Reason :: binary()}) -> any())) -> ok.
+setup_sub_pool_user_id(SubpoolId, UserName, Callback) ->
+    gen_server:cast(?MODULE, {setup_sub_pool_user_id, SubpoolId, UserName, Callback}).
 
 -spec set_view_update_interval(Seconds :: integer()) -> ok.
 set_view_update_interval(Seconds) ->
@@ -397,6 +402,33 @@ handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round, aux_po
             store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, undefined, undefined, undefined, Round, DB)
     end,
     
+    {noreply, State};
+
+handle_cast({setup_sub_pool_user_id, SubpoolId, UserName, Callback}, State=#state{srv_conn=S}) ->
+    {ok, UsersDB} = couchbeam:open_db(S, "_users"),
+    case couchbeam:open_doc(UsersDB, <<"org.couchdb.user:", UserName/binary>>) of
+        {ok, Doc} ->
+            case couchbeam_view:fetch(UsersDB, {"ecoinpool", "user_ids"}, [{key, [SubpoolId, UserName]}]) of
+                {ok, []} ->
+                    NewUserId = case couchbeam_view:fetch(UsersDB, {"ecoinpool", "user_ids"}, [{start_key, ejson:encode([SubpoolId])}, {end_key, ejson:encode([SubpoolId, {[]}])}]) of
+                        {ok, []} -> 1;
+                        {ok, [{RowProps}]} -> proplists:get_value(<<"value">>, RowProps, 0) + 1
+                    end,
+                    NewUserIdBin = list_to_binary(integer_to_list(NewUserId)),
+                    NewRoles = [<<"user_id:", SubpoolId/binary, $:, NewUserIdBin/binary>> | couchbeam_doc:get_value(<<"roles">>, Doc, [])],
+                    catch couchbeam:save_doc(UsersDB, couchbeam_doc:set_value(<<"roles">>, NewRoles, Doc)),
+                    log4erl:info(db, "setup_sub_pool_user_id: Setup new user ID ~b for username \"~s\" in subpool \"~s\"", [NewUserId, UserName, SubpoolId]),
+                    Callback({ok, NewUserId});
+                {ok, [{RowProps}]} ->
+                    Callback({ok, proplists:get_value(<<"value">>, RowProps)});
+                _ ->
+                    log4erl:warn(db, "setup_sub_pool_user_id: Not supported by this pool"),
+                    Callback({error, <<"not supported by this pool">>})
+            end;
+        _ ->
+            log4erl:warn(db, "setup_sub_pool_user_id: Username \"~s\" does not exist", [UserName]),
+            Callback({error, <<"username does not exist">>})
+    end,
     {noreply, State};
 
 handle_cast({set_view_update_interval, Seconds}, State=#state{view_update_interval=OldViewUpdateInterval, view_update_timer=OldViewUpdateTimer, view_update_dbs=OldViewUpdateDBS}) ->

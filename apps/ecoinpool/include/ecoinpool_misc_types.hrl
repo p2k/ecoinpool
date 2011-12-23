@@ -24,6 +24,8 @@
 
 -type mmm() :: {ecoinpool_mmm, any()}.
 
+-type ecoinpool_rpc_request() :: {ecoinpool_rpc_request, any(), any(), any(), any(), any(), any()}.
+
 -type peer() :: {IP :: string(), UserAgent :: string() | undefined}.
 
 -type candidate() :: main | aux.
