@@ -20,7 +20,7 @@ ecoinpool is written and maintained by Patrick "p2k" Schneider.
 
 * Jabber/XMPP: p2k@jabber.p2k-network.org
 * IRC: #ecoinpool on Freenode - my nick is `mega_p2k` there
-* (Message via GitHub)[https://github.com/inbox/new/p2k]
+* [Message via GitHub](https://github.com/inbox/new/p2k)
 
 Installing
 ----------
@@ -34,17 +34,17 @@ are on your own there.
 
 ecoinpool only has a few dependencies you have to install yourself. The required
 Erlang applications are downloaded and compiled later with the help of
-(rebar)[https://github.com/basho/rebar], the build-tool of my choice, which
+[rebar](https://github.com/basho/rebar), the build-tool of my choice, which
 comes bundled with ecoinpool.
 
 For the following software, you have to consult your operating system's package
 manager or get a binary release or compile from source.
 
-* (GIT)[http://git-scm.com/download] - not only to download this project, but
+* [GIT](http://git-scm.com/download) - not only to download this project, but
   also for getting the Erlang dependencies
-* (Erlang/OTP)[http://www.erlang.org/download.html] - at least R14B is required;
+* [Erlang/OTP](http://www.erlang.org/download.html) - at least R14B is required;
   ecoinpool is so far untested on the newly released R15B
-* (CouchDB)[http://couchdb.apache.org/downloads.html] - minimum is 1.1.1; tests
+* [CouchDB](http://couchdb.apache.org/downloads.html) - minimum is 1.1.1; tests
   on newer releases like 1.2.0 and 1.3.0 have been successful too
 * C compiler - preferably GCC; required to build external modules for the hash
   algorithms and for some speedup
@@ -88,7 +88,7 @@ this right now.
 Start up ecoinpool with `./test_launch.sh` - if everything's alright you should
 see a welcome banner. The software does not daemonize in this beta version. If
 you want to be able to close your console and keep the server running, you might
-want to try (GNU Screen)[http://www.gnu.org/software/screen/] like this:
+want to try [GNU Screen](http://www.gnu.org/software/screen/) like this:
 `screen -D -R -S ecoinpool_test ./test_launch.sh`
 
 It might be worth knowing that you are on an Erlang console now. You can enter
