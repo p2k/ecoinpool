@@ -192,6 +192,26 @@ To use a client with ecoinpool, open the Subpool via the ecoinpool web interface
 On the configuration tab you can select an ebitcoin client from within the
 CoinDaemon and the AuxDaemon configuration panel.
 
+Compaction
+----------
+
+ebitcoin's block header databases and ecoinpool's share databases can become
+quite large over time. To leverage the problem of running out of disk space,
+CouchDB offers a compaction feature which can greatly reduce the needed disk
+space per database. You can manually trigger the compaction through CouchDB's
+web frontend by opening the database as admin, clicking "Compact & Cleanup..."
+on the toolbar, choosing "Compact Database" and clicking "Run". You can watch
+the compaction process on the status page (within the sidebar menu).
+
+To trigger compaction via a cronjob during off-peak hours, you can use curl
+like this:
+
+    curl -H "Content-Type: application/json" -X POST http://<username>:<password>@localhost:5984/<database name>/_compact
+
+Do this for each block chain or pool database. It is also recommended to run a
+compaction once ebitcoin has downloaded all block headers of a block chain for
+the first time.
+
 Logfiles
 --------
 
