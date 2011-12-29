@@ -1,0 +1,11 @@
+{
+   "_id": "_design/ecoinpool",
+   "language": "javascript",
+   "validate_doc_update": "function(newDoc, oldDoc, userCtx) {\n  if (newDoc.name && newDoc.name.indexOf(\"_\") != -1)\n    throw({forbidden: 'The username must not contain an underscore'});\n}",
+   "views": {
+       "user_ids": {
+           "map": "function(doc) {\n  for (var i in doc.roles) {\n    var spl = doc.roles[i].split(\":\");\n    if (spl.length == 3 && spl[0] == \"user_id\")\n      emit([spl[1], doc.name], parseInt(spl[2]));\n  }\n}",
+           "reduce": "function(keys, values, rereduce) {\n  var best = null;\n  for (var i in values) {\n    if (best === null || best < values[i])\n      best = values[i];\n  }\n  return best;\n}"
+       }
+   }
+}

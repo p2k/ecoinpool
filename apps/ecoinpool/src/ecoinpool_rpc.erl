@@ -104,18 +104,26 @@ code_change(_OldVersion, Servers, _Extra) ->
 %% Internal functions
 %% ===================================================================
 
-server_header() ->
+default_headers() ->
     {ok, VSN} = application:get_key(ecoinpool, vsn),
-    {"Server", "ecoinpool/" ++ VSN}.
+    S = {"Server", "ecoinpool/" ++ VSN},
+    case get(jsonp) of
+        undefined -> [S, {"Content-Type", "application/json"}];
+        _ -> [S, {"Content-Type", "text/javascript"}, {"Access-Control-Allow-Origin", "*"}]
+    end.
 
 compose_success(ReqId, Result) ->
-    ejson:encode(
+    Body = ejson:encode(
         {[
             {<<"result">>, Result},
             {<<"error">>, null},
             {<<"id">>, ReqId}
         ]}
-    ).
+    ),
+    case get(jsonp) of
+        undefined -> Body;
+        Callback -> <<Callback/binary, $(, Body/binary, $), $;>>
+    end.
 
 headers_from_options(Options) ->
     lists:foldl(
@@ -160,7 +168,10 @@ compose_error(ReqId, Type) ->
             {<<"id">>, ReqId}
         ]}
     ),
-    {HTTPCode, Body}.
+    case get(jsonp) of
+        undefined -> {HTTPCode, Body};
+        Callback -> {HTTPCode, <<Callback/binary, $(, Body/binary, $), $;>>}
+    end.
 
 % Valid methods are defined here
 parse_method(<<"getwork">>) -> getwork;
@@ -182,6 +193,7 @@ parse_path(_) ->
 handle_post(SubpoolPID, Req, Auth, LP) ->
     case Req:get_header_value("Content-Type") of
         Type when Type =:= "application/json"; Type =:= undefined ->
+            put(jsonp, undefined),
             try
                 case ejson:decode(Req:recv_body()) of % Decode JSON
                     {Properties} ->
@@ -205,9 +217,34 @@ handle_post(SubpoolPID, Req, Auth, LP) ->
             catch _ ->
                 self() ! {error, parse_error}, 1
             end;
+        "application/x-www-form-urlencoded" ->
+            try
+                Properties = Req:parse_post(),
+                case proplists:get_value("callback", Properties) of
+                    undefined -> put(jsonp, undefined);
+                    Callback -> put(jsonp, list_to_binary(Callback))
+                end,
+                case parse_method(list_to_binary(proplists:get_value("method", Properties, ""))) of
+                    unknown ->
+                        self() ! {error, method_not_found};
+                    invalid ->
+                        self() ! {error, invalid_request};
+                    Method ->
+                        case proplists:get_all_values("params[]", Properties) of
+                            Params when is_list(Params) ->
+                                BinParams = lists:map(fun list_to_binary/1, Params),
+                                ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, BinParams, Auth, LP));
+                            _ ->
+                                self() ! {error, invalid_request}
+                        end
+                end,
+                list_to_binary(proplists:get_value("id", Properties, "1"))
+            catch _ ->
+                self() ! {error, parse_error}, 1
+            end;
         _ ->
-            Req:respond({415, [{"Content-Type", "text/plain"}], "Unsupported Content-Type. We only accept application/json."}),
-            self() ! cancel
+            Req:respond({415, [{"Content-Type", "text/plain"}], "Unsupported Content-Type. We only accept application/json and application/x-www-form-urlencoded."}),
+            self() ! cancel, 1
     end.
 
 handle_request(SubpoolPID, Req) ->
@@ -257,13 +294,13 @@ handle_request(SubpoolPID, Req) ->
             ok;
         {error, Type} ->
             {HTTPCode, Body} = compose_error(ReqId, Type),
-            Req:respond({HTTPCode, [server_header(), {"Content-Type", "application/json"}], Body});
+            Req:respond({HTTPCode, default_headers(), Body});
         {ok, Result, Options} ->
             Body = compose_success(ReqId, Result),
             Headers = headers_from_options(Options),
-            Req:respond({200, [server_header(), {"Content-Type", "application/json"} | Headers], Body});
+            Req:respond({200, default_headers() ++ Headers, Body});
         {start, WithHeartbeat} ->
-            Resp = Req:respond({200, [server_header(), {"Content-Type", "application/json"}], chunked}),
+            Resp = Req:respond({200, default_headers(), chunked}),
             longpolling_loop(ReqId, Resp, WithHeartbeat)
     after
         300000 ->

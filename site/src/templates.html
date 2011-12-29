@@ -1,0 +1,341 @@
+<!--
+
+Copyright (C) 2011  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
+
+This file is part of ecoinpool.
+
+ecoinpool is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+ecoinpool is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
+
+-->
+
+<script id="sidebar-template" type="text/x-handlebars-template">
+  <div id="sidebar">
+    <div id="logo">
+      <p><strong>ecoinpool</strong> v0.3.5</p>
+      <p>Next Generation Pool Mining Software<br/>by <a href="https://github.com/p2k">p2k</a></p>
+    </div>
+    <ul id="nav">
+      <li>
+        <span>Main Navigation</span>
+        <ul>
+          <li><a href="/ecoinpool/_design/site/_show/home">Home</a></li>
+        </ul>
+      </li>
+      <li>
+        <span>Other</span>
+        <ul>
+          <li><a href="/_utils/index.html">Explore CouchDB</a></li>
+        </ul>
+      </li>
+    </ul>
+    <div id="footer">
+      <span id="userCtx">
+        <span class="loggedout">
+          <a href="#" class="signup">Signup</a> or <a href="#" class="login">Login</a>
+        </span>
+        <span class="loggedin">
+          Logged in as: <span class="name">?</span>
+          <br/>
+          <a href="#" class="changepass">Change password</a> or
+          <a href="#" class="logout">Logout</a>
+        </span>
+      </span>
+      <hr/>
+      <span class="couch">
+        <a href="http://ecoinpool.p2k-network.org/">ecoinpool</a> on <a id="product_link" href="http://couchdb.apache.org/">Apache CouchDB</a>
+        <span id="version">?</span>
+      </span>
+    </div>
+  </div>
+</script>
+
+<script id="commonDialog-template" type="text/x-handlebars-template">
+  <form action="" method="post">
+    <h2>{{title}}</h2>
+    <fieldset>
+      {{#if help}}<p class="help">{{{help}}}</p>{{/if}}
+      <table summary="">
+        <tbody>
+          {{#each fields}}
+          <tr>
+            <th><label{{#if title}} title="{{title}}"{{/if}}>{{label}}</label></th>
+            <td>{{{form_field .}}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </fieldset>
+    <div class="buttons">
+      <button type="submit">{{#if submit}}{{submit}}{{else}}OK{{/if}}</button>
+      <button type="button" class="cancel">{{#if cancel}}{{cancel}}{{else}}Cancel{{/if}}</button>
+    </div>
+  </form>
+</script>
+
+<script id="subpoolsTable-template" type="text/x-handlebars-template">
+  <table id="subpools" class="listing" cellpadding="0">
+    <caption>Sub-Pools</caption>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Port</th>
+        <th>Round</th>
+      </tr>
+    </thead>
+    <tbody class="content">
+    {{#each_striped subpools}}
+      <tr{{#if odd}} class="odd"{{/if}}>
+        <th><a href="subpool/{{id}}">{{name}}</a></th>
+        <td>{{type}}</td>
+        <td>{{port}}</td>
+        <td>{{round}}</td>
+      </tr>
+    {{/each_striped}}
+    </tbody>
+    <tbody class="footer">
+      <tr><td colspan="4">Showing {{subpools.length}} Sub-Pool{{plural_s subpools.length}}</td></tr>
+    </tbody>
+  </table>
+</script>
+
+<script id="configTable-template" type="text/x-handlebars-template">
+  <table id="pool_config" class="listing" cellpadding="0">
+    <caption>Pool Configuration</caption>
+    <thead>
+      <tr>
+        <th width="200" class="key">Field</th>
+        <th class="value">Value</th>
+      </tr>
+    </thead>
+    <tbody class="content">
+    {{#each_striped config}}
+      <tr{{#if odd}} class="odd"{{/if}}>
+        <th><b>{{name}}</b></th>
+        <td id="{{id}}">{{{form_field field}}}</td>
+      </tr>
+    {{/each_striped}}
+    </tbody>
+    <tbody class="footer">
+      <tr><td colspan="2">ID: {{id}} - Revision: {{rev}}</td></tr>
+    </tbody>
+  </table>
+</script>
+
+<script id="worker-partial" type="text/x-handlebars-template">
+      <tr id="{{id}}"{{#if odd}} class="odd"{{/if}}>
+        <th><a href="#{{id}}">{{name}}</a></th>
+        <td class="invalid">{{#if is_new}}0{{else}}...{{/if}}</td>
+        <td class="valid">{{#if is_new}}0{{else}}...{{/if}}</td>
+        <td class="candidate">{{#if is_new}}0{{else}}...{{/if}}</td>
+{{#if aux}}
+        <td class="aux_invalid">{{#if is_new}}0{{else}}...{{/if}}</td>
+        <td class="aux_valid">{{#if is_new}}0{{else}}...{{/if}}</td>
+        <td class="aux_candidate">{{#if is_new}}0{{else}}...{{/if}}</td>
+{{/if}}
+        <td class="speed">{{#if is_new}}0.00 H/s{{else}}...{{/if}}</td>
+        <td class="active">{{#if is_new}}No{{else}}...{{/if}}</td>
+      </tr>
+</script>
+
+<script id="workersTable-template" type="text/x-handlebars-template">
+  <table id="workers" class="listing" cellpadding="0">
+    <caption>My Workers</caption>
+    <thead>
+      <tr>
+        <th class="key">Name</th>
+  {{#if aux}}
+        <th width="125">Main Invalids</th>
+        <th width="75">Main Valids</th>
+        <th width="95">Main Candidates</th>
+        <th width="125">Aux Invalids</th>
+        <th width="75">Aux Valids</th>
+        <th width="95">Aux Candidates</th>
+  {{else}}
+        <th width="125">Invalids</th>
+        <th width="75">Valids</th>
+        <th width="95">Candidates</th>
+  {{/if}}
+        <th>Current Speed</th>
+        <th width="200">Active</th>
+      </tr>
+    </thead>
+    <tbody class="content">
+    {{#each_striped workers}}
+  {{> worker}}
+    {{/each_striped}}
+    </tbody>
+    <tbody class="footer">
+      <tr><td colspan="{{#if aux}}9{{else}}6{{/if}}">Showing {{workers.length}} worker{{plural_s workers.length}}</td></tr>
+    </tbody>
+  </table>
+</script>
+
+<script id="workerSingleRow-template" type="text/x-handlebars-template">
+{{#with worker}}
+{{> worker}}
+{{/with}}
+</script>
+
+<script id="editWorkerDialog-template" type="text/x-handlebars-template">
+<form action="" method="post">
+  <h2>{{#if edit}}Edit{{else}}Add{{/if}} Worker</h2>
+  <fieldset>
+    <p class="help">Configure your worker here.<br/>
+    Mouse over a label for a description.</p>
+    <table summary="">
+      <tbody>
+        <tr>
+          <th><label title="This is the login name for your worker which you need to set in your miner software.">Name:</label></th>
+          <td>{{prefix}}<input type="hidden" name="prefix" value="{{prefix}}" /><input type="text" name="name" size="20" placeholder="(required)" value="{{name}}"{{#if disable_name}} disabled="disabled" title="You cannot rename your default worker."{{/if}} /></td>
+        </tr>
+        <tr>
+          <th><label title="Currently, passwords are disabled. You can set any passwort in your miner software.">Password:</label></th>
+          <td><input type="text" name="pass" size="20" value="pass" disabled="disabled" title="Currently, passwords are disabled. You can set any passwort in your miner software." /></td>
+        </tr>
+        <tr>
+          <th><label title="Offers the Longpolling feature to the miner software. Disable only if you experience problems.">Longpolling:</label></th>
+          <td><input type="checkbox" name="lp"{{#if lp}} checked="checked"{{/if}} /></td>
+        </tr>
+        <tr>
+          <th><label title="Sends a heartbeat to your miner software in regular intervals to keep the connection alive. Disable only if you experience problems.">LP Heartbeat:</label></th>
+          <td><input type="checkbox" name="lp_heartbeat"{{#if lp_heartbeat}} checked="checked"{{/if}} /></td>
+        </tr>
+      </tbody>
+    </table>
+  </fieldset>
+  <div class="buttons">
+    <button type="submit">Save</button>
+    <button type="button" class="cancel">Cancel</button>
+  </div>
+</form>
+</script>
+
+<script id="btcCoinDaemonConfigDialog-template" type="text/x-handlebars-template">
+  <form action="" method="post">
+    <h2>BitCoin Daemon Configuration</h2>
+    <fieldset>
+      <p class="help">Configure the BitCoin Daemon for this Sub-Pool here.<br/>
+      An empty field will use a default setting.</p>
+      <table summary="">
+        <tbody>
+          <tr>
+            <th><label>Host:</label></th>
+            <td><input type="text" name="host" size="20" placeholder="localhost" value="{{host}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Port:</label></th>
+            <td><input type="text" name="port" size="20" placeholder="8332" value="{{port}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Username:</label></th>
+            <td><input type="text" name="user" size="20" placeholder="user" value="{{user}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Password:</label></th>
+            <td><input type="text" name="pass" size="20" placeholder="pass" value="{{pass}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Pay To:</label></th>
+            <td><input type="text" name="pay_to" size="35" placeholder="(auto)" value="{{pay_to}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Tag:</label></th>
+            <td><input type="text" name="tag" size="20" maxlength="20" placeholder="(none)" value="{{tag}}" /></td>
+          </tr>
+          <tr>
+            <th><label>ebitcoin Client:</label></th>
+            <td><select name="ebitcoin_client_id"><option value="">(none)</option>{{#each ebitcoin_clients}}<option value="{{value}}"{{#ifequal value ../ebitcoin_client_id}} selected="selected"{{/ifequal}}>{{title}}</option>{{/each}}</select></td>
+          </tr>
+        </tbody>
+      </table>
+    </fieldset>
+    <div class="buttons">
+      <button type="submit">OK</button>
+      <button type="button" class="cancel">Cancel</button>
+    </div>
+  </form>
+</script>
+
+<script id="scCoinDaemonConfigDialog-template" type="text/x-handlebars-template">
+  <form action="" method="post">
+    <h2>SolidCoin Daemon Configuration</h2>
+    <fieldset>
+      <p class="help">Configure the SolidCoin Daemon for this Sub-Pool here.<br/>
+      An empty field will use a default setting.</p>
+      <table summary="">
+        <tbody>
+          <tr>
+            <th><label>Host:</label></th>
+            <td><input type="text" name="host" size="20" placeholder="localhost" value="{{host}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Port:</label></th>
+            <td><input type="text" name="port" size="20" placeholder="8555" value="{{port}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Username:</label></th>
+            <td><input type="text" name="user" size="20" placeholder="user" value="{{user}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Password:</label></th>
+            <td><input type="text" name="pass" size="20" placeholder="pass" value="{{pass}}" /></td>
+          </tr>
+        </tbody>
+      </table>
+    </fieldset>
+    <div class="buttons">
+      <button type="submit">OK</button>
+      <button type="button" class="cancel">Cancel</button>
+    </div>
+  </form>
+</script>
+
+<script id="nmcAuxDaemonConfigDialog-template" type="text/x-handlebars-template">
+  <form action="" method="post">
+    <h2>NameCoin Aux Daemon Configuration</h2>
+    <fieldset>
+      <p class="help">Configure the NameCoin Aux Daemon for this Sub-Pool here.<br/>
+      An empty field will use a default setting.</p>
+      <table summary="">
+        <tbody>
+          <tr>
+            <th><label>Host:</label></th>
+            <td><input type="text" name="host" size="20" placeholder="localhost" value="{{host}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Port:</label></th>
+            <td><input type="text" name="port" size="20" placeholder="8335" value="{{port}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Username:</label></th>
+            <td><input type="text" name="user" size="20" placeholder="user" value="{{user}}" /></td>
+          </tr>
+          <tr>
+            <th><label>Password:</label></th>
+            <td><input type="text" name="pass" size="20" placeholder="pass" value="{{pass}}" /></td>
+          </tr>
+          <tr>
+            <th><label>ebitcoin Client:</label></th>
+            <td><select name="ebitcoin_client_id"><option value="">(none)</option>{{#each ebitcoin_clients}}<option value="{{value}}"{{#ifequal value ../ebitcoin_client_id}} selected="selected"{{/ifequal}}>{{title}}</option>{{/each}}</select></td>
+          </tr>
+        </tbody>
+      </table>
+    </fieldset>
+    <div class="buttons">
+      <button type="submit">OK</button>
+      <button type="button" class="cancel">Cancel</button>
+    </div>
+  </form>
+</script>

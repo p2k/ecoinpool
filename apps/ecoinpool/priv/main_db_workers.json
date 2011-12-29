@@ -1,0 +1,18 @@
+{
+   "_id": "_design/workers",
+   "language": "javascript",
+   "views": {
+       "by_sub_pool": {
+           "map": "function(doc) {if (doc.type === 'worker') emit(doc.sub_pool_id, doc.name);}"
+       },
+       "by_name": {
+           "map": "function(doc) {if (doc.type === 'worker') emit(doc.name, doc.sub_pool_id);}"
+       },
+       "by_sub_pool_and_name": {
+           "map": "function(doc) {if (doc.type === 'worker') emit([doc.sub_pool_id, doc.name], doc.user_id);}"
+       },
+       "by_sub_pool_and_user_id": {
+           "map": "function(doc) {if (doc.type === 'worker') emit([doc.sub_pool_id, doc.user_id], doc.name);}"
+       }
+   }
+}

@@ -123,47 +123,23 @@ set_view_update_interval(Seconds) ->
 init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
     % Trap exit
     process_flag(trap_exit, true),
-    % Connect to server
+    % Create server connection
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
-    % Open config database
-    ConfDb = case couchbeam:db_exists(S, "ecoinpool") of
-        true ->
-            {ok, TheConfDb} = couchbeam:open_db(S, "ecoinpool"),
-            TheConfDb;
-        _ ->
-            case couchbeam:create_db(S, "ecoinpool") of
-                {ok, NewConfDb} -> % Create basic views and auth lock-out
-                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
-                        {<<"_id">>, <<"_design/doctypes">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"doctypes">>, {[{<<"map">>, <<"function (doc) {if (doc.type !== undefined) emit(doc.type, doc._id);}">>}]}}
-                        ]}},
-                        {<<"filters">>, {[
-                            {<<"pool_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \"configuration\" || doc.type == \"sub-pool\";}">>},
-                            {<<"workers_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \"worker\";}">>}
-                        ]}}
-                    ]}),
-                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
-                        {<<"_id">>, <<"_design/workers">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"by_sub_pool">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit(doc.sub_pool_id, doc.name);}">>}]}},
-                            {<<"by_name">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit(doc.name, doc.sub_pool_id);}">>}]}},
-                            {<<"by_sub_pool_and_name">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit([doc.sub_pool_id, doc.name], doc.user_id);}">>}]}},
-                            {<<"by_sub_pool_and_user_id">>, {[{<<"map">>, <<"function(doc) {if (doc.type === \"worker\") emit([doc.sub_pool_id, doc.user_id], doc.name);}">>}]}}
-                        ]}}
-                    ]}),
-                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
-                        {<<"_id">>, <<"_design/auth">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
-                    ]}),
-                    log4erl:info(db, "Config database created!"),
-                    NewConfDb;
-                {error, Error} ->
-                    log4erl:fatal(db, "config_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]), throw({error, Error})
-            end
+    % Setup users database
+    {ok, UsersDb} = couchbeam:open_db(S, "_users"),
+    check_design_doc({UsersDb, "ecoinpool", "users_db_ecoinpool.json"}),
+    % Open and setup config database
+    ConfDb = case couchbeam:open_or_create_db(S, "ecoinpool") of
+        {ok, DB} ->
+            lists:foreach(fun check_design_doc/1, [
+                {DB, "doctypes", "main_db_doctypes.json"},
+                {DB, "workers", "main_db_workers.json"},
+                {DB, "auth", "main_db_auth.json"},
+                {DB, "site", "main_db_site.json"}
+            ]),
+            DB;
+        {error, Error} ->
+            log4erl:fatal(db, "config_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]), throw({error, Error})
     end,
     % Start config & worker monitor (asynchronously)
     gen_server:cast(?MODULE, start_monitors),
@@ -232,63 +208,17 @@ handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=
     {reply, Workers, State};
 
 handle_call({setup_shares_db, SubpoolName}, _From, State=#state{srv_conn=S}) ->
-    case couchbeam:db_exists(S, SubpoolName) of
-        true ->
+    case couchbeam:open_or_create_db(S, SubpoolName) of
+        {ok, DB} ->
+            lists:foreach(fun check_design_doc/1, [
+                {DB, "stats", "shares_db_stats.json"},
+                {DB, "timed_stats", "shares_db_timed_stats.json"},
+                {DB, "auth", "shares_db_auth.json"}
+            ]),
             {reply, ok, State};
-        _ ->
-            case couchbeam:create_db(S, SubpoolName) of
-                {ok, DB} ->
-                    {ok, _} = couchbeam:save_doc(DB, {[
-                        {<<"_id">>, <<"_design/stats">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"state">>, {[
-                                {<<"map">>, <<"function(doc) {emit([doc.state, doc.user_id, doc.worker_id], 1);}">>},
-                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
-                            ]}},
-                            {<<"rejected">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.state == \"invalid\") emit([doc.reject_reason, doc.user_id, doc.worker_id], 1);}">>},
-                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
-                            ]}},
-                            {<<"workers">>, {[
-                                {<<"map">>, <<"function(doc) {var d = [0,0,0]; switch(doc.state) {case \"invalid\": d[0] = 1; break; case \"valid\": d[1] = 1; break; case \"candidate\": d[2] = 1; break;} emit(doc.worker_id, d);}">>},
-                                {<<"reduce">>, <<"function(keys, values, rereduce) {var s = [0,0,0]; for (var i in values) {var value = values[i]; s[0] += value[0]; s[1] += value[1]; s[2] += value[2];} return s;}">>}
-                            ]}}
-                        ]}}
-                    ]}),
-                    {ok, _} = couchbeam:save_doc(DB, {[
-                        {<<"_id">>, <<"_design/timed_stats">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"all_valids">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.state == \"valid\" || doc.state == \"candidate\") emit(doc.timestamp, 1);}">>},
-                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
-                            ]}},
-                            {<<"valids_per_user">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.state == \"valid\" || doc.state == \"candidate\") emit([doc.user_id].concat(doc.timestamp), 1);}">>},
-                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
-                            ]}},
-                            {<<"valids_per_worker">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.state == \"valid\" || doc.state == \"candidate\") emit([doc.worker_id].concat(doc.timestamp), 1);}">>},
-                                {<<"reduce">>, <<"function(keys, values, rereduce) {return sum(values);}">>}
-                            ]}},
-                            {<<"worker_last_share">>, {[
-                                {<<"map">>, <<"function(doc) {emit(doc.worker_id, [doc.timestamp, doc.state]);}">>},
-                                {<<"reduce">>, <<"function(keys, values, rereduce) {var cmp = function (a, b) {for (var i in a) {if (a[i] != b[i]) return (a[i] < b[i]);} return false;}; var best = null; for (var i in values) {if (best === null || cmp(best[0], values[i][0])) best = values[i];} return best;}">>}
-                            ]}}
-                        ]}}
-                    ]}),
-                    {ok, _} = couchbeam:save_doc(DB, {[
-                        {<<"_id">>, <<"_design/auth">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
-                    ]}),
-                    log4erl:info(db, "Shares database \"~s\" created!", [SubpoolName]),
-                    {reply, ok, State};
-                {error, Error} ->
-                    log4erl:error(db, "shares_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]),
-                    {reply, error, State}
-            end
+        {error, Error} ->
+            log4erl:error(db, "shares_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]),
+            {reply, error, State}
     end;
 
 handle_call(_Message, _From, State=#state{}) ->
@@ -501,6 +431,16 @@ code_change(_OldVersion, State=#state{}, _Extra) ->
 %% ===================================================================
 %% Other functions
 %% ===================================================================
+
+check_design_doc({DB, Name, Filename}) ->
+    case couchbeam:doc_exists(DB, "_design/" ++ Name) of
+        true ->
+            ok;
+        false ->
+            {ok, SDoc} = file:read_file(filename:join(code:priv_dir(ecoinpool), Filename)),
+            {ok, _} = couchbeam:save_doc(DB, ejson:decode(SDoc)),
+            ok
+    end.
 
 do_update_views(DBS, PID) ->
     try
