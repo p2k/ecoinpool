@@ -277,7 +277,7 @@ function UserContext (data, callbacks) {
         var url = 'http://' + location.hostname + ':' + subPoolDoc.port + '/';
         var data = {method: "setup_user", id: 1, params: [this.name]};
         $.ajax({
-            type: "POST", url: url, dataType: "jsonp", data: data,
+            type: "GET", url: url, dataType: "jsonp", data: data,
             beforeSend: function (xhr) {
                 xhr.setRequestHeader('Accept', 'application/json');
             },

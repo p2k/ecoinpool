@@ -189,6 +189,39 @@ parse_path("/LP") ->
 parse_path(_) ->
     undefined.
 
+handle_form_request(SubpoolPID, Req, Auth, Properties, LP) ->
+    % Check for JSONP
+    case proplists:get_value("callback", Properties) of
+        undefined -> put(jsonp, undefined);
+        Callback -> put(jsonp, list_to_binary(Callback))
+    end,
+    if
+        LP -> % Ignore method and params on LP
+            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, default, [], Auth, true));
+        true ->
+            case parse_method(list_to_binary(proplists:get_value("method", Properties, ""))) of
+                unknown ->
+                    self() ! {error, method_not_found};
+                invalid ->
+                    self() ! {error, invalid_request};
+                Method ->
+                    case proplists:get_all_values("params[]", Properties) of
+                        Params when is_list(Params) ->
+                            BinParams = lists:map(fun list_to_binary/1, Params),
+                            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, BinParams, Auth, false));
+                        _ ->
+                            self() ! {error, invalid_request}
+                    end
+            end,
+            % Return the request ID; if possible convert to integer else convert to binary
+            ReqId = proplists:get_value("id", Properties, "1"),
+            try
+                list_to_integer(ReqId)
+            catch
+                error:_ -> list_to_binary(ReqId)
+            end
+    end.
+
 % Note: this function returns the request ID (except if the connection is canceled)
 handle_post(SubpoolPID, Req, Auth, LP) ->
     case Req:get_header_value("Content-Type") of
@@ -220,31 +253,21 @@ handle_post(SubpoolPID, Req, Auth, LP) ->
         "application/x-www-form-urlencoded" ->
             try
                 Properties = Req:parse_post(),
-                case proplists:get_value("callback", Properties) of
-                    undefined -> put(jsonp, undefined);
-                    Callback -> put(jsonp, list_to_binary(Callback))
-                end,
-                case parse_method(list_to_binary(proplists:get_value("method", Properties, ""))) of
-                    unknown ->
-                        self() ! {error, method_not_found};
-                    invalid ->
-                        self() ! {error, invalid_request};
-                    Method ->
-                        case proplists:get_all_values("params[]", Properties) of
-                            Params when is_list(Params) ->
-                                BinParams = lists:map(fun list_to_binary/1, Params),
-                                ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, BinParams, Auth, LP));
-                            _ ->
-                                self() ! {error, invalid_request}
-                        end
-                end,
-                list_to_binary(proplists:get_value("id", Properties, "1"))
-            catch _ ->
+                handle_form_request(SubpoolPID, Req, Auth, Properties, LP)
+            catch error:_ ->
                 self() ! {error, parse_error}, 1
             end;
         _ ->
             Req:respond({415, [{"Content-Type", "text/plain"}], "Unsupported Content-Type. We only accept application/json and application/x-www-form-urlencoded."}),
             self() ! cancel, 1
+    end.
+
+handle_get(SubpoolPID, Req, Auth, LP) ->
+    try
+        Properties = Req:parse_qs(),
+        handle_form_request(SubpoolPID, Req, Auth, Properties, LP)
+    catch error:_ ->
+        self() ! {error, parse_error}, 1
     end.
 
 handle_request(SubpoolPID, Req) ->
@@ -264,25 +287,19 @@ handle_request(SubpoolPID, Req) ->
     end,
     ReqId = case Req:accepts_content_type("application/json") of
         true ->
-            case Req:get(method) of
-                'GET' ->
-                    case parse_path(Req:get(path)) of
-                        {ok, LP} ->
-                            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, default, [], Auth, LP));
-                        _ ->
-                            self() ! {error, method_not_found}
-                    end,
-                    1; % GET requests always get ID 1
-                'POST' ->
-                    case parse_path(Req:get(path)) of
-                        {ok, LP} ->
+            case parse_path(Req:get(path)) of
+                {ok, LP} ->
+                    case Req:get(method) of
+                        'GET' ->
+                            handle_get(SubpoolPID, Req, Auth, LP);
+                        'POST' ->
                             handle_post(SubpoolPID, Req, Auth, LP);
                         _ ->
-                            self() ! {error, method_not_found}, 1
+                            Req:respond({501, [{"Content-Type", "text/plain"}], "Unknown method"}),
+                            self() ! cancel
                     end;
                 _ ->
-                    Req:respond({501, [{"Content-Type", "text/plain"}], "Unknown method"}),
-                    self() ! cancel
+                    self() ! {error, method_not_found}, 1
             end;
         _ ->
             Req:respond({406, [{"Content-Type", "text/plain"}], "For this service you must accept application/json."}),
