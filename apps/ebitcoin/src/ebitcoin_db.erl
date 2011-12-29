@@ -121,6 +121,13 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
                         ]}}
                     ]}),
                     {ok, _} = couchbeam:save_doc(NewConfDb, {[
+                        {<<"_id">>, <<"_design/clients">>},
+                        {<<"language">>, <<"javascript">>},
+                        {<<"views">>, {[
+                            {<<"by_chain">>, {[{<<"map">>, <<"function(doc) {if (doc.type === 'client') emit(doc.chain, doc.name);}">>}]}}
+                        ]}}
+                    ]}),
+                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
                         {<<"_id">>, <<"_design/auth">>},
                         {<<"language">>, <<"javascript">>},
                         {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}

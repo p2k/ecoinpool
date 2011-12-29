@@ -26,7 +26,7 @@ function (doc, req) {
         '  <script type="text/javascript" src="/_utils/script/sha1.js"></script>',
         '  <script type="text/javascript">',
         '    var db_info = ' + JSON.stringify(req.info) + ';',
-        '    var doc = ' + (doc === null ? '{"_id": "' + req.uuid + '"}' : JSON.stringify(doc)) + ';',
+        '    var doc = ' + (doc === null ? '{"_id": "' + req.uuid + '", "type": "sub-pool"}' : JSON.stringify(doc)) + ';',
         '  </script>',
         '  <script type="text/javascript" src="../../ecoinpool.js"></script>',
         '  <script type="text/javascript" src="../../subpool.js"></script>',

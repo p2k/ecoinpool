@@ -66,7 +66,7 @@ init([SubpoolId, Config]) ->
     log4erl:warn(daemon, "NMC AuxDaemon starting..."),
     
     Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
-    Port = proplists:get_value(port, Config, 8332),
+    Port = proplists:get_value(port, Config, 8335),
     URL = lists:flatten(io_lib:format("http://~s:~b/", [Host, Port])),
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),

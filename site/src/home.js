@@ -83,7 +83,11 @@ userCtx.ready(function () {
             loadSubpools();
         },
         error: function () {
-            makeToolbar("This pool has been freshly installed and is not configured yet.");
+            $("#content").empty();
+            var fixthis = "";
+            if (userCtx.isAdmin())
+                fixthis = ' <a href="subpool/">Fix this</a>.';
+            makeToolbar("This pool has been freshly installed and is not configured yet." + fixthis);
         }
     });
 });
