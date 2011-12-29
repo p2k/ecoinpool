@@ -14,5 +14,8 @@
            "map": "function(doc) {var d = [0,0,0]; switch(doc.state) {case 'invalid': d[0] = 1; break; case 'valid': d[1] = 1; break; case 'candidate': d[2] = 1; break;} emit(doc.worker_id, d);}",
            "reduce": "function(keys, values, rereduce) {var s = [0,0,0]; for (var i in values) {var value = values[i]; s[0] += value[0]; s[1] += value[1]; s[2] += value[2];} return s;}"
        }
+   },
+   "filters": {
+       "shares_for_user": "function(doc, req) {return (doc._deleted === undefined && doc.state !== undefined && doc.user_id == req.query.user_id);}"
    }
 }
