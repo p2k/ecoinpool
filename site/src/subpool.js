@@ -499,7 +499,7 @@ userCtx.ready(function () {
                     var shd = getWorkerShareData(this.key);
                     shd[prefix+"invalid"] = this.value[0];
                     shd[prefix+"valid"] = this.value[1];
-                    shd[prefix+"candidate"] = this.value[0];
+                    shd[prefix+"candidate"] = this.value[2];
                     displayWorkerShares(this.key, shd, aux);
                 });
                 $.each(workerIds, function (index, workerId) {
