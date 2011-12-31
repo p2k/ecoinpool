@@ -474,6 +474,8 @@ parse_client_document(ClientId, {DocProps}) ->
         <<"btc_testnet">> -> {bitcoin_testnet, 18333};
         <<"nmc">> -> {namecoin, 8334};
         <<"nmc_testnet">> -> {namecoin_testnet, 18334};
+        <<"ltc">> -> {litecoin, 9333};
+        <<"ltc_testnet">> -> {litecoin_testnet, 19333};
         _ -> undefined
     end,
     Host = proplists:get_value(<<"host">>, DocProps, <<"localhost">>),
@@ -680,6 +682,34 @@ save_genesis_block(namecoin, ClientDB, ClientTxDB) ->
         lock_time = 0
     },
     BlockHash = <<"000000000062b72c5e2ceb45fbc8587e807c155b0da735e6483dfba2f0a9c770">>,
+    ok = save_doc(ClientDB, make_block_header_document(0, BlockHash, Header, 1)),
+    ok = save_doc(ClientTxDB, make_tx_document(BlockHash, 0, Tx));
+
+save_genesis_block(litecoin, ClientDB, ClientTxDB) ->
+    ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
+    Header = #btc_header{
+        version = 1,
+        hash_prev_block = ZeroHash,
+        hash_merkle_root = base64:decode(<<"l937uua+l/1s3z58oTIyo6//I1Pim636t/cwEe3Uztk=">>),
+        timestamp = 16#4e8eaab9,
+        bits = 16#1d00ffff,
+        nonce = 16#7c3f51cd
+    },
+    Tx = #btc_tx{
+        version = 1,
+        tx_in = [#btc_tx_in{
+            prev_output_hash = ZeroHash,
+            prev_output_index = 16#ffffffff,
+            signature_script = [16#1d00ffff, <<4>>, <<"NY Times 05/Oct/2011 Steve Jobs, Apple", 226, 128, 153, "s Visionary, Dies at 56">>],
+            sequence = 16#ffffffff
+        }],
+        tx_out = [#btc_tx_out{
+            value = 5000000000,
+            pk_script = base64:decode(<<"QQQBhHEPpomtUCNpDIDzpJyPE/jUW4yFf7y8i8So5NPrSxD01GBPoI3OYBqvD0cCFv4bUYULSs8hsXnEUHCsewOprA==">>)
+        }],
+        lock_time = 0
+    },
+    BlockHash = <<"12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2">>,
     ok = save_doc(ClientDB, make_block_header_document(0, BlockHash, Header, 1)),
     ok = save_doc(ClientTxDB, make_tx_document(BlockHash, 0, Tx)).
 

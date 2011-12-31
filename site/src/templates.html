@@ -90,7 +90,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
       <tr>
         <th>Name</th>
         <th>Type</th>
-        <th>Port</th>
+        <th>URL</th>
         <th>Round</th>
       </tr>
     </thead>
@@ -99,7 +99,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
       <tr{{#if odd}} class="odd"{{/if}}>
         <th><a href="subpool/{{id}}">{{name}}</a></th>
         <td>{{type}}</td>
-        <td>{{port}}</td>
+        <td>{{url}}</td>
         <td>{{round}}</td>
       </tr>
     {{/each_striped}}
@@ -137,12 +137,10 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
       <tr id="{{id}}"{{#if odd}} class="odd"{{/if}}>
         <th><a href="#{{id}}">{{name}}</a></th>
         <td class="invalid">{{#if is_new}}0{{else}}...{{/if}}</td>
-        <td class="valid">{{#if is_new}}0{{else}}...{{/if}}</td>
-        <td class="candidate">{{#if is_new}}0{{else}}...{{/if}}</td>
+        <td><span class="valid">{{#if is_new}}0{{else}}...{{/if}}</span> + <span class="candidate">{{#if is_new}}0{{else}}...{{/if}}</span></td>
 {{#if aux}}
         <td class="aux_invalid">{{#if is_new}}0{{else}}...{{/if}}</td>
-        <td class="aux_valid">{{#if is_new}}0{{else}}...{{/if}}</td>
-        <td class="aux_candidate">{{#if is_new}}0{{else}}...{{/if}}</td>
+        <td><span class="aux_valid">{{#if is_new}}0{{else}}...{{/if}}</span> + <span class="aux_candidate">{{#if is_new}}0{{else}}...{{/if}}</span></td>
 {{/if}}
         <td class="speed">{{#if is_new}}0.00 H/s{{else}}...{{/if}}</td>
         <td class="active">{{#if is_new}}No{{else}}...{{/if}}</td>
@@ -156,16 +154,13 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
       <tr>
         <th class="key">Name</th>
   {{#if aux}}
-        <th width="125">Main Invalids</th>
-        <th width="75">Main Valids</th>
-        <th width="95">Main Candidates</th>
-        <th width="125">Aux Invalids</th>
-        <th width="75">Aux Valids</th>
-        <th width="95">Aux Candidates</th>
+        <th width="120">Main Invalids</th>
+        <th width="100">Main Valids<a class="explain" href="#">?</a></th>
+        <th width="120">Aux Invalids</th>
+        <th width="100">Aux Valids<a class="explain" href="#">?</a></th>
   {{else}}
-        <th width="125">Invalids</th>
-        <th width="75">Valids</th>
-        <th width="95">Candidates</th>
+        <th width="120">Invalids</th>
+        <th width="100">Valids<a class="explain" href="#">?</a></th>
   {{/if}}
         <th>Current Speed</th>
         <th width="200">Active</th>
@@ -222,11 +217,11 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 </form>
 </script>
 
-<script id="btcCoinDaemonConfigDialog-template" type="text/x-handlebars-template">
+<script id="daemonConfigDialog-template" type="text/x-handlebars-template">
   <form action="" method="post">
-    <h2>BitCoin Daemon Configuration</h2>
+    <h2>{{title}} Daemon Configuration</h2>
     <fieldset>
-      <p class="help">Configure the BitCoin Daemon for this Sub-Pool here.<br/>
+      <p class="help">Configure the {{title}} Daemon for this Sub-Pool here.<br/>
       An empty field will use a default setting.</p>
       <table summary="">
         <tbody>
@@ -236,7 +231,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
           </tr>
           <tr>
             <th><label>Port:</label></th>
-            <td><input type="text" name="port" size="20" placeholder="8332" value="{{port}}" /></td>
+            <td><input type="text" name="port" size="20" placeholder="{{default_port}}" value="{{port}}" /></td>
           </tr>
           <tr>
             <th><label>Username:</label></th>
@@ -246,6 +241,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
             <th><label>Password:</label></th>
             <td><input type="text" name="pass" size="20" placeholder="pass" value="{{pass}}" /></td>
           </tr>
+{{#if can_modify_coinbase}}
           <tr>
             <th><label>Pay To:</label></th>
             <td><input type="text" name="pay_to" size="35" placeholder="(auto)" value="{{pay_to}}" /></td>
@@ -254,82 +250,13 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
             <th><label>Tag:</label></th>
             <td><input type="text" name="tag" size="20" maxlength="20" placeholder="(none)" value="{{tag}}" /></td>
           </tr>
+{{/if}}
+{{#if can_use_ebitcoin}}
           <tr>
             <th><label>ebitcoin Client:</label></th>
             <td><select name="ebitcoin_client_id"><option value="">(none)</option>{{#each ebitcoin_clients}}<option value="{{value}}"{{#ifequal value ../ebitcoin_client_id}} selected="selected"{{/ifequal}}>{{title}}</option>{{/each}}</select></td>
           </tr>
-        </tbody>
-      </table>
-    </fieldset>
-    <div class="buttons">
-      <button type="submit">OK</button>
-      <button type="button" class="cancel">Cancel</button>
-    </div>
-  </form>
-</script>
-
-<script id="scCoinDaemonConfigDialog-template" type="text/x-handlebars-template">
-  <form action="" method="post">
-    <h2>SolidCoin Daemon Configuration</h2>
-    <fieldset>
-      <p class="help">Configure the SolidCoin Daemon for this Sub-Pool here.<br/>
-      An empty field will use a default setting.</p>
-      <table summary="">
-        <tbody>
-          <tr>
-            <th><label>Host:</label></th>
-            <td><input type="text" name="host" size="20" placeholder="localhost" value="{{host}}" /></td>
-          </tr>
-          <tr>
-            <th><label>Port:</label></th>
-            <td><input type="text" name="port" size="20" placeholder="8555" value="{{port}}" /></td>
-          </tr>
-          <tr>
-            <th><label>Username:</label></th>
-            <td><input type="text" name="user" size="20" placeholder="user" value="{{user}}" /></td>
-          </tr>
-          <tr>
-            <th><label>Password:</label></th>
-            <td><input type="text" name="pass" size="20" placeholder="pass" value="{{pass}}" /></td>
-          </tr>
-        </tbody>
-      </table>
-    </fieldset>
-    <div class="buttons">
-      <button type="submit">OK</button>
-      <button type="button" class="cancel">Cancel</button>
-    </div>
-  </form>
-</script>
-
-<script id="nmcAuxDaemonConfigDialog-template" type="text/x-handlebars-template">
-  <form action="" method="post">
-    <h2>NameCoin Aux Daemon Configuration</h2>
-    <fieldset>
-      <p class="help">Configure the NameCoin Aux Daemon for this Sub-Pool here.<br/>
-      An empty field will use a default setting.</p>
-      <table summary="">
-        <tbody>
-          <tr>
-            <th><label>Host:</label></th>
-            <td><input type="text" name="host" size="20" placeholder="localhost" value="{{host}}" /></td>
-          </tr>
-          <tr>
-            <th><label>Port:</label></th>
-            <td><input type="text" name="port" size="20" placeholder="8335" value="{{port}}" /></td>
-          </tr>
-          <tr>
-            <th><label>Username:</label></th>
-            <td><input type="text" name="user" size="20" placeholder="user" value="{{user}}" /></td>
-          </tr>
-          <tr>
-            <th><label>Password:</label></th>
-            <td><input type="text" name="pass" size="20" placeholder="pass" value="{{pass}}" /></td>
-          </tr>
-          <tr>
-            <th><label>ebitcoin Client:</label></th>
-            <td><select name="ebitcoin_client_id"><option value="">(none)</option>{{#each ebitcoin_clients}}<option value="{{value}}"{{#ifequal value ../ebitcoin_client_id}} selected="selected"{{/ifequal}}>{{title}}</option>{{/each}}</select></td>
-          </tr>
+{{/if}}
         </tbody>
       </table>
     </fieldset>

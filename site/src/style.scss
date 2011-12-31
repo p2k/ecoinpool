@@ -241,6 +241,11 @@ table.listing {
         &.desc span {
             background-image: url(#{$img_path}/order-desc.gif);
         }
+        
+        a.explain {
+            font-size: 75%;
+            vertical-align: top;
+        }
     }
     
     tbody {

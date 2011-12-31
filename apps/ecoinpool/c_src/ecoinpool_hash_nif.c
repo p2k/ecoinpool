@@ -24,6 +24,7 @@
 
 /* Header files are for beginners. */
 extern void BlockHash_1(unsigned char *p512bytes, unsigned char *final_hash);
+extern void scrypt_1024_1_1_256(const unsigned char *input, unsigned char *output);
 extern void DoubleSha256(const unsigned char* in, size_t size, unsigned char* out);
 extern void TreeDoubleSha256(const unsigned char* in, unsigned char* out);
 extern void MidstateSha256(const unsigned char* in, unsigned char* out);
@@ -104,11 +105,26 @@ static ERL_NIF_TERM rs_hash_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM arg
     return ret;
 }
 
+static ERL_NIF_TERM scrypt_hash_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) || bin.size != 80)
+        return enif_make_badarg(env);
+    
+    ERL_NIF_TERM ret;
+    unsigned char *final_hash = enif_make_new_binary(env, 32, &ret);
+    scrypt_1024_1_1_256(bin.data, final_hash);
+    reverse32(final_hash, final_hash);
+    
+    return ret;
+}
+
 static ErlNifFunc nif_funcs[] = {
     {"dsha256_hash", 1, dsha256_hash_nif},
     {"tree_pair_dsha256_hash", 2, tree_pair_dsha256_hash_nif},
     {"sha256_midstate", 1, sha256_midstate_nif},
-    {"rs_hash", 1, rs_hash_nif}
+    {"rs_hash", 1, rs_hash_nif},
+    {"scrypt_hash", 1, scrypt_hash_nif}
 };
 
 ERL_NIF_INIT(ecoinpool_hash, nif_funcs, NULL, NULL, NULL, NULL)

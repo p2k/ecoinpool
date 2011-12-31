@@ -48,7 +48,7 @@ userCtx.ready(function () {
                         id: this.id,
                         name: this.doc.name,
                         type: poolType(this.doc.pool_type) + aux,
-                        port: this.doc.port,
+                        url: "http://" + location.hostname + ":" + this.doc.port + "/",
                         round: (this.doc.round === undefined ? "-" : this.doc.round)
                     };
                     if (isActive)

@@ -243,6 +243,7 @@ function filterIntegerOnly (evt) {
 function UserContext (data, callbacks) {
     this._callbacks = [];
     this.isEmpty = $.isEmptyObject(data);
+    this.isLoggedIn = (this.isEmpty ? false : data.name !== null);
     if (!this.isEmpty)
         $.extend(this, data);
     
@@ -257,7 +258,7 @@ function UserContext (data, callbacks) {
     };
     
     this.userIdInSubpool = function (subPoolDoc) {
-        var user_id;
+        var user_id = null;
         $.each(this.roles, function () {
             var spl = this.split(":")
             if (spl[0] != "user_id")
@@ -409,6 +410,7 @@ function makeToolbar (items) {
 var userCtx = new UserContext();
 var sidebar;
 var siteURL = "/ecoinpool/_design/site/";
+var usersDb;
 var confDb = $.couch.db("ecoinpool");
 var ebitcoinDb = $.couch.db("ebitcoin");
 
@@ -500,6 +502,8 @@ $(document).ready(function () {
                     getSessionInfo();
                 }
             });
+            
+            return false;
         };
         
         this.signup = function () {
@@ -597,6 +601,15 @@ $(document).ready(function () {
             }
         };
         
+        this.addMainNavItem = function (url, title, selected) {
+            var mainNav = this.elt.find("#nav li:first");
+            if (mainNav.find('ul > li > a[href="' + url + '"]').length > 0)
+                return; // Ignore if already added
+            if (selected)
+                mainNav.addClass("selected");
+            mainNav.children("ul").append('<li' + (selected ? ' class="selected"' : '') + '><a href="' + url + '">' + title + '</a></li>');
+        };
+        
         this.selectMainNavItem = function (name) {
             var mainNav = this.elt.find("#nav li:first");
             mainNav.addClass("selected");
@@ -630,8 +643,9 @@ $(document).ready(function () {
     function getSessionInfo () {
         $.couch.session({
             success: function (r) {
+                usersDb = $.couch.db(r.info.authentication_db);
                 userCtx = userCtx.newContext(r.userCtx);
-                if (userCtx.name) {
+                if (userCtx.isLoggedIn) {
                     sidebar.setUserName(userCtx.name);
                     sidebar.setLoggedIn(true);
                 } else {

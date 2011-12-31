@@ -405,8 +405,8 @@ sc_data_test_() ->
     EHeader = sample_header(),
     DHeader = #sc_data{
         version = 1,
-        hash_prev_block = base64:decode(<<"6fSjMfK0CI39endNiu+IrbcDnCBBkmfTlsyaK7l6AAA=">>),
-        hash_merkle_root = base64:decode(<<"ftoWEvyq7WRKElWCNa3RIlKUMUbC7MoFtntOW6UOHYc=">>),
+        hash_prev_block = base64:decode(<<"AAB6uSuazJbTZ5JBIJwDt62I74pNd3r9jQi08jGj9Ok=">>),
+        hash_merkle_root = base64:decode(<<"hx0OpVtOe7YFyuzCRjGUUiLRrTWCVRJKZO2q/BIW2n4=">>),
         block_num = 68327,
         time = 1321199616,
         nonce1 = 0,

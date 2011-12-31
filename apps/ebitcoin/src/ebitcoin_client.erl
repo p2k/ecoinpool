@@ -436,6 +436,15 @@ scan_msg(namecoin_testnet, Data = <<250,191,181,254, Command:12/bytes, Length:32
 scan_msg(namecoin_testnet, Data = <<250, _/binary>>) when byte_size(Data) < 20 ->
     {incomplete, Data};
 
+scan_msg(litecoin, Data = <<251,192,182,219, Command:12/bytes, Length:32/little, T/binary>>) ->
+    unpack_message(Data, Command, Length, T);
+scan_msg(litecoin, Data = <<251, _/binary>>) when byte_size(Data) < 20 ->
+    {incomplete, Data};
+scan_msg(litecoin_testnet, Data = <<252,193,183,220, Command:12/bytes, Length:32/little, T/binary>>) ->
+    unpack_message(Data, Command, Length, T);
+scan_msg(litecoin_testnet, Data = <<252, _/binary>>) when byte_size(Data) < 20 ->
+    {incomplete, Data};
+
 % Fall through clause: Cut off one byte and try to find the next magic value
 scan_msg(Chain, <<_, T/binary>>) ->
     log4erl:warn(ebitcoin, "Bitcoin data stream out of sync!"),
@@ -525,7 +534,11 @@ network_magic(bitcoin_testnet) ->
 network_magic(namecoin) ->
     <<249,190,180,254>>;
 network_magic(namecoin_testnet) ->
-    <<250,191,181,254>>.
+    <<250,191,181,254>>;
+network_magic(litecoin) ->
+    <<251,192,182,219>>;
+network_magic(litecoin_testnet) ->
+    <<252,193,183,220>>.
 
 make_getheaders(Client, BlockNum) ->
     BLH = ebitcoin_db:get_block_locator_hashes(Client, BlockNum),

@@ -465,7 +465,7 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
     Port = proplists:get_value(<<"port">>, DocProps),
     PoolType = case proplists:get_value(<<"pool_type">>, DocProps) of
         <<"btc">> -> btc;
-        <<"nmc">> -> nmc;
+        <<"ltc">> -> ltc;
         <<"sc">> -> sc;
         _ -> undefined
     end,
@@ -527,9 +527,7 @@ parse_auxpool_document({DocProps}) ->
     % % DocType = proplists:get_value(<<"type">>, DocProps),
     Name = proplists:get_value(<<"name">>, DocProps),
     PoolType = case proplists:get_value(<<"pool_type">>, DocProps) of
-        <<"btc">> -> btc;
         <<"nmc">> -> nmc;
-        <<"sc">> -> sc;
         _ -> undefined
     end,
     Round = proplists:get_value(<<"round">>, DocProps),

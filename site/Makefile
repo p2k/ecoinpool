@@ -6,8 +6,10 @@ BUILD_DIR = build
 CC_JAR = compiler.jar
 SASS = sass
 ESCRIPT = escript
+MOVE = mv
 
 TARGET = main_db_site.json
+INSTALL_PATH = ../apps/ecoinpool/priv/
 
 RESOURCES = $(SRC_DIR)/unload.png \
     $(SRC_DIR)/templates.html
@@ -40,3 +42,6 @@ $(TARGET): $(LOADERS) $(SCRIPTS) $(STYLES) $(RESOURCES) site_maker.escript
 	@$(ESCRIPT) site_maker.escript --loaders $(LOADERS) --resources $(SCRIPTS) $(STYLES) $(RESOURCES) --target $@
 
 all: $(TARGET)
+
+install: $(TARGET)
+	$(MOVE) $< $(INSTALL_PATH)

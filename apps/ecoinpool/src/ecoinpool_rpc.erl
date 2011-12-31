@@ -205,13 +205,8 @@ handle_form_request(SubpoolPID, Req, Auth, Properties, LP) ->
                 invalid ->
                     self() ! {error, invalid_request};
                 Method ->
-                    case proplists:get_all_values("params[]", Properties) of
-                        Params when is_list(Params) ->
-                            BinParams = lists:map(fun list_to_binary/1, Params),
-                            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, BinParams, Auth, false));
-                        _ ->
-                            self() ! {error, invalid_request}
-                    end
+                    BinParams = lists:map(fun list_to_binary/1, proplists:get_all_values("params[]", Properties)),
+                    ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, BinParams, Auth, false))
             end,
             % Return the request ID; if possible convert to integer else convert to binary
             ReqId = proplists:get_value("id", Properties, "1"),

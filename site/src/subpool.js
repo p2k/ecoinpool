@@ -18,6 +18,8 @@
  * along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+var changes = {};
+
 userCtx.ready(function () {
     
     var inactiveTimout = 120000;
@@ -26,7 +28,6 @@ userCtx.ready(function () {
     var workers = [];
     var workerIndexMap = {};
     var workerShareData = {};
-    var changes = {};
     var mainConfig;
     var pageTabs;
     var ebitcoinClients;
@@ -39,6 +40,7 @@ userCtx.ready(function () {
             hashesPerShare = 4295032833;
             break;
         case "sc":
+        case "ltc":
             hashesPerShare = 131072;
             break;
     }
@@ -82,9 +84,15 @@ userCtx.ready(function () {
         return new_config;
     };
     
-    function showCoinDaemonDialog (template) {
-        $.showDialog(template, {
-            context: $.extend({ebitcoin_clients: ebitcoinClients}, doc.coin_daemon),
+    function showCoinDaemonDialog (title, defaultPort, canModifyCoinbase, canUseEbitcoin) {
+        $.showDialog(templates.daemonConfigDialog, {
+            context: $.extend({
+                title: title,
+                default_port: defaultPort,
+                can_modify_coinbase: canModifyCoinbase,
+                can_use_ebitcoin: canUseEbitcoin,
+                ebitcoin_clients: ebitcoinClients
+            }, doc.coin_daemon),
             load: function (elt) {
                 $(elt).find('input[name="port"]').keydown(filterIntegerOnly);
             },
@@ -102,27 +110,35 @@ userCtx.ready(function () {
     };
     
     function editCoinDaemonConfig () {
-        switch ($("#pool_type select").val()) {
+        var pool_type = $("#pool_type select").val();
+        switch (pool_type) {
             case "btc":
+            case "ltc":
                 ebitcoinDb.view("clients/by_chain", {
-                    key: "btc",
+                    key: pool_type,
                     success: function (resp) {
                         ebitcoinClients = $.map(resp.rows, function (row) {
                             return {title: row.value, value: row.id};
                         });
-                        showCoinDaemonDialog(templates.btcCoinDaemonConfigDialog);
+                        showCoinDaemonDialog((pool_type == "btc" ? "BitCoin" : "LiteCoin"), (pool_type == "btc" ? 8332 : 9332), true, true);
                     }
                 });
                 break;
             case "sc":
-                showCoinDaemonDialog(templates.scCoinDaemonConfigDialog);
+                showCoinDaemonDialog("SolidCoin", 8555, false, false);
                 break;
         }
     };
     
-    function showAuxDaemonDialog (template) {
-        $.showDialog(template, {
-            context: $.extend({ebitcoin_clients: ebitcoinClients}, aux_daemon_config),
+    function showAuxDaemonDialog (title, defaultPort, canModifyCoinbase, canUseEbitcoin) {
+        $.showDialog(templates.daemonConfigDialog, {
+            context: $.extend({
+                title: title + " Aux",
+                default_port: defaultPort,
+                can_modify_coinbase: canModifyCoinbase,
+                can_use_ebitcoin: canUseEbitcoin,
+                ebitcoin_clients: ebitcoinClients
+            }, aux_daemon_config),
             load: function (elt) {
                 $(elt).find('input[name="port"]').keydown(filterIntegerOnly);
             },
@@ -148,7 +164,7 @@ userCtx.ready(function () {
                         ebitcoinClients = $.map(resp.rows, function (row) {
                             return {title: row.value, value: row.id};
                         });
-                        showAuxDaemonDialog(templates.nmcAuxDaemonConfigDialog);
+                        showAuxDaemonDialog("NameCoin", 8335, false, true);
                     }
                 });
                 break;
@@ -162,7 +178,7 @@ userCtx.ready(function () {
                 setFieldEnabled("#aux_pool_type", true);
                 apts.find("option:first").text("(none)");
                 break;
-            case "sc":
+            default:
                 setFieldEnabled("#aux_pool_type", false);
                 apts.find("option:first").text("(unsupported)");
                 apts.val("");
@@ -188,7 +204,7 @@ userCtx.ready(function () {
         var aux_pool = doc.aux_pool || {};
         aux_daemon_config = aux_pool.aux_daemon;
         var config = [
-            {id: "pool_type", name: "Main Chain:", field: {type: "select", options: [{value: "btc", title: "BitCoin"}, {value: "sc", title: "SolidCoin"}], value: doc.pool_type}},
+            {id: "pool_type", name: "Main Chain:", field: {type: "select", options: [{value: "btc", title: "BitCoin"}, {value: "ltc", title: "LiteCoin"}, {value: "sc", title: "SolidCoin"}], value: doc.pool_type}},
             {id: "name", name: "Name:", field: {type: "text", value: doc.name}},
             {id: "port", name: "Port:", field: {type: "text", value: doc.port}},
             {id: "round", name: "Round:", field: {type: "text", value: doc.round, optional: "Do not count rounds"}},
@@ -285,7 +301,7 @@ userCtx.ready(function () {
     };
     
     function addWorker () {
-        if (userCtx.userIdInSubpool(doc) === undefined) {
+        if (userCtx.userIdInSubpool(doc) === null) {
             userCtx.requestUserIdInSubpool(doc, {success: addWorker});
             return false;
         }
@@ -345,7 +361,7 @@ userCtx.ready(function () {
         return false;
     };
     
-    function renderMyWorkers () {
+    function renderWorkers (userId, tabTitle, canEditWorkers) {
         var aux = (doc.aux_pool !== undefined);
         var workerIds = [];
         var displayWorkers = $.map(workers, function (worker) {
@@ -354,18 +370,22 @@ userCtx.ready(function () {
         });
         
         var toolbuttons;
-        if (!userCtx.name)
-            toolbuttons = [];
-        else
+        if (canEditWorkers)
             toolbuttons = [{type: "add", title: "Add Worker", click: addWorker}];
+        else
+            toolbuttons = [];
         
         return {
-            tab: {id: "workers", title: "My Workers", elt: $(templates.workersTable({aux: aux, workers: displayWorkers}))},
+            tab: {id: "workers", title: tabTitle, elt: $(templates.workersTable({aux: aux, workers: displayWorkers}))},
             toolbuttons: toolbuttons,
             init: function () {
-                $("#workers .content tr").each(function () {
-                    var row = $(this);
-                    row.find("th a").click(editWorker);
+                if (canEditWorkers)
+                    $("#workers .content tr th a").click(editWorker);
+                else
+                    $("#workers .content tr th a").click(function () {alert("You cannot edit workers which don't belong to you."); return false;});
+                $("#workers thead th .explain").click(function () {
+                    alert("The left number are valid shares and the number after the plus are candidate shares (or winning shares).");
+                    return false;
                 });
                 if (changes.main_db)
                     loadInitialWorkerStats(false, workerIds);
@@ -376,14 +396,18 @@ userCtx.ready(function () {
     };
     
     function startSharesMonitor (userId) {
-        if (changes.main_db !== undefined)
+        // Stop existing listeners
+        if (changes.main_feed !== undefined) {
+            changes.main_feed.stop();
+            changes.main_feed = undefined;
+        }
+        if (changes.aux_feed !== undefined) {
+            changes.aux_feed.stop();
+            changes.aux_feed = undefined;
+        }
+        
+        if (changes.main_db === undefined)
             return;
-        
-        changes.main_db = $.couch.db(doc.name);
-        
-        var aux = (doc.aux_pool !== undefined);
-        if (aux)
-            changes.aux_db = $.couch.db(doc.aux_pool.name);
         
         changes.main_db.info({
             success: function (main_info) {
@@ -394,7 +418,7 @@ userCtx.ready(function () {
                 });
                 changes.main_feed.onChange(function (resp) {processChanges(resp, false);});
                 
-                if (aux) {
+                if (changes.aux_db !== undefined) {
                     changes.aux_db.info({
                         success: function (aux_info) {
                             changes.aux_feed = changes.aux_db.changes(aux_info.update_seq, {
@@ -573,20 +597,20 @@ userCtx.ready(function () {
         if (aux) {
             var sumShares = shd.aux_invalid + shd.aux_valid + shd.aux_candidate;
             if (sumShares == 0)
-                tr.children(".aux_invalid").text("0");
+                tr.find(".aux_invalid").text("0");
             else
-                tr.children(".aux_invalid").text(shd.aux_invalid + " (" + formatFloat(100 * shd.aux_invalid / sumShares, 4) + "%)");
-            tr.children(".aux_valid").text(shd.aux_valid);
-            tr.children(".aux_candidate").text(shd.aux_candidate);
+                tr.find(".aux_invalid").text(shd.aux_invalid + " (" + formatFloat(100 * shd.aux_invalid / sumShares, 4) + "%)");
+            tr.find(".aux_valid").text(shd.aux_valid);
+            tr.find(".aux_candidate").text(shd.aux_candidate);
         }
         else {
             var sumShares = shd.invalid + shd.valid + shd.candidate;
             if (sumShares == 0)
-                tr.children(".invalid").text("0");
+                tr.find(".invalid").text("0");
             else
-                tr.children(".invalid").text(shd.invalid + " (" + formatFloat(100 * shd.invalid / sumShares, 4) + "%)");
-            tr.children(".valid").text(shd.valid);
-            tr.children(".candidate").text(shd.candidate);
+                tr.find(".invalid").text(shd.invalid + " (" + formatFloat(100 * shd.invalid / sumShares, 4) + "%)");
+            tr.find(".valid").text(shd.valid);
+            tr.find(".candidate").text(shd.candidate);
         }
     };
     
@@ -614,7 +638,7 @@ userCtx.ready(function () {
         }
     };
     
-    function displaySubpool (userId) {
+    function displaySubpool (userId, userName, isSelf) {
         $("#content").empty();
         
         var toolbuttons = [];
@@ -622,7 +646,7 @@ userCtx.ready(function () {
         var inits = [];
         
         if (doc._rev !== undefined) {
-            var wrk = renderMyWorkers();
+            var wrk = renderWorkers(userId, (isSelf ? "My Workers" : userName + "'s Workers"), isSelf);
             $.merge(toolbuttons, wrk.toolbuttons);
             tabs.push(wrk.tab);
             inits.push(wrk.init);
@@ -750,31 +774,63 @@ userCtx.ready(function () {
         });
     };
     
+    // Add and select my navigation item
+    sidebar.addMainNavItem(siteURL + "_show/subpool/" + (doc._rev === undefined ? '' : doc._id), (doc._rev === undefined ? "New Subpool" : doc.name), true);
+    
     // Start by loading the main configuration
     confDb.openDoc("configuration", {
         success: function (conf) {
             mainConfig = conf;
-            loadMyWorkers();
+            checkUserId();
         },
         error: function () {
             mainConfig = {_id: "configuration", type: "configuration"};
-            loadMyWorkers();
+            checkUserId();
         }
     });
     
-    // Second step: load the workers for this user
-    function loadMyWorkers () {
-        if (doc._rev === undefined) {
-            displaySubpool(undefined);
+    // Second step: check the user ID
+    function checkUserId () {
+        if (doc._rev === undefined) { // New Subpool -> skip
+            displaySubpool(null, null, false, false);
             return;
         }
         
-        var userId = userCtx.userIdInSubpool(doc);
-        if (userId === undefined) {
-            displaySubpool(undefined);
-            return;
+        var userId = /[?&]user_id=([^&])/.exec(window.location.search);
+        if (userId !== null) {
+            userId = parseInt(userId[1]);
+            if (isNaN(userId))
+                userId = null;
         }
         
+        var myUserId = userCtx.userIdInSubpool(doc);
+        if (userId === null) {
+            if (myUserId === null) { // No user ID -> render empty
+                displaySubpool(null, null, false, false);
+                return;
+            }
+            else {
+                loadWorkers(myUserId, userCtx.name, true);
+            }
+        }
+        else if (userId != myUserId) {
+            usersDb.view("ecoinpool/user_names", {
+                key: [doc._id, userId],
+                success: function (resp) {
+                    if (resp.rows.length == 0)
+                        loadWorkers(userId, ""+userId, false);
+                    else
+                        loadWorkers(userId, resp.rows[0].value, false);
+                }
+            });
+        }
+        else {
+            loadWorkers(userId, userCtx.name, true);
+        }
+    }
+    
+    // Third step: load the workers for the user
+    function loadWorkers (userId, userName, isSelf) {
         confDb.view("workers/by_sub_pool_and_user_id", {
             key: [doc._id, userId],
             include_docs: true,
@@ -783,9 +839,16 @@ userCtx.ready(function () {
                     workerIndexMap[row.doc._id] = index;
                     return row.doc;
                 });
-                if (workers.length > 0)
-                    startSharesMonitor(userId);
-                displaySubpool(userId);
+                if (workers.length > 0) {
+                    changes.main_db = $.couch.db(doc.name);
+                    if (doc.aux_pool !== undefined)
+                        changes.aux_db = $.couch.db(doc.aux_pool.name);
+                    else
+                        changes.aux_db = undefined;
+                    
+                    window.setTimeout(function () {startSharesMonitor(userId);}, 250);
+                }
+                displaySubpool(userId, userName, isSelf);
             }
         });
     };

@@ -6,6 +6,9 @@
        "user_ids": {
            "map": "function(doc) {\n  for (var i in doc.roles) {\n    var spl = doc.roles[i].split(\":\");\n    if (spl.length == 3 && spl[0] == \"user_id\")\n      emit([spl[1], doc.name], parseInt(spl[2]));\n  }\n}",
            "reduce": "function(keys, values, rereduce) {\n  var best = null;\n  for (var i in values) {\n    if (best === null || best < values[i])\n      best = values[i];\n  }\n  return best;\n}"
+       },
+       "user_names": {
+           "map": "function(doc) {\n  for (var i in doc.roles) {\n    var spl = doc.roles[i].split(\":\");\n    if (spl.length == 3 && spl[0] == \"user_id\")\n      emit([spl[1], parseInt(spl[2])], doc.name);\n  }\n}"
        }
    }
 }
