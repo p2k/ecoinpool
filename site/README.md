@@ -15,8 +15,8 @@ The `sass` executable has to be in your `PATH`.
 You should also have `escript` in your `PATH` which usually comes with your
 Erlang installation.
 
-Finally run "`make`", then move the resulting `main_db_site.json` file into
-`apps/ecoinpool/priv`.
+Finally run `make`, then move the resulting `main_db_site.json` file into
+`../apps/ecoinpool/priv`. `make install` can do that for you.
 
 Currently, no version checks are done, so if you make changes you have to delete
 the old site design document on CouchDB and restart the server or update it
