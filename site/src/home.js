@@ -25,16 +25,6 @@ userCtx.ready(function () {
     var activeSubpools;
     var pageTabs;
     
-    function poolType (type) {
-        switch (type) {
-            case "sc": return "SolidCoin";
-            case "btc": return "BitCoin";
-            case "nmc": return "NameCoin";
-            case "ltc": return "LiteCoin";
-            default: return type;
-        }
-    };
-    
     function loadSubpools () {
         confDb.view("doctypes/doctypes", {
             key: "sub-pool",
@@ -42,12 +32,12 @@ userCtx.ready(function () {
             success: function (resp) {
                 var active = [], inactive = [];
                 $.each(resp.rows, function () {
-                    var aux = (this.doc.aux_pool !== undefined ? " + " + poolType(this.doc.aux_pool.pool_type) : "");
+                    var aux = (this.doc.aux_pool !== undefined ? " + " + poolTypeInfo.get(this.doc.aux_pool.pool_type).title : "");
                     var isActive = ($.inArray(this.id, activeSubpools) != -1);
                     var entry = {
                         id: this.id,
                         name: this.doc.name,
-                        type: poolType(this.doc.pool_type) + aux,
+                        type: poolTypeInfo.get(this.doc.pool_type).title + aux,
                         url: "http://" + location.hostname + ":" + this.doc.port + "/",
                         round: (this.doc.round === undefined ? "-" : this.doc.round)
                     };

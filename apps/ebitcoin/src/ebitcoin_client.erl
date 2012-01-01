@@ -38,6 +38,7 @@
 % Internal state record
 -record(state, {
     client,
+    net_magic,
     node_nonce,
     socket,
     
@@ -88,7 +89,7 @@ init([ClientId]) ->
         error -> [];
         {ok, Value} -> log4erl:info(ebitcoin, "~s: Recovered ~b listener(s) from the crash repo", [ClientId, length(Value)]), Value
     end,
-    {ok, #state{client=#client{}, node_nonce = crypto:rand_uniform(0, 16#10000000000000000), bc_listeners = BCListeners}}.
+    {ok, #state{client = #client{}, node_nonce = crypto:rand_uniform(0, 16#10000000000000000), bc_listeners = BCListeners}}.
 
 handle_call(last_block_num, _From, State=#state{last_block_num=LastBlockNum}) ->
     {reply, LastBlockNum, State};
@@ -98,7 +99,7 @@ handle_call(_Message, _From, State) ->
 
 handle_cast({reload_config, Client}, State=#state{client=OldClient, socket=OldSocket, bc_listeners=BCListeners, last_block_num=OldBlockNum, last_block_hash=OldBlockHash, pkt_buf=OldPKTBuf}) ->
     % Extract config
-    #client{id=ClientId, name=Name, host=Host, port=Port} = Client,
+    #client{id=ClientId, name=Name, chain=Chain, host=Host, port=Port} = Client,
     #client{host=OldHost, port=OldPort} = OldClient,
     
     % Setup the client databases
@@ -126,7 +127,10 @@ handle_cast({reload_config, Client}, State=#state{client=OldClient, socket=OldSo
             ok
     end,
     
-    {noreply, State#state{client=Client, socket=Socket, last_block_num=BlockNum, last_block_hash=BlockHash, pkt_buf=PKTBuf}};
+    % Get the network magic bytes
+    NetMagic = ebitcoin_chain_data:network_magic(Chain),
+    
+    {noreply, State#state{client=Client, net_magic=NetMagic, socket=Socket, last_block_num=BlockNum, last_block_hash=BlockHash, pkt_buf=PKTBuf}};
 
 handle_cast(start_handshake, State=#state{node_nonce=NodeNonce, socket=Socket, last_block_num=BlockNum}) ->
     {ok, {RecvAddress, RecvPort}} = inet:peername(Socket),
@@ -365,8 +369,8 @@ do_connect(Name, Host, Port) ->
             error(Reason)
     end.
 
-handle_stream_data(Data, State=#state{client=#client{name=Name, chain=Chain}}) ->
-    case scan_msg(Chain, Data) of
+handle_stream_data(Data, State=#state{client=#client{name=Name}, net_magic=NetMagic}) ->
+    case scan_msg(NetMagic, Data) of
         not_found ->
             State#state{pkt_buf = <<>>};
         {incomplete, IncData} ->
@@ -411,44 +415,22 @@ handle_stream_data(Data, State=#state{client=#client{name=Name, chain=Chain}}) -
             end
     end.
 
-send_msg(#state{client=#client{chain=Chain}, socket=Socket}, Message) ->
+send_msg(#state{net_magic=NetMagic, socket=Socket}, Message) ->
     {Command, Payload} = encode_message(Message),
-    gen_tcp:send(Socket, pack_message(Chain, Command, Payload)).
+    gen_tcp:send(Socket, pack_message(NetMagic, Command, Payload)).
 
 scan_msg(_, <<>>) ->
     not_found;
 
-scan_msg(bitcoin, Data = <<249,190,180,217, Command:12/bytes, Length:32/little, T/binary>>) ->
+scan_msg(<<M1,M2,M3,M4>>, Data = <<M1,M2,M3,M4, Command:12/bytes, Length:32/little, T/binary>>) ->
     unpack_message(Data, Command, Length, T);
-scan_msg(bitcoin, Data = <<249, _/binary>>) when byte_size(Data) < 20 ->
-    {incomplete, Data};
-scan_msg(bitcoin_testnet, Data = <<250,191,181,218, Command:12/bytes, Length:32/little, T/binary>>) ->
-    unpack_message(Data, Command, Length, T);
-scan_msg(bitcoin_testnet, Data = <<250, _/binary>>) when byte_size(Data) < 20 ->
-    {incomplete, Data};
-
-scan_msg(namecoin, Data = <<249,190,180,254, Command:12/bytes, Length:32/little, T/binary>>) ->
-    unpack_message(Data, Command, Length, T);
-scan_msg(namecoin, Data = <<249, _/binary>>) when byte_size(Data) < 20 ->
-    {incomplete, Data};
-scan_msg(namecoin_testnet, Data = <<250,191,181,254, Command:12/bytes, Length:32/little, T/binary>>) ->
-    unpack_message(Data, Command, Length, T);
-scan_msg(namecoin_testnet, Data = <<250, _/binary>>) when byte_size(Data) < 20 ->
-    {incomplete, Data};
-
-scan_msg(litecoin, Data = <<251,192,182,219, Command:12/bytes, Length:32/little, T/binary>>) ->
-    unpack_message(Data, Command, Length, T);
-scan_msg(litecoin, Data = <<251, _/binary>>) when byte_size(Data) < 20 ->
-    {incomplete, Data};
-scan_msg(litecoin_testnet, Data = <<252,193,183,220, Command:12/bytes, Length:32/little, T/binary>>) ->
-    unpack_message(Data, Command, Length, T);
-scan_msg(litecoin_testnet, Data = <<252, _/binary>>) when byte_size(Data) < 20 ->
+scan_msg(<<M1,_,_,_>>, Data = <<M1, _/binary>>) when byte_size(Data) < 20 ->
     {incomplete, Data};
 
 % Fall through clause: Cut off one byte and try to find the next magic value
-scan_msg(Chain, <<_, T/binary>>) ->
+scan_msg(NetMagic, <<_, T/binary>>) ->
     log4erl:warn(ebitcoin, "Bitcoin data stream out of sync!"),
-    scan_msg(Chain, T).
+    scan_msg(NetMagic, T).
 
 unpack_message(_, <<"version",0,0,0,0,0>>, Length, PayloadWithTail) when byte_size(PayloadWithTail) >= Length ->
     <<Payload:Length/bytes, Tail/binary>> = PayloadWithTail,
@@ -463,19 +445,16 @@ unpack_message(_, BCommand, Length, ChecksumPayloadWithTail) when byte_size(Chec
 unpack_message(Data, _, _, _) ->
     {incomplete, Data}.
 
-pack_message(Chain, verack, _) ->
-    Magic = network_magic(Chain),
-    <<Magic/binary, "verack",0,0,0,0,0,0, 0:32>>;
-pack_message(Chain, version, Payload) ->
-    Magic = network_magic(Chain),
+pack_message(NetMagic, verack, _) ->
+    <<NetMagic/binary, "verack",0,0,0,0,0,0, 0:32>>;
+pack_message(NetMagic, version, Payload) ->
     Length = byte_size(Payload),
-    <<Magic/binary, "version",0,0,0,0,0, Length:32/unsigned-little, Payload/bytes>>;
-pack_message(Chain, Command, Payload) ->
-    Magic = network_magic(Chain),
+    <<NetMagic/binary, "version",0,0,0,0,0, Length:32/unsigned-little, Payload/bytes>>;
+pack_message(NetMagic, Command, Payload) ->
     BCommand = btc_protocol:encode_command(Command),
     Length = byte_size(Payload),
     <<_:28/bytes, Checksum:32/unsigned-big>> = ecoinpool_hash:dsha256_hash(Payload),
-    <<Magic/binary, BCommand/binary, Length:32/unsigned-little, Checksum:32/unsigned-little, Payload/bytes>>.
+    <<NetMagic/binary, BCommand/binary, Length:32/unsigned-little, Checksum:32/unsigned-little, Payload/bytes>>.
 
 decode_message(version, Data) ->
     btc_protocol:decode_version(Data);
@@ -526,19 +505,6 @@ encode_message(Message=#btc_getheaders{}) ->
 %    {getaddr, <<>>};
 encode_message(verack) ->
     {verack, <<>>}.
-
-network_magic(bitcoin) ->
-    <<249,190,180,217>>;
-network_magic(bitcoin_testnet) ->
-    <<250,191,181,218>>;
-network_magic(namecoin) ->
-    <<249,190,180,254>>;
-network_magic(namecoin_testnet) ->
-    <<250,191,181,254>>;
-network_magic(litecoin) ->
-    <<251,192,182,219>>;
-network_magic(litecoin_testnet) ->
-    <<252,193,183,220>>.
 
 make_getheaders(Client, BlockNum) ->
     BLH = ebitcoin_db:get_block_locator_hashes(Client, BlockNum),

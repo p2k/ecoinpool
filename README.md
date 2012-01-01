@@ -13,7 +13,8 @@ coin pool software, yet not everything is 100% solid and waterproof and some
 features are missing in this version. Nevertheless, everything you need to get
 started and give it a try is there.
 
-ecoinpool supports Bitcoin, Bitcoin+Namecoin (merged), Litecoin and Solidcoin.
+ecoinpool supports Bitcoin, Bitcoin+Namecoin (merged), Litecoin, Fairbrix
+and Solidcoin.
 
 Contact
 -------
@@ -165,16 +166,16 @@ To configure a new client:
 2. Click "Add Field" and enter `type` as the field name, then hit tab or double
    click on the word `null`, which is the field's current value, and change it
    to `client`.
-3. Add another field, set `chain` as its name and `btc`, `ltc` or `nmc` as its
-   value. This is the chain type where you can choose between Bitcoin, Litecoin
-   or Namecoin. No other options are available for now.
+3. Add another field, set `chain` as its name and `btc`, `ltc`, `fbx` or `nmc`
+   as its value. This is the chain type where you can choose between Bitcoin,
+   Litecoin, Fairbrix or Namecoin. No other options are available for now.
 4. Add one last field with `name` as its name and, for example, `btc-chain`,
    `ltc-chain` or `nmc-chain` as its value. This will be the database name for
    the block headers. You can choose any name as long as it doesn't collide with
    your pool names.
-5. If the Bitcoin/Litecoin/Namecoin daemon is not running on the same server as
-   ecoinpool, you have to add a field `host`. If you don't use the default port
-   you also have to add a field `port`.
+5. If the Bitcoin/Litecoin/Fairbrix/Namecoin daemon is not running on the same
+   server as ecoinpool, you have to add a field `host`. If you don't use the
+   default port you also have to add a field `port`.
 6. Save the document. Note that the client isn't active yet.
 
 To activate a client:

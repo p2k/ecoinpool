@@ -18,7 +18,7 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(ltc_coindaemon).
+-module(scrypt_coindaemon).
 -behaviour(gen_coindaemon).
 -behaviour(gen_server).
 
@@ -50,6 +50,7 @@
 % Internal state record
 -record(state, {
     subpool,
+    pool_type,
     url,
     auth,
     tag,
@@ -138,10 +139,15 @@ get_first_tx_with_branches(_, _) ->
 
 init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
-    log4erl:warn(daemon, "LTC CoinDaemon starting..."),
+    PoolType = proplists:get_value(pool_type, Config),
+    log4erl:warn(daemon, "SCrypt-~p CoinDaemon starting...", [PoolType]),
     
     Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
-    Port = proplists:get_value(port, Config, 9332),
+    DefaultPort = case PoolType of
+        ltc -> 9332;
+        fbx -> 8645
+    end,
+    Port = proplists:get_value(port, Config, DefaultPort),
     URL = lists:flatten(io_lib:format("http://~s:~b/", [Host, Port])),
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
@@ -163,7 +169,7 @@ init([SubpoolId, Config]) ->
     
     {TxTbl, WorkTbl} = case ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, txtbl}) of
         ok ->
-            log4erl:info(daemon, "LTC CoinDaemon is recovering from a crash"),
+            log4erl:info(daemon, "SCrypt-~p CoinDaemon is recovering from a crash", [PoolType]),
             ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, worktbl}),
             {undefined, undefined};
         error ->
@@ -181,7 +187,7 @@ init([SubpoolId, Config]) ->
     
     ecoinpool_server:coindaemon_ready(SubpoolId, self()),
     
-    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, poll_timer=PollTimer, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}}.
+    {ok, #state{subpool=SubpoolId, pool_type=PoolType, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, poll_timer=PollTimer, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}}.
 
 handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, worktbl=WorkTbl, txtbl=TxTbl}) ->
     {Header, <<>>} = btc_protocol:decode_header(BData),
@@ -192,7 +198,7 @@ handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, worktb
             try
                 {reply, send_block(URL, Auth, Header, [CoinbaseTx | Transactions]), State}
             catch error:_ ->
-                {reply, {error, <<"exception in ltc_coindaemon:send_block/3">>}, State}
+                {reply, {error, <<"exception in scrypt_coindaemon:send_block/3">>}, State}
             end;
         [] ->
             {reply, rejected, State}
@@ -246,7 +252,7 @@ handle_info({'ETS-TRANSFER', WorkTbl, _FromPid, {?MODULE, SubpoolId, worktbl}}, 
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(Reason, #state{subpool=SubpoolId, poll_timer=PollTimer, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}) ->
+terminate(Reason, #state{subpool=SubpoolId, pool_type=PoolType, poll_timer=PollTimer, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}) ->
     case Reason of
         normal -> ok;
         shutdown -> ok;
@@ -262,7 +268,7 @@ terminate(Reason, #state{subpool=SubpoolId, poll_timer=PollTimer, ebtc_id=EBtcId
         _ ->
             timer:cancel(PollTimer)
     end,
-    log4erl:warn(daemon, "LTC CoinDaemon terminated."),
+    log4erl:warn(daemon, "SCrypt-~p CoinDaemon terminated.", [PoolType]),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -323,7 +329,7 @@ get_memory_pool(URL, Auth, TxTbl, OldMemorypool) ->
                 _ ->
                     TxIndex = ets:info(TxTbl, size),
                     ets:insert(TxTbl, {TxIndex, Transactions}),
-                    log4erl:debug(daemon, "ltc_coindaemon: get_memory_pool: New data received (#~b; ~b TX).", [TxIndex, length(Transactions)]),
+                    log4erl:debug(daemon, "scrypt_coindaemon: get_memory_pool: New data received (#~b; ~b TX).", [TxIndex, length(Transactions)]),
                     #memorypool{
                         hash_prev_block = HashPrevBlock,
                         timestamp = Timestamp,
@@ -334,7 +340,7 @@ get_memory_pool(URL, Auth, TxTbl, OldMemorypool) ->
                     }
             end;
         {error, req_timedout} ->
-            log4erl:warn(daemon, "ltc_coindaemon: get_memory_pool: Request timed out!"),
+            log4erl:warn(daemon, "scrypt_coindaemon: get_memory_pool: Request timed out!"),
             keep_old
     end.
 
@@ -415,7 +421,7 @@ send_block(URL, Auth, Header, Transactions) ->
     BData = btc_protocol:encode_block(#btc_block{header=Header, txns=Transactions}),
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"getmemorypool\",\"params\":[\"" ++ HexData ++ "\"]}",
-    log4erl:debug(daemon, "ltc_coindaemon: Sending upstream: ~s", [PostData]),
+    log4erl:debug(daemon, "scrypt_coindaemon: Sending upstream: ~s", [PostData]),
     case ecoinpool_util:send_http_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),

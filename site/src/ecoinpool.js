@@ -414,6 +414,101 @@ var usersDb;
 var confDb = $.couch.db("ecoinpool");
 var ebitcoinDb = $.couch.db("ebitcoin");
 
+// Common pool type information structure
+// type = pool type; hps = hashes per share; cb = can modify coinbase; ebc = can use ebitcoin; rpc = default RPC port
+// aux = list of pools for which this one can be used as aux pool; auxonly = true if the pool cannot be used as main pool
+var poolTypeInfo = new (function PoolTypeInfo () {
+    var self = this;
+    
+    this.allTypes = [];
+    this.allMainTypes = [];
+    
+    this.get = function (type) {
+        return this[type] || {};
+    };
+    
+    this.getAux = function (type) {
+        var t = this[type];
+        var ret = [];
+        if (t !== undefined) {
+            for (var i = 0; i < t.aux.length; i++) {
+                ret.push(this.get(t.aux[i]));
+            }
+        }
+        return ret;
+    };
+    
+    this.getAsOptions = function (types) {
+        var ret = [];
+        for (var i = 0; i < types.length; i++) {
+            ret.push({title: this.get(types[i]).title, value: types[i]});
+        }
+        return ret;
+    };
+    
+    function addType (data) {
+        self.allTypes.push(data.type);
+        if (!data.auxonly)
+            self.allMainTypes.push(data.type);
+        self[data.type] = data;
+    };
+    
+    addType({
+        type: "btc",
+        title: "BitCoin",
+        hps: 4295032833,
+        cb: true,
+        ebc: true,
+        rpc: 8332,
+        aux: ["nmc"],
+        auxonly: false
+    });
+    
+    addType({
+        type: "nmc",
+        title: "NameCoin",
+        hps: 4295032833,
+        cb: false,
+        ebc: true,
+        rpc: 8335,
+        aux: [],
+        auxonly: true
+    });
+    
+    addType({
+        type: "sc",
+        title: "SolidCoin",
+        hps: 131072,
+        cb: false,
+        ebc: false,
+        rpc: 8555,
+        aux: [],
+        auxonly: false
+    });
+    
+    addType({
+        type: "ltc",
+        title: "LiteCoin",
+        hps: 131072,
+        cb: true,
+        ebc: true,
+        rpc: 9332,
+        aux: [],
+        auxonly: false
+    });
+    
+    addType({
+        type: "fbx",
+        title: "FairBrix",
+        hps: 131072,
+        cb: true,
+        ebc: true,
+        rpc: 8645,
+        aux: [],
+        auxonly: false
+    });
+});
+
 var templates = {};
 
 $(document).ready(function () {

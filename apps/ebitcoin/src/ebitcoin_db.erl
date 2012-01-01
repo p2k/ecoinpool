@@ -469,15 +469,7 @@ do_update_views(DBS, S, PID) ->
 parse_client_document(ClientId, {DocProps}) ->
     DocType = proplists:get_value(<<"type">>, DocProps),
     Name = proplists:get_value(<<"name">>, DocProps),
-    {Chain, DefaultPort} = case proplists:get_value(<<"chain">>, DocProps) of
-        <<"btc">> -> {bitcoin, 8333};
-        <<"btc_testnet">> -> {bitcoin_testnet, 18333};
-        <<"nmc">> -> {namecoin, 8334};
-        <<"nmc_testnet">> -> {namecoin_testnet, 18334};
-        <<"ltc">> -> {litecoin, 9333};
-        <<"ltc_testnet">> -> {litecoin_testnet, 19333};
-        _ -> undefined
-    end,
+    {Chain, DefaultPort} = ebitcoin_chain_data:type_and_port(proplists:get_value(<<"chain">>, DocProps)),
     Host = proplists:get_value(<<"host">>, DocProps, <<"localhost">>),
     Port = proplists:get_value(<<"port">>, DocProps, DefaultPort),
     
@@ -629,87 +621,8 @@ store_view_update(_, _, State=#state{view_update_dbs=undefined}) ->
 store_view_update(DBName, TS, State=#state{view_update_dbs=ViewUpdateDBS}) ->
     State#state{view_update_dbs=dict:store(DBName, TS, ViewUpdateDBS)}.
 
-save_genesis_block(bitcoin, ClientDB, ClientTxDB) ->
-    ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
-    Header = #btc_header{
-        version = 1,
-        hash_prev_block = ZeroHash,
-        hash_merkle_root = base64:decode(<<"Sl4eS6q4nzoyUYqIwxvIf2GPdmc+LMd6shJ7ev3tozs=">>),
-        timestamp = 16#495fab29,
-        bits = 16#1d00ffff,
-        nonce = 16#7c2bac1d
-    },
-    Tx = #btc_tx{
-        version = 1,
-        tx_in = [#btc_tx_in{
-            prev_output_hash = ZeroHash,
-            prev_output_index = 16#ffffffff,
-            signature_script = [16#1d00ffff, <<4>>, <<"The Times 03/Jan/2009 Chancellor on brink of second bailout for banks">>],
-            sequence = 16#ffffffff
-        }],
-        tx_out = [#btc_tx_out{
-            value = 5000000000,
-            pk_script = base64:decode(<<"QQRniv2w/lVIJxln8aZxMLcQXNaoKOA5CaZ5YuDqH2Hetkn2vD9M7zjE81UE5R7BEt5cOE33uguNV4pMcCtr8R1frA==">>)
-        }],
-        lock_time = 0
-    },
-    BlockHash = <<"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f">>,
-    ok = save_doc(ClientDB, make_block_header_document(0, BlockHash, Header, 1)),
-    ok = save_doc(ClientTxDB, make_tx_document(BlockHash, 0, Tx));
-
-save_genesis_block(namecoin, ClientDB, ClientTxDB) ->
-    ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
-    Header = #btc_header{
-        version = 1,
-        hash_prev_block = ZeroHash,
-        hash_merkle_root = base64:decode(<<"QcYtvZBoyJpElSXjzVrGGyDs4ow8OLPzWyFh8ObTyw0=">>),
-        timestamp = 16#4daa33c1,
-        bits = 16#1c007fff,
-        nonce = 16#a21ea192
-    },
-    Tx = #btc_tx{
-        version = 1,
-        tx_in = [#btc_tx_in{
-            prev_output_hash = ZeroHash,
-            prev_output_index = 16#ffffffff,
-            signature_script = [16#1c007fff, 522, <<"... choose what comes next.  Lives of your own, or a return to chains. -- V">>],
-            sequence = 16#ffffffff
-        }],
-        tx_out = [#btc_tx_out{
-            value = 5000000000,
-            pk_script = base64:decode(<<"QQS2IDaQUM2Jn/u8To7lHoxFNKhVu0Y0OdY9I11HeWhdi29IcKI4zzZayU+hPvmioizZnQ1e6G3K\nvK/ONses9DzlrA==">>)
-        }],
-        lock_time = 0
-    },
-    BlockHash = <<"000000000062b72c5e2ceb45fbc8587e807c155b0da735e6483dfba2f0a9c770">>,
-    ok = save_doc(ClientDB, make_block_header_document(0, BlockHash, Header, 1)),
-    ok = save_doc(ClientTxDB, make_tx_document(BlockHash, 0, Tx));
-
-save_genesis_block(litecoin, ClientDB, ClientTxDB) ->
-    ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
-    Header = #btc_header{
-        version = 1,
-        hash_prev_block = ZeroHash,
-        hash_merkle_root = base64:decode(<<"l937uua+l/1s3z58oTIyo6//I1Pim636t/cwEe3Uztk=">>),
-        timestamp = 16#4e8eaab9,
-        bits = 16#1d00ffff,
-        nonce = 16#7c3f51cd
-    },
-    Tx = #btc_tx{
-        version = 1,
-        tx_in = [#btc_tx_in{
-            prev_output_hash = ZeroHash,
-            prev_output_index = 16#ffffffff,
-            signature_script = [16#1d00ffff, <<4>>, <<"NY Times 05/Oct/2011 Steve Jobs, Apple", 226, 128, 153, "s Visionary, Dies at 56">>],
-            sequence = 16#ffffffff
-        }],
-        tx_out = [#btc_tx_out{
-            value = 5000000000,
-            pk_script = base64:decode(<<"QQQBhHEPpomtUCNpDIDzpJyPE/jUW4yFf7y8i8So5NPrSxD01GBPoI3OYBqvD0cCFv4bUYULSs8hsXnEUHCsewOprA==">>)
-        }],
-        lock_time = 0
-    },
-    BlockHash = <<"12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2">>,
+save_genesis_block(Chain, ClientDB, ClientTxDB) ->
+    {BlockHash, Header, Tx} = ebitcoin_chain_data:genesis_block(Chain),
     ok = save_doc(ClientDB, make_block_header_document(0, BlockHash, Header, 1)),
     ok = save_doc(ClientTxDB, make_tx_document(BlockHash, 0, Tx)).
 

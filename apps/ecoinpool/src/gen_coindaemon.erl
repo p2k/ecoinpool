@@ -26,6 +26,8 @@ behaviour_info(callbacks) ->
     [
         % start_link(SubpoolId, Config)
         %   Starts the CoinDaemon. Config is a property list.
+        %   It is guaranteed that the config property list contains at least
+        %   one pair {pool_type, PoolType} where PoolType is an atom.
         %   Should return {ok, PID} for later reference or an error.
         {start_link, 2},
         

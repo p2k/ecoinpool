@@ -34,16 +34,7 @@ userCtx.ready(function () {
     
     var aux_daemon_config;
     
-    var hashesPerShare = 0;
-    switch (doc.pool_type) {
-        case "btc":
-            hashesPerShare = 4295032833;
-            break;
-        case "sc":
-        case "ltc":
-            hashesPerShare = 131072;
-            break;
-    }
+    var thisPoolTypeInfo = poolTypeInfo.get(doc.pool_type);
     
     function daemonText (daemon) {
         if (daemon === undefined)
@@ -111,22 +102,20 @@ userCtx.ready(function () {
     
     function editCoinDaemonConfig () {
         var pool_type = $("#pool_type select").val();
-        switch (pool_type) {
-            case "btc":
-            case "ltc":
-                ebitcoinDb.view("clients/by_chain", {
-                    key: pool_type,
-                    success: function (resp) {
-                        ebitcoinClients = $.map(resp.rows, function (row) {
-                            return {title: row.value, value: row.id};
-                        });
-                        showCoinDaemonDialog((pool_type == "btc" ? "BitCoin" : "LiteCoin"), (pool_type == "btc" ? 8332 : 9332), true, true);
-                    }
-                });
-                break;
-            case "sc":
-                showCoinDaemonDialog("SolidCoin", 8555, false, false);
-                break;
+        var info = poolTypeInfo.get(pool_type);
+        if (info.ebc) { // Pool can use ebitcoin -> get clients
+            ebitcoinDb.view("clients/by_chain", {
+                key: pool_type,
+                success: function (resp) {
+                    ebitcoinClients = $.map(resp.rows, function (row) {
+                        return {title: row.value, value: row.id};
+                    });
+                    showCoinDaemonDialog(info.title, info.rpc, info.cb, true);
+                }
+            });
+        }
+        else {
+            showCoinDaemonDialog(info.title, info.rpc, info.cb, false);
         }
     };
     
@@ -156,33 +145,40 @@ userCtx.ready(function () {
     };
     
     function editAuxDaemonConfig () {
-        switch ($("#aux_pool_type select").val()) {
-            case "nmc":
-                ebitcoinDb.view("clients/by_chain", {
-                    key: "nmc",
-                    success: function (resp) {
-                        ebitcoinClients = $.map(resp.rows, function (row) {
-                            return {title: row.value, value: row.id};
-                        });
-                        showAuxDaemonDialog("NameCoin", 8335, false, true);
-                    }
-                });
-                break;
+        var pool_type = $("#aux_pool_type select").val();
+        var info = poolTypeInfo.get(pool_type);
+        if (info.ebc) { // Aux pool can use ebitcoin -> get clients
+            ebitcoinDb.view("clients/by_chain", {
+                key: pool_type,
+                success: function (resp) {
+                    ebitcoinClients = $.map(resp.rows, function (row) {
+                        return {title: row.value, value: row.id};
+                    });
+                    showAuxDaemonDialog(info.title, info.rpc, info.cb, true);
+                }
+            });
+        }
+        else {
+            showAuxDaemonDialog(info.title, info.rpc, info.cb, false);
         }
     };
     
     function updateAuxChainSelector () {
         var apts = $("#aux_pool_type select");
-        switch ($("#pool_type select").val()) {
-            case "btc":
-                setFieldEnabled("#aux_pool_type", true);
-                apts.find("option:first").text("(none)");
-                break;
-            default:
-                setFieldEnabled("#aux_pool_type", false);
-                apts.find("option:first").text("(unsupported)");
-                apts.val("");
-                break;
+        var aux_pools = poolTypeInfo.getAux($("#pool_type select").val());
+        if (aux_pools.length > 0) {
+            setFieldEnabled("#aux_pool_type", true);
+            apts.find("option:first").text("(none)");
+            apts.find("option").not(":first").remove();
+            $.each(aux_pools, function () {
+                apts.append('<option value="' + this.type + '">' + this.title + '</option>')
+            });
+        }
+        else {
+            setFieldEnabled("#aux_pool_type", false);
+            apts.find("option:first").text("(unsupported)");
+            apts.val("");
+            apts.find("option").not(":first").remove();
         }
         apts.change();
     };
@@ -204,7 +200,7 @@ userCtx.ready(function () {
         var aux_pool = doc.aux_pool || {};
         aux_daemon_config = aux_pool.aux_daemon;
         var config = [
-            {id: "pool_type", name: "Main Chain:", field: {type: "select", options: [{value: "btc", title: "BitCoin"}, {value: "ltc", title: "LiteCoin"}, {value: "sc", title: "SolidCoin"}], value: doc.pool_type}},
+            {id: "pool_type", name: "Main Chain:", field: {type: "select", options: poolTypeInfo.getAsOptions(poolTypeInfo.allMainTypes), value: doc.pool_type}},
             {id: "name", name: "Name:", field: {type: "text", value: doc.name}},
             {id: "port", name: "Port:", field: {type: "text", value: doc.port}},
             {id: "round", name: "Round:", field: {type: "text", value: doc.round, optional: "Do not count rounds"}},
@@ -212,7 +208,7 @@ userCtx.ready(function () {
             {id: "max_work_age", name: "Max. Work Age:", field: {type: "text", value: doc.max_work_age, optional: "Default (20s)", suffix: "seconds"}},
             {id: "coin_daemon", name: "CoinDaemon Config:", field: {type: "extended", label: "Edit...", value: daemonText(doc.coin_daemon)}},
             
-            {id: "aux_pool_type", name: "Aux Pool Chain:", field: {type: "select", options: [{value: "", title: "(none)"}, {value: "nmc", title: "NameCoin"}], value: aux_pool.pool_type}},
+            {id: "aux_pool_type", name: "Aux Pool Chain:", field: {type: "select", options: $.merge([{value: "", title: "(none)"}], poolTypeInfo.getAsOptions(poolTypeInfo.getAux(doc.pool_type))), value: aux_pool.pool_type}},
             {id: "aux_pool_name", name: "Aux Pool Name:", field: {type: "text", value: aux_pool.name}},
             {id: "aux_pool_round", name: "Aux Pool Round:", field: {type: "text", value: aux_pool.round, optional: "Do not count rounds"}},
             {id: "aux_daemon", name: "AuxDaemon Config:", field: {type: "extended", label: "Edit...", value: daemonText(aux_daemon_config)}}
@@ -621,7 +617,7 @@ userCtx.ready(function () {
         var s = 0;
         for (var i = 0; i < 10; i++)
             s += shd.shares_per_minute[i];
-        s = s * hashesPerShare / 600;
+        s = s * thisPoolTypeInfo.hps / 600;
         tr.children(".speed").text(formatHashspeed(s));
     };
     
@@ -646,7 +642,7 @@ userCtx.ready(function () {
         var inits = [];
         
         if (doc._rev !== undefined) {
-            var wrk = renderWorkers(userId, (isSelf ? "My Workers" : userName + "'s Workers"), isSelf);
+            var wrk = renderWorkers(userId, (isSelf ? "My Workers" : userName + "'s Workers"), isSelf && userCtx.isLoggedIn);
             $.merge(toolbuttons, wrk.toolbuttons);
             tabs.push(wrk.tab);
             inits.push(wrk.init);
@@ -792,7 +788,7 @@ userCtx.ready(function () {
     // Second step: check the user ID
     function checkUserId () {
         if (doc._rev === undefined) { // New Subpool -> skip
-            displaySubpool(null, null, false, false);
+            displaySubpool(null, null, false);
             return;
         }
         
@@ -806,7 +802,7 @@ userCtx.ready(function () {
         var myUserId = userCtx.userIdInSubpool(doc);
         if (userId === null) {
             if (myUserId === null) { // No user ID -> render empty
-                displaySubpool(null, null, false, false);
+                displaySubpool(null, null, true);
                 return;
             }
             else {

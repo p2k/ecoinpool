@@ -466,6 +466,7 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
     PoolType = case proplists:get_value(<<"pool_type">>, DocProps) of
         <<"btc">> -> btc;
         <<"ltc">> -> ltc;
+        <<"fbx">> -> fbx;
         <<"sc">> -> sc;
         _ -> undefined
     end,

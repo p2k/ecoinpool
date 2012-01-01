@@ -143,8 +143,14 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     % Extract config
     #subpool{id=SubpoolId, name=SubpoolName, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig, aux_pool=Auxpool} = Subpool,
     #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig, aux_pool=OldAuxpool} = OldSubpool,
-    % Derive the CoinDaemon module name from PoolType + "_coindaemon"
-    CoinDaemonModule = list_to_atom(lists:concat([PoolType, "_coindaemon"])),
+    % Derive the CoinDaemon module name from PoolType + "_coindaemon", except for SCrypt pools which are all handled by scrypt_coindaemon
+    CoinDaemonModule = if
+        PoolType =:= ltc;
+        PoolType =:= fbx ->
+            scrypt_coindaemon;
+        true ->
+            list_to_atom(lists:concat([PoolType, "_coindaemon"]))
+    end,
     
     % Setup the shares database
     ok = ecoinpool_db:setup_shares_db(Subpool),
@@ -182,7 +188,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     end,
     {ok, CoinDaemon} = if
         StartCoinDaemon ->
-            case ecoinpool_server_sup:start_coindaemon(SubpoolId, CoinDaemonModule, CoinDaemonConfig) of
+            case ecoinpool_server_sup:start_coindaemon(SubpoolId, CoinDaemonModule, [{pool_type, PoolType} | CoinDaemonConfig]) of
                 {ok, NewCoinDaemon} -> {ok, NewCoinDaemon};
                 Error -> log4erl:fatal(server, "~s: Could not start CoinDaemon!", [SubpoolName]), ecoinpool_rpc:stop_rpc(Port), Error % Fail but close the RPC beforehand
             end;
@@ -729,7 +735,7 @@ check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool, Start
     end,
     if
         StartAuxDaemon ->
-            case ecoinpool_server_sup:add_auxdaemon(SubpoolId, AuxDaemonModule, AuxDaemonConfig, undefined) of
+            case ecoinpool_server_sup:add_auxdaemon(SubpoolId, AuxDaemonModule, [{pool_type, PoolType} | AuxDaemonConfig], undefined) of
                 {ok, NewMMM} -> NewMMM;
                 _Error -> log4erl:warn(server, "~s: Could not start AuxDaemon!", [SubpoolName]), undefined
             end;
