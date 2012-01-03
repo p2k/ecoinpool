@@ -39,7 +39,8 @@
     store_invalid_share/5,
     store_invalid_share/6,
     setup_sub_pool_user_id/3,
-    set_view_update_interval/1
+    set_view_update_interval/1,
+    update_site/0
 ]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -115,6 +116,10 @@ setup_sub_pool_user_id(SubpoolId, UserName, Callback) ->
 -spec set_view_update_interval(Seconds :: integer()) -> ok.
 set_view_update_interval(Seconds) ->
     gen_server:cast(?MODULE, {set_view_update_interval, Seconds}).
+
+-spec update_site() -> ok.
+update_site() ->
+    gen_server:cast(?MODULE, update_site).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -380,6 +385,18 @@ handle_cast({set_view_update_interval, Seconds}, State=#state{view_update_interv
                     end,
                     {noreply, State#state{view_update_interval=Seconds, view_update_timer=Timer, view_update_dbs=ViewUpdateDBS}}
             end
+    end;
+
+handle_cast(update_site, State=#state{conf_db=ConfDb}) ->
+    {ok, SDoc} = file:read_file(filename:join(code:priv_dir(ecoinpool), "main_db_site.json")),
+    Doc = ejson:decode(SDoc),
+    case couchbeam:lookup_doc_rev(ConfDb, "_design/site") of
+        {error, not_found} ->
+            {ok, _} = couchbeam:save_doc(ConfDb, Doc),
+            {noreply, State};
+        Rev ->
+            {ok, _} = couchbeam:save_doc(ConfDb, couchbeam_doc:set_value(<<"_rev">>, Rev, Doc)),
+            {noreply, State}
     end;
 
 handle_cast(_Message, State) ->

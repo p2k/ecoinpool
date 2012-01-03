@@ -1,0 +1,9 @@
+{
+   "_id": "_design/clients",
+   "language": "javascript",
+   "views": {
+       "by_chain": {
+           "map": "function(doc) {if (doc.type === 'client') emit(doc.chain, doc.name);}"
+       }
+   }
+}

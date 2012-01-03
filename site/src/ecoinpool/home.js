@@ -26,7 +26,7 @@ userCtx.ready(function () {
     var pageTabs;
     
     function loadSubpools () {
-        confDb.view("doctypes/doctypes", {
+        ecoinpoolDb.view("doctypes/doctypes", {
             key: "sub-pool",
             include_docs: true,
             success: function (resp) {
@@ -48,14 +48,14 @@ userCtx.ready(function () {
                 });
                 
                 var tabs = [
-                    {id: "active_subpools", title: "Active Subpools", elt: $(templates.subpoolsTable({subpools: active}))}
+                    {id: "active_subpools", title: "Active Subpools", elt: $(templates.subpoolsTable({id: "active_subpools_table", subpools: active}))}
                 ];
                 
                 $("#content").empty();
                 
                 if (userCtx.isAdmin()) {
                     makeToolbar([{type: "add", title: "New Subpool", href: "subpool/"}]);
-                    tabs.push({id: "inactive_subpools", title: "Inactive Subpools", elt: $(templates.subpoolsTable({subpools: inactive}))});
+                    tabs.push({id: "inactive_subpools", title: "Inactive Subpools", elt: $(templates.subpoolsTable({id: "inactive_subpools_table", subpools: inactive}))});
                 }
                 else {
                     makeToolbar();
@@ -67,7 +67,7 @@ userCtx.ready(function () {
     };
     
     // Start by loading the main configuration
-    confDb.openDoc("configuration", {
+    ecoinpoolDb.openDoc("configuration", {
         success: function (conf) {
             activeSubpools = conf.active_subpools;
             loadSubpools();
@@ -77,7 +77,7 @@ userCtx.ready(function () {
             var fixthis = "";
             if (userCtx.isAdmin())
                 fixthis = ' <a href="subpool/">Fix this</a>.';
-            makeToolbar("This pool has been freshly installed and is not configured yet." + fixthis);
+            makeToolbar("This server has been freshly installed and is not configured yet." + fixthis);
         }
     });
 });

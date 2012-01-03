@@ -277,7 +277,7 @@ userCtx.ready(function () {
                 newWorker.lp_heartbeat = (data.lp_heartbeat ? undefined : false);
                 if (newName != worker.name) {
                     newWorker.name = newName;
-                    confDb.view("workers/by_sub_pool_and_name", {
+                    ecoinpoolDb.view("workers/by_sub_pool_and_name", {
                         key: [doc._id, newName],
                         success: function (resp) {
                             if (resp.rows.length > 0)
@@ -342,7 +342,7 @@ userCtx.ready(function () {
                     newWorker.lp = false;
                 if (!data.lp_heartbeat)
                     newWorker.lp_heartbeat = false;
-                confDb.view("workers/by_sub_pool_and_name", {
+                ecoinpoolDb.view("workers/by_sub_pool_and_name", {
                     key: [doc._id, newName],
                     success: function (resp) {
                         if (resp.rows.length > 0)
@@ -698,7 +698,7 @@ userCtx.ready(function () {
         }
         
         // Submit
-        confDb.saveDoc(doc, {
+        ecoinpoolDb.saveDoc(doc, {
             success: function (resp) {
                 var path = location.href.split("/");
                 var last = path[path.length-1];
@@ -716,7 +716,7 @@ userCtx.ready(function () {
     };
     
     function saveWorker (worker, callback) {
-        confDb.saveDoc(worker, {
+        ecoinpoolDb.saveDoc(worker, {
             success: function (resp) {
                 if (workerIndexMap[worker._id] === undefined) {
                     if (workers.length == 0) { // Created first worker
@@ -760,7 +760,7 @@ userCtx.ready(function () {
                 mainConfig.active_subpools.splice(pos, 1);
         }
         
-        confDb.saveDoc(mainConfig, {
+        ecoinpoolDb.saveDoc(mainConfig, {
             success: function (resp) {
                 location.reload();
             },
@@ -774,7 +774,7 @@ userCtx.ready(function () {
     sidebar.addMainNavItem(siteURL + "_show/subpool/" + (doc._rev === undefined ? '' : doc._id), (doc._rev === undefined ? "New Subpool" : doc.name), true);
     
     // Start by loading the main configuration
-    confDb.openDoc("configuration", {
+    ecoinpoolDb.openDoc("configuration", {
         success: function (conf) {
             mainConfig = conf;
             checkUserId();
@@ -827,7 +827,7 @@ userCtx.ready(function () {
     
     // Third step: load the workers for the user
     function loadWorkers (userId, userName, isSelf) {
-        confDb.view("workers/by_sub_pool_and_user_id", {
+        ecoinpoolDb.view("workers/by_sub_pool_and_user_id", {
             key: [doc._id, userId],
             include_docs: true,
             success: function (resp) {

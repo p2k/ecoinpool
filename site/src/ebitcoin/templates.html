@@ -1,0 +1,133 @@
+<!--
+
+Copyright (C) 2011  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
+
+This file is part of ebitcoin.
+
+ebitcoin is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+ebitcoin is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with ebitcoin.  If not, see <http://www.gnu.org/licenses/>.
+
+-->
+
+<script id="sidebar-template" type="text/x-handlebars-template">
+  <div id="sidebar">
+    <div id="logo">
+      <p><strong>ebitcoin</strong> v0.1.3</p>
+      <p>Bitcoin Block Monitor &amp; Explorer<br/>by <a href="https://github.com/p2k">p2k</a></p>
+    </div>
+    <ul id="nav">
+      <li>
+        <span>Main Navigation</span>
+        <ul>
+          <li><a href="/ebitcoin/_design/site/_show/home">Home</a></li>
+        </ul>
+      </li>
+      <li>
+        <span>Other</span>
+        <ul>
+          <li><a href="/ecoinpool/_design/site/_show/home">ecoinpool</a></li>
+          <li><a href="/_utils/index.html">Explore CouchDB</a></li>
+        </ul>
+      </li>
+    </ul>
+    <div id="footer">
+      <span id="userCtx">
+        <span class="loggedout">
+          <a href="#" class="signup">Signup</a> or <a href="#" class="login">Login</a>
+        </span>
+        <span class="loggedin">
+          Logged in as: <span class="name">?</span>
+          <br/>
+          <a href="#" class="changepass">Change password</a> or
+          <a href="#" class="logout">Logout</a>
+        </span>
+      </span>
+      <hr/>
+      <span class="couch">
+        <a href="http://ecoinpool.p2k-network.org/">ebitcoin</a> on <a id="product_link" href="http://couchdb.apache.org/">Apache CouchDB</a>
+        <span id="version">?</span>
+      </span>
+    </div>
+  </div>
+</script>
+
+<script id="commonDialog-template" type="text/x-handlebars-template">
+  <form action="" method="post">
+    <h2>{{title}}</h2>
+    <fieldset>
+      {{#if help}}<p class="help">{{{help}}}</p>{{/if}}
+      <table summary="">
+        <tbody>
+          {{#each fields}}
+          <tr>
+            <th><label{{#if title}} title="{{title}}"{{/if}}>{{label}}</label></th>
+            <td>{{{form_field .}}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </fieldset>
+    <div class="buttons">
+      <button type="submit">{{#if submit}}{{submit}}{{else}}OK{{/if}}</button>
+      <button type="button" class="cancel">{{#if cancel}}{{cancel}}{{else}}Cancel{{/if}}</button>
+    </div>
+  </form>
+</script>
+
+<script id="clientsTable-template" type="text/x-handlebars-template">
+  <table id="{{id}}" class="listing" cellpadding="0">
+    <caption>Sub-Pools</caption>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Chain</th>
+        <th>Last Block</th>
+      </tr>
+    </thead>
+    <tbody class="content">
+    {{#each_striped clients}}
+      <tr{{#if odd}} class="odd"{{/if}}>
+        <th><a href="client/{{id}}">{{name}}</a></th>
+        <td>{{chain}}</td>
+        <td class="last_block">(not implemented yet)</td>
+      </tr>
+    {{/each_striped}}
+    </tbody>
+    <tbody class="footer">
+      <tr><td colspan="4">Showing {{clients.length}} Client{{plural_s clients.length}}</td></tr>
+    </tbody>
+  </table>
+</script>
+
+<script id="configTable-template" type="text/x-handlebars-template">
+  <table id="client_config" class="listing" cellpadding="0">
+    <caption>Client Configuration</caption>
+    <thead>
+      <tr>
+        <th width="200" class="key">Field</th>
+        <th class="value">Value</th>
+      </tr>
+    </thead>
+    <tbody class="content">
+    {{#each_striped config}}
+      <tr{{#if odd}} class="odd"{{/if}}>
+        <th><b>{{name}}</b></th>
+        <td id="{{id}}">{{{form_field field}}}</td>
+      </tr>
+    {{/each_striped}}
+    </tbody>
+    <tbody class="footer">
+      <tr><td colspan="2">ID: {{id}} - Revision: {{rev}}</td></tr>
+    </tbody>
+  </table>
+</script>

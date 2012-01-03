@@ -1,4 +1,6 @@
 function (doc, req) {
+    var urlPrefix = "";
+    var siteURL = "../../";
     var name;
     if (doc === null) {
         name = "New Subpool";
@@ -18,18 +20,20 @@ function (doc, req) {
         '<head>',
         '  <title>ecoinpool - ' + name + '</title>',
         '  <meta http-equiv="content-type" content="application/xhtml+xml; charset=UTF-8" />',
-        '  <link rel="stylesheet" href="../../style.css" type="text/css">',
-        '  <script type="text/javascript" src="../../handlebars.1.0.0.beta.3.js"></script>',
-        '  <script type="text/javascript" src="/_utils/script/jquery.js"></script>',
-        '  <script type="text/javascript" src="/_utils/script/jquery.couch.js"></script>',
-        '  <script type="text/javascript" src="../../jquery.dialog.js"></script>',
-        '  <script type="text/javascript" src="/_utils/script/sha1.js"></script>',
+        '  <link rel="stylesheet" href="' + siteURL + 'style.css" type="text/css">',
+        '  <script type="text/javascript" src="' + siteURL + 'handlebars.1.0.0.beta.3.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'jquery.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'jquery.couch.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'jquery.dialog.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'sha1.js"></script>',
         '  <script type="text/javascript">',
+        '    $.couch.urlPrefix = "' + urlPrefix + '";',
+        '    var siteURL = "' + siteURL + '";',
         '    var db_info = ' + JSON.stringify(req.info) + ';',
         '    var doc = ' + (doc === null ? '{"_id": "' + req.uuid + '", "type": "sub-pool"}' : JSON.stringify(doc)) + ';',
         '  </script>',
-        '  <script type="text/javascript" src="../../ecoinpool.js"></script>',
-        '  <script type="text/javascript" src="../../subpool.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'common.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'subpool.js"></script>',
         '</head>',
         '<body class="loading">',
         '  <div id="wrap">',

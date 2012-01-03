@@ -1,33 +1,58 @@
 
-## Makefile for building the site design document ##
+## Makefile for building the site design documents ##
 
 SRC_DIR = src
 BUILD_DIR = build
 CC_JAR = compiler.jar
 SASS = sass
 ESCRIPT = escript
-MOVE = mv
+COPY = cp
 
-TARGET = main_db_site.json
-INSTALL_PATH = ../apps/ecoinpool/priv/
+ECOINPOOL_TARGET = ecoinpool_site.json
+ECOINPOOL_INSTALL_PATH = ../apps/ecoinpool/priv/main_db_site.json
 
-RESOURCES = $(SRC_DIR)/unload.png \
-    $(SRC_DIR)/templates.html
+ECOINPOOL_RESOURCES = $(SRC_DIR)/unload.png \
+    $(SRC_DIR)/ecoinpool/templates.html
 
-SCRIPTS = $(BUILD_DIR)/handlebars.1.0.0.beta.3.js \
+ECOINPOOL_SCRIPTS = $(BUILD_DIR)/handlebars.1.0.0.beta.3.js \
+	$(BUILD_DIR)/sha1.js \
+	$(BUILD_DIR)/jquery.js \
+	$(BUILD_DIR)/jquery.couch.js \
 	$(BUILD_DIR)/jquery.dialog.js \
-	$(BUILD_DIR)/ecoinpool.js \
-	$(BUILD_DIR)/home.js \
-	$(BUILD_DIR)/subpool.js
+	$(BUILD_DIR)/common.js \
+	$(BUILD_DIR)/ecoinpool/home.js \
+	$(BUILD_DIR)/ecoinpool/subpool.js
 
-STYLES = $(BUILD_DIR)/style.css
+ECOINPOOL_STYLES = $(BUILD_DIR)/style.css
 
-LOADERS = $(SRC_DIR)/home.loader.js \
-	$(SRC_DIR)/subpool.loader.js
+ECOINPOOL_LOADERS = $(SRC_DIR)/ecoinpool/home.loader.js \
+	$(SRC_DIR)/ecoinpool/subpool.loader.js
+
+
+EBITCOIN_TARGET = ebitcoin_site.json
+EBITCOIN_INSTALL_PATH = ../apps/ebitcoin/priv/main_db_site.json
+
+EBITCOIN_RESOURCES = $(SRC_DIR)/unload.png \
+    $(SRC_DIR)/ebitcoin/templates.html
+
+EBITCOIN_SCRIPTS = $(BUILD_DIR)/handlebars.1.0.0.beta.3.js \
+	$(BUILD_DIR)/sha1.js \
+	$(BUILD_DIR)/jquery.js \
+	$(BUILD_DIR)/jquery.couch.js \
+	$(BUILD_DIR)/jquery.dialog.js \
+	$(BUILD_DIR)/common.js \
+	$(BUILD_DIR)/ebitcoin/home.js \
+	$(BUILD_DIR)/ebitcoin/client.js
+
+EBITCOIN_STYLES = $(BUILD_DIR)/style.css
+
+EBITCOIN_LOADERS = $(SRC_DIR)/ebitcoin/home.loader.js \
+	$(SRC_DIR)/ebitcoin/client.loader.js
 
 
 $(BUILD_DIR)/%.js: $(SRC_DIR)/%.js
 	@echo "  CLC $<"
+	@mkdir -p `dirname $@`
 	@java -jar $(CC_JAR) --js $< --js_output_file $@
 
 $(BUILD_DIR)/%.css: $(SRC_DIR)/%.scss
@@ -35,13 +60,18 @@ $(BUILD_DIR)/%.css: $(SRC_DIR)/%.scss
 	@$(SASS) --scss --compass $< $@
 
 
-.PHONY: all
+.PHONY: all install
 
-$(TARGET): $(LOADERS) $(SCRIPTS) $(STYLES) $(RESOURCES) site_maker.escript
+all: $(ECOINPOOL_TARGET) $(EBITCOIN_TARGET)
+
+$(ECOINPOOL_TARGET): $(ECOINPOOL_LOADERS) $(ECOINPOOL_SCRIPTS) $(ECOINPOOL_STYLES) $(ECOINPOOL_RESOURCES) site_maker.escript
 	@echo "  Writing $@ ..."
-	@$(ESCRIPT) site_maker.escript --loaders $(LOADERS) --resources $(SCRIPTS) $(STYLES) $(RESOURCES) --target $@
+	@$(ESCRIPT) site_maker.escript --loaders $(ECOINPOOL_LOADERS) --resources $(ECOINPOOL_SCRIPTS) $(ECOINPOOL_STYLES) $(ECOINPOOL_RESOURCES) --target $@
 
-all: $(TARGET)
+$(EBITCOIN_TARGET): $(EBITCOIN_LOADERS) $(EBITCOIN_SCRIPTS) $(EBITCOIN_STYLES) $(EBITCOIN_RESOURCES) site_maker.escript
+	@echo "  Writing $@ ..."
+	@$(ESCRIPT) site_maker.escript --loaders $(EBITCOIN_LOADERS) --resources $(EBITCOIN_SCRIPTS) $(EBITCOIN_STYLES) $(EBITCOIN_RESOURCES) --target $@
 
-install: $(TARGET)
-	$(MOVE) $< $(INSTALL_PATH)
+install: $(ECOINPOOL_TARGET) $(EBITCOIN_TARGET)
+	$(COPY) $(ECOINPOOL_TARGET) $(ECOINPOOL_INSTALL_PATH)
+	$(COPY) $(EBITCOIN_TARGET) $(EBITCOIN_INSTALL_PATH)

@@ -1,0 +1,15 @@
+{
+   "_id": "_design/headers",
+   "language": "javascript",
+   "views": {
+       "by_block_num": {
+           "map": "function(doc) {emit(doc.block_num, null);}"
+       },
+       "missing_tx": {
+           "map": "function(doc) {if (doc.n_tx == 0) emit(doc.block_num, null);}"
+       },
+       "next_header": {
+           "map": "function(doc) {emit(doc.prev_block, null);}"
+       }
+   }
+}

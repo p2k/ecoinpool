@@ -1,0 +1,31 @@
+function (doc, req) {
+    var urlPrefix = "";
+    var siteURL = "../";
+    return ['<?xml version="1.0" encoding="UTF-8"?>',
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">',
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">',
+        '<head>',
+        '  <title>ecoinpool - Home</title>',
+        '  <meta http-equiv="content-type" content="application/xhtml+xml; charset=UTF-8" />',
+        '  <link rel="stylesheet" href="' + siteURL + 'style.css" type="text/css">',
+        '  <script type="text/javascript" src="' + siteURL + 'handlebars.1.0.0.beta.3.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'jquery.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'jquery.couch.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'jquery.dialog.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'sha1.js"></script>',
+        '  <script type="text/javascript">',
+        '    $.couch.urlPrefix = "' + urlPrefix + '";',
+        '    var siteURL = "' + siteURL + '";',
+        '    var db_info = ' + JSON.stringify(req.info) + ';',
+        '  </script>',
+        '  <script type="text/javascript" src="' + siteURL + 'common.js"></script>',
+        '  <script type="text/javascript" src="' + siteURL + 'home.js"></script>',
+        '</head>',
+        '<body class="loading">',
+        '  <div id="wrap">',
+        '    <h1><strong>ecoinpool</strong></h1>',
+        '    <div id="content"><p>Loading...</p></div>',
+        '  </div>',
+        '</body>',
+        '</html>'].join("\n");
+}

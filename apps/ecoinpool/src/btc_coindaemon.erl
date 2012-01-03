@@ -444,7 +444,7 @@ send_block(URL, Auth, Header, Transactions) ->
     BData = btc_protocol:encode_block(#btc_block{header=Header, txns=Transactions}),
     HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
     PostData = "{\"method\":\"getmemorypool\",\"params\":[\"" ++ HexData ++ "\"]}",
-    log4erl:debug(daemon, "btc_coindaemon: Sending upstream: ~s", [PostData]),
+    log4erl:info(daemon, "btc_coindaemon: Sending upstream: ~s", [PostData]),
     case ecoinpool_util:send_http_req(URL, Auth, PostData) of
         {ok, "200", _ResponseHeaders, ResponseBody} ->
             {Body} = ejson:decode(ResponseBody),

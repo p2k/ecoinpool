@@ -2,20 +2,20 @@
 /*
  * Copyright (C) 2011  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
  *
- * This file is part of ecoinpool.
+ * This file is part of ebitcoin/ecoinpool.
  *
- * ecoinpool is free software: you can redistribute it and/or modify
+ * ebitcoin/ecoinpool is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * ecoinpool is distributed in the hope that it will be useful,
+ * ebitcoin/ecoinpool is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
+ * along with ebitcoin/ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -409,19 +409,19 @@ function makeToolbar (items) {
 
 var userCtx = new UserContext();
 var sidebar;
-var siteURL = "/ecoinpool/_design/site/";
 var usersDb;
-var confDb = $.couch.db("ecoinpool");
+var ecoinpoolDb = $.couch.db("ecoinpool");
 var ebitcoinDb = $.couch.db("ebitcoin");
 
 // Common pool type information structure
-// type = pool type; hps = hashes per share; cb = can modify coinbase; ebc = can use ebitcoin; rpc = default RPC port
+// type = pool type; hps = hashes per share; cb = can modify coinbase; ebc = can use ebitcoin; rpc = default RPC port; p2p = default peer-to-peer port
 // aux = list of pools for which this one can be used as aux pool; auxonly = true if the pool cannot be used as main pool
 var poolTypeInfo = new (function PoolTypeInfo () {
     var self = this;
     
     this.allTypes = [];
     this.allMainTypes = [];
+    this.allEbitcoinTypes = [];
     
     this.get = function (type) {
         return this[type] || {};
@@ -453,6 +453,8 @@ var poolTypeInfo = new (function PoolTypeInfo () {
         self.allTypes.push(data.type);
         if (!data.auxonly)
             self.allMainTypes.push(data.type);
+        if (data.ebc)
+            self.allEbitcoinTypes.push(data.type);
         self[data.type] = data;
     };
     
@@ -463,6 +465,7 @@ var poolTypeInfo = new (function PoolTypeInfo () {
         cb: true,
         ebc: true,
         rpc: 8332,
+        p2p: 8333,
         aux: ["nmc"],
         auxonly: false
     });
@@ -474,6 +477,7 @@ var poolTypeInfo = new (function PoolTypeInfo () {
         cb: false,
         ebc: true,
         rpc: 8335,
+        p2p: 8334,
         aux: [],
         auxonly: true
     });
@@ -496,6 +500,7 @@ var poolTypeInfo = new (function PoolTypeInfo () {
         cb: true,
         ebc: true,
         rpc: 9332,
+        p2p: 9333,
         aux: [],
         auxonly: false
     });
@@ -507,6 +512,7 @@ var poolTypeInfo = new (function PoolTypeInfo () {
         cb: true,
         ebc: true,
         rpc: 8645,
+        p2p: 8591,
         aux: [],
         auxonly: false
     });
@@ -578,7 +584,7 @@ $(document).ready(function () {
             $.showDialog(templates.commonDialog, {
                 context: {
                     title: "Login",
-                    help: "Login to ecoinpool with your name and password.",
+                    help: "Login with your name and password.",
                     fields: [
                         {name: "name", label: "Username:", type: "text", size: 24},
                         {name: "password", label: "Password:", type: "password", size: 24}
@@ -608,7 +614,7 @@ $(document).ready(function () {
             $.showDialog(templates.commonDialog, {
                 context: {
                     title: "Create User Account",
-                    help: "Create an user account on this ecoinpool server.<br/>You will be logged in as this user after the account has been created.",
+                    help: "Create an user account on this server.<br/>You will be logged in as this user after the account has been created.",
                     fields: [
                         {name: "name", label: "Username:", type: "text", size: 24},
                         {name: "password", label: "Password:", type: "password", size: 24}

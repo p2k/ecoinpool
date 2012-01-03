@@ -158,10 +158,10 @@ handle_cast({resync, FinalBlock}, State=#state{client=Client, last_block_num=Blo
         _ ->
             if
                 is_binary(FinalBlock) ->
-                    log4erl:info(ebitcoin, "~s: Entering resync mode...", [Name]),
+                    log4erl:warn(ebitcoin, "~s: Entering resync mode...", [Name]),
                     {0, undefined, FinalBlock};
                 is_integer(FinalBlock) ->
-                    log4erl:info(ebitcoin, "~s: Entering resync mode, getting ~b block(s)...", [Name, FinalBlock-BlockNum]),
+                    log4erl:warn(ebitcoin, "~s: Entering resync mode, getting ~b block(s)...", [Name, FinalBlock-BlockNum]),
                     {0, FinalBlock-BlockNum, FinalBlock}
             end
     end,
@@ -298,7 +298,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{client=Clien
         {Got, undefined, FinalBlock} ->
             case FinalBlock of
                 LastBlockHash ->
-                    log4erl:info(ebitcoin, "~s: Resync: Received final block header #~b", [Name, LastBlockNum]),
+                    log4erl:warn(ebitcoin, "~s: Resync: Received final block header #~b", [Name, LastBlockNum]),
                     broadcast_blockchange(BCListeners, ClientId, LastBlockHash, LastBlockNum),
                     ebitcoin_db:force_view_updates(Client),
                     false;
@@ -308,7 +308,7 @@ handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{client=Clien
                     {Got+StoredNow, undefined, FinalBlock}
             end;
         {Got, ToGo, _} when Got+StoredNow >= ToGo ->
-            log4erl:info(ebitcoin, "~s: Resync: Received final block header #~b", [Name, LastBlockNum]),
+            log4erl:warn(ebitcoin, "~s: Resync: Received final block header #~b", [Name, LastBlockNum]),
             broadcast_blockchange(BCListeners, ClientId, LastBlockHash, LastBlockNum),
             ebitcoin_db:force_view_updates(Client),
             false;

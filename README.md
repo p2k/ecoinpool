@@ -97,16 +97,20 @@ want to try [GNU Screen](http://www.gnu.org/software/screen/) like this:
 `screen -D -R -S ecoinpool_test ./test_launch.sh`
 
 It might be worth knowing that you are on an Erlang console now. You can enter
-some commands and evaluate expressions (not covered in this readme).
+some commands and evaluate expressions (not covered in this readme). All console
+commands end with a period followed by a newline.
 
 If you like to stop ecoinpool, you can quit via Ctrl+G and entering "q" at the
 prompt. Alternatively you can hit Ctrl+C and enter "a" or simply kill the
-process. There is no shutdown procedure intended to be run, it's perfectly safe
-to kill the process at any time. This is called "crash-only design".
+process. There is no shutdown procedure required to be run, it's perfectly safe
+to kill the process at any time. This is called "crash-only design". If you
+still want to exit ecoinpool gracefully (which, as a little motivation, will
+send "Server Terminating" as an error message to connected clients) enter `q().`
+at the console.
 
 After you started ecoinpool, head over to the main site at
 `http://<your domain>:5984/ecoinpool/_design/site/_show/home`. It should say
-"This pool has been freshly installed and is not configured yet. Fix this.". In
+"This server has been freshly installed and is not configured yet. Fix this.". In
 case you're no longer logged in on CouchDB (ecoinpool uses CouchDB's user and
 authentication system), do so by clicking "Login" on the lower right corner. The
 "Fix this" link will only appear for an admin user. Click it now.
@@ -152,50 +156,32 @@ ebitcoin
 --------
 
 ecoinpool comes bundled with ebitcoin, a block monitor and mini block explorer
-for bitcoin chains. Unfortunately, there is no special web interface available
-yet, so you have to configure it through CouchDB's stock frontend.
+for bitcoin chains. ebitcoin is configured in the same way as ecoinpool, using
+a built-in web frontend.
 
-Go to `http://<your domain>:5984/_utils/database.html?ebitcoin` to see the
-configuration database. Only three entries should be there, all of them starting
-with `_design/`. These are internal documents, so do not touch these.
+The main site for ebitcoin is at
+`http://<your domain>:5984/ebitcoin/_design/site/_show/home`. You will also find
+a link to ebitcoin within the sidebar of ecoinpool below "Other". If you visit
+the site for the first time, it should say "This server has been freshly
+installed and is not configured yet. Fix this.", just like for ecoinpool. Again,
+you must be logged in to access the configuration.
 
-To configure a new client:
+After clicking the link, you will see the Client configuration page. Choose one
+of the supported block chains, enter a name and optionally configure the host
+and port of the daemon you want to connect to.
 
-1. Click "New Document" on the top right corner. The new document only has the
-   `_id` field which is set to a new GUID. Copy the GUID to the clipboard as you
-   will need it later. Then just hit return or click the small tick next to the
-   text field to accept the GUID.
-2. Click "Add Field" and enter `type` as the field name, then hit tab or double
-   click on the word `null`, which is the field's current value, and change it
-   to `client`.
-3. Add another field, set `chain` as its name and `btc`, `ltc`, `fbx` or `nmc`
-   as its value. This is the chain type where you can choose between Bitcoin,
-   Litecoin, Fairbrix or Namecoin. No other options are available for now.
-4. Add one last field with `name` as its name and, for example, `btc-chain`,
-   `ltc-chain` or `nmc-chain` as its value. This will be the database name for
-   the block headers. You can choose any name as long as it doesn't collide with
-   your pool names.
-5. If the Bitcoin/Litecoin/Fairbrix/Namecoin daemon is not running on the same
-   server as ecoinpool, you have to add a field `host`. If you don't use the
-   default port you also have to add a field `port`.
-6. Save the document. Note that the client isn't active yet.
+Hit "Save Configuration" when you're finished. Finally click "Activate Client"
+after the page reloaded and ebitcoin will start synchronizing the block chain.
+This will take some minutes depending on the chain size. You can follow the
+process on the console or by looking at the logfiles.
 
-To activate a client:
-
-1. All client GUIDs have to be in a special document called `configuration`. It
-   doesn't exist on a fresh install and has to be created with "New Document".
-   After you've created the configuratin document, you just change the existing
-   one to activate more clients. Skip to step 4 in that case.
-2. Override the suggested GUID with the word `configuration`. This is important.
-3. Add a field `type` also with the value `configuration`.
-4. Add (or change) the field `active_clients`. The value is a list of strings in
-   JSON format. The GUIDs of all the client which should be active go into this
-   list. Example: `["7b403be6db8bcc74f0b7e0187a001bff", "61f20a9b65a68029dcd2491c4e002a31"]`
-5. Don't forget to save.
-
-To use a client with ecoinpool, open the Subpool via the ecoinpool web interface.
+To use a client with ecoinpool, open the Subpool via ecoinpool's web interface.
 On the configuration tab you can select an ebitcoin client from within the
-CoinDaemon and the AuxDaemon configuration panel.
+CoinDaemon and the AuxDaemon configuration panel. Only compatible clients will
+be displayed.
+
+Technical information: In the current implementation, ebitcoin will only store
+block headers (for Namecoin, this includes the aux proof-of-work).
 
 Compaction
 ----------
@@ -216,6 +202,10 @@ like this:
 Do this for each block chain or pool database. It is also recommended to run a
 compaction once ebitcoin has downloaded all block headers of a block chain for
 the first time.
+
+Compaction can also be triggered by CouchDB itself. Read default.ini on how to
+do this. This involves copying some sections to local.ini as it is not
+recommended to change default.ini directly.
 
 Logfiles
 --------

@@ -36,7 +36,8 @@
     get_block_height/2,
     get_block_locator_hashes/2,
     set_view_update_interval/1,
-    force_view_updates/1
+    force_view_updates/1,
+    update_site/0
 ]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -93,6 +94,9 @@ set_view_update_interval(Seconds) ->
 force_view_updates(#client{name=ClientName}) ->
     gen_server:cast(?MODULE, {force_view_updates, ClientName}).
 
+update_site() ->
+    gen_server:cast(?MODULE, update_site).
+
 %% ===================================================================
 %% Gen_Server callbacks
 %% ===================================================================
@@ -103,40 +107,17 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
     % Connect to server
     S = couchbeam:server_connection(DBHost, DBPort, DBPrefix, DBOptions),
     % Open config database
-    ConfDb = case couchbeam:db_exists(S, "ebitcoin") of
-        true ->
-            {ok, TheConfDb} = couchbeam:open_db(S, "ebitcoin"),
-            TheConfDb;
-        _ ->
-            case couchbeam:create_db(S, "ebitcoin") of
-                {ok, NewConfDb} -> % Create basic views and auth lock-out
-                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
-                        {<<"_id">>, <<"_design/doctypes">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"doctypes">>, {[{<<"map">>, <<"function (doc) {if (doc.type !== undefined) emit(doc.type, doc._id);}">>}]}}
-                        ]}},
-                        {<<"filters">>, {[
-                            {<<"clients_only">>, <<"function (doc, req) {return doc._deleted || doc.type == \"configuration\" || doc.type == \"client\";}">>}
-                        ]}}
-                    ]}),
-                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
-                        {<<"_id">>, <<"_design/clients">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"by_chain">>, {[{<<"map">>, <<"function(doc) {if (doc.type === 'client') emit(doc.chain, doc.name);}">>}]}}
-                        ]}}
-                    ]}),
-                    {ok, _} = couchbeam:save_doc(NewConfDb, {[
-                        {<<"_id">>, <<"_design/auth">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
-                    ]}),
-                    log4erl:info(ebitcoin, "Config database created!"),
-                    NewConfDb;
-                {error, Error} ->
-                    log4erl:fatal(ebitcoin, "config_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]), throw({error, Error})
-            end
+    ConfDb = case couchbeam:open_or_create_db(S, "ebitcoin") of
+        {ok, DB} ->
+            lists:foreach(fun check_design_doc/1, [
+                {DB, "doctypes", "main_db_doctypes.json"},
+                {DB, "clients", "main_db_clients.json"},
+                {DB, "auth", "common_auth.json"},
+                {DB, "site", "main_db_site.json"}
+            ]),
+            DB;
+        {error, Error} ->
+            log4erl:fatal(ebitcoin, "config_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]), throw({error, Error})
     end,
     % Start config monitor (asynchronously)
     gen_server:cast(?MODULE, start_cfg_monitor),
@@ -180,54 +161,26 @@ handle_call({get_client_record, ClientId}, _From, State=#state{conf_db=ConfDb}) 
 handle_call({setup_client_dbs, ClientName, Chain}, _From, State=#state{srv_conn=S}) ->
     SClientDB = binary:bin_to_list(ClientName),
     SClientTxDB = SClientDB ++ "-tx",
-    case couchbeam:db_exists(S, SClientDB) of
-        true ->
+    Existed = couchbeam:db_exists(S, SClientDB),
+    case {couchbeam:open_or_create_db(S, SClientDB), couchbeam:open_or_create_db(S, SClientTxDB)} of
+        {{ok, ClientDB}, {ok, ClientTxDB}} ->
+            lists:foreach(fun check_design_doc/1, [
+                {ClientDB, "headers", "client_db_headers.json"},
+                {ClientDB, "auth", "common_auth.json"},
+                {ClientTxDB, "transactions", "client_tx_db_transactions.json"},
+                {ClientTxDB, "auth", "common_auth.json"}
+            ]),
+            if
+                not Existed ->
+                    save_genesis_block(Chain, ClientDB, ClientTxDB),
+                    log4erl:info(ebitcoin, "Client databases \"~s\" and \"~s\" created!", [SClientDB, SClientTxDB]);
+                true ->
+                    ok
+            end,
             {reply, ok, State};
         _ ->
-            case couchbeam:db_exists(S, SClientTxDB) of
-                true -> {ok, _} = couchbeam:delete_db(S, SClientTxDB);
-                _ -> ok
-            end,
-            case {couchbeam:create_db(S, SClientDB), couchbeam:create_db(S, SClientTxDB)} of
-                {{ok, ClientDB}, {ok, ClientTxDB}} ->
-                    AuthDoc = {[
-                        {<<"_id">>, <<"_design/auth">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"validate_doc_update">>, <<"function(newDoc, oldDoc, userCtx) {if (userCtx.roles.indexOf('_admin') !== -1) return; else throw({forbidden: 'Only admins may edit the database'});}">>}
-                    ]},
-                    {ok, _} = couchbeam:save_doc(ClientDB, AuthDoc),
-                    {ok, _} = couchbeam:save_doc(ClientTxDB, AuthDoc),
-                    {ok, _} = couchbeam:save_doc(ClientDB, {[
-                        {<<"_id">>, <<"_design/headers">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"by_block_num">>, {[
-                                {<<"map">>, <<"function(doc) {emit(doc.block_num, null);}">>}
-                            ]}},
-                            {<<"missing_tx">>, {[
-                                {<<"map">>, <<"function(doc) {if (doc.n_tx == 0) emit(doc.block_num, null);}">>}
-                            ]}},
-                            {<<"next_header">>, {[
-                                {<<"map">>, <<"function(doc) {emit(doc.prev_block, null);}">>}
-                            ]}}
-                        ]}}
-                    ]}),
-                    {ok, _} = couchbeam:save_doc(ClientTxDB, {[
-                        {<<"_id">>, <<"_design/transactions">>},
-                        {<<"language">>, <<"javascript">>},
-                        {<<"views">>, {[
-                            {<<"by_block_hash">>, {[
-                                {<<"map">>, <<"function(doc) {emit([doc.block_hash, doc.index], null);}">>}
-                            ]}}
-                        ]}}
-                    ]}),
-                    save_genesis_block(Chain, ClientDB, ClientTxDB),
-                    log4erl:info(ebitcoin, "Client databases \"~s\" and \"~s\" created!", [SClientDB, SClientTxDB]),
-                    {reply, ok, State};
-                _ ->
-                    log4erl:error(ebitcoin, "client_db - errors occurred while creating client databases!"),
-                    {reply, error, State}
-            end
+            log4erl:error(ebitcoin, "client_db - errors occurred while creating client databases!"),
+            {reply, error, State}
     end;
 
 handle_call({get_last_block_info, ClientName}, _From, State=#state{srv_conn=S}) ->
@@ -397,6 +350,18 @@ handle_cast({force_view_updates, ClientName}, State=#state{srv_conn=S, view_upda
             {noreply, State} % Cannot force update while already running
     end;
 
+handle_cast(update_site, State=#state{conf_db=ConfDb}) ->
+    {ok, SDoc} = file:read_file(filename:join(code:priv_dir(ebitcoin), "main_db_site.json")),
+    Doc = ejson:decode(SDoc),
+    case couchbeam:lookup_doc_rev(ConfDb, "_design/site") of
+        {error, not_found} ->
+            {ok, _} = couchbeam:save_doc(ConfDb, Doc),
+            {noreply, State};
+        Rev ->
+            {ok, _} = couchbeam:save_doc(ConfDb, couchbeam_doc:set_value(<<"_rev">>, Rev, Doc)),
+            {noreply, State}
+    end;
+
 handle_cast(_Message, State) ->
     {noreply, State}.
 
@@ -446,6 +411,16 @@ code_change(_OldVersion, State=#state{}, _Extra) ->
 %% ===================================================================
 %% Other functions
 %% ===================================================================
+
+check_design_doc({DB, Name, Filename}) ->
+    case couchbeam:doc_exists(DB, "_design/" ++ Name) of
+        true ->
+            ok;
+        false ->
+            {ok, SDoc} = file:read_file(filename:join(code:priv_dir(ebitcoin), Filename)),
+            {ok, _} = couchbeam:save_doc(DB, ejson:decode(SDoc)),
+            ok
+    end.
 
 do_update_views(DBS, S, PID) ->
     try

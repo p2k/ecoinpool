@@ -22,7 +22,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 <script id="sidebar-template" type="text/x-handlebars-template">
   <div id="sidebar">
     <div id="logo">
-      <p><strong>ecoinpool</strong> v0.3.5</p>
+      <p><strong>ecoinpool</strong> v0.3.10</p>
       <p>Next Generation Pool Mining Software<br/>by <a href="https://github.com/p2k">p2k</a></p>
     </div>
     <ul id="nav">
@@ -35,6 +35,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
       <li>
         <span>Other</span>
         <ul>
+          <li><a href="/ebitcoin/_design/site/_show/home">ebitcoin</a></li>
           <li><a href="/_utils/index.html">Explore CouchDB</a></li>
         </ul>
       </li>
@@ -84,7 +85,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 </script>
 
 <script id="subpoolsTable-template" type="text/x-handlebars-template">
-  <table id="subpools" class="listing" cellpadding="0">
+  <table id="{{id}}" class="listing" cellpadding="0">
     <caption>Sub-Pools</caption>
     <thead>
       <tr>

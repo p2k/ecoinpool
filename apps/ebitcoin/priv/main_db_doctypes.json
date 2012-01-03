@@ -1,0 +1,12 @@
+{
+   "_id": "_design/doctypes",
+   "language": "javascript",
+   "views": {
+       "doctypes": {
+           "map": "function (doc) {if (doc.type !== undefined) emit(doc.type, doc._id);}"
+       }
+   },
+   "filters": {
+       "clients_only": "function (doc, req) {return doc._deleted || doc.type == 'configuration' || doc.type == 'client';}"
+   }
+}

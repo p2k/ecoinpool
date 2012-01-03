@@ -12,6 +12,8 @@ ebin/
 scrapped/
 
 .sass-cache
+site/build
+site/*.json
 site/compiler.jar
 
 rel/ecoinpool*/
