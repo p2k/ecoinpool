@@ -241,7 +241,7 @@ userCtx.ready(function () {
                     aux_daemon: {button_click: editAuxDaemonConfig}
                 });
                 
-                updateAuxChainSelector();
+                auxChainSelectorChange();
             }
         };
     };

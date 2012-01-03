@@ -441,7 +441,10 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     this.getAsOptions = function (types) {
         var ret = [];
         for (var i = 0; i < types.length; i++) {
-            ret.push({title: this.get(types[i]).title, value: types[i]});
+            if (typeof types[i] == "string")
+                ret.push({title: this.get(types[i]).title, value: types[i]});
+            else
+                ret.push({title: types[i].title, value: types[i].type});
         }
         return ret;
     };
