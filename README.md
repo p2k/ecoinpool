@@ -46,9 +46,10 @@ manager or get a binary release or compile from source.
 * [GIT](http://git-scm.com/download) - not only to download this project, but
   also for getting the Erlang dependencies
 * [Erlang/OTP](http://www.erlang.org/download.html) - **at least R14B is required**;
-  ecoinpool is so far untested on the newly released R15B
+  ecoinpool also works on the newly released R15B
 * [CouchDB](http://couchdb.apache.org/downloads.html) - **minimum is 1.1.1**;
-  tests on newer releases like 1.2.0 and 1.3.0 have been successful too
+  tests on newer releases like 1.2.0 and 1.3.0 (latest from the GIT repository)
+  have been successful too
 * C compiler - preferably GCC; required to build external modules for the hash
   algorithms and for some speedup
 
@@ -66,8 +67,9 @@ First time installation instructions:
    applications.
 4. Find and open CouchDB's local config file, usually at /etc/couchdb/local.ini.
 5. Within the `[httpd]` section, add a line `bind_address = 0.0.0.0` in order to
-   allow access from the internet. Also make sure port 5984 can be reached. If
-   you installed CouchDB from source, you have to allow write access to that ini
+   allow access from the internet (required if you want to expose the built-in
+   web frontend to your users). Also make sure port 5984 can be reached. If you
+   installed CouchDB from source, you have to allow write access to that ini
    file from CouchDB's process.
 5. Start CouchDB and browse to its local web frontend at
    `http://<your domain>:5984/_utils/`
