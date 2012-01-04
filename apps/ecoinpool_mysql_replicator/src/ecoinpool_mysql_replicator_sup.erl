@@ -90,16 +90,16 @@ init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}
 
 ecoinpool_couch_to_my(CouchProps) ->
     [
-        {<<"associatedUserID">>, proplists:get_value(<<"user_id">>, CouchProps)},
-        {<<"username">>, proplists:get_value(<<"name">>, CouchProps)},
-        {<<"password">>, proplists:get_value(<<"pass">>, CouchProps)}
+        {"associateduserid", proplists:get_value(<<"user_id">>, CouchProps)},
+        {"username", proplists:get_value(<<"name">>, CouchProps)},
+        {"password", proplists:get_value(<<"pass">>, CouchProps)}
     ].
-    
+
 ecoinpool_my_to_couch(MyProps, SubPoolId) ->
     [
         {<<"type">>, <<"worker">>},
         {<<"sub_pool_id">>, SubPoolId},
-        {<<"user_id">>, proplists:get_value(<<"associatedUserID">>, MyProps)},
-        {<<"name">>, proplists:get_value(<<"username">>, MyProps)},
-        {<<"pass">>, proplists:get_value(<<"password">>, MyProps)}
+        {<<"user_id">>, proplists:get_value("associateduserid", MyProps)},
+        {<<"name">>, proplists:get_value("username", MyProps)},
+        {<<"pass">>, proplists:get_value("password", MyProps)}
     ].

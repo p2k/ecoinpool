@@ -67,6 +67,9 @@
 % - CouchDB ID fields have to be strings, MySQL ID fields have to be integers.
 % - Both CouchToMy and MyToCouch must be functions which take one property list
 %   as parameter and return one (possibly converted) property list as result.
+% - The keys of the property lists coming from MySQL will be converted to lower
+%   case strings prior to the call to MyToCouch; property lists for CouchDB,
+%   on the other hand, have binaries as their keys in all cases.
 start_link(CouchDb, CouchFilter, MyPoolId, MyTable, MyInterval, CouchToMy, MyToCouch) ->
     InitParams = [CouchDb, MyPoolId, MyTable, MyInterval, CouchToMy, MyToCouch],
     if
@@ -287,7 +290,7 @@ insert_into_mysql(CouchDb, CouchId, Rev, MyPoolId, MyTable, #queries{ins_rev=Ins
     % Convert
     MyProps = CouchToMy(DocProps),
     % Create INSERT statement
-    {MyKeys, MyValues} = lists:unzip(lists:map(fun ({Key, Value}) -> {[$`, Key ,$`], mysql:encode(Value)} end, MyProps)),
+    {MyKeys, MyValues} = lists:unzip([{[$`, Key ,$`], mysql:encode(Value)} || {Key, Value} <- MyProps]),
     % Insert data
     {updated, #mysql_result{insertid=MyId}} = mysql:fetch(MyPoolId, ["INSERT INTO `", MyTable, "` (", string:join(MyKeys, ", "), ") VALUES (", string:join(MyValues, ", "), ");"]),
     % Update the new rev entry (created through the trigger)
@@ -372,7 +375,7 @@ delete_from_couchdb(CouchDb, CouchId, MyPoolId, MyId, #queries{del_rev=DelRevQ})
 get_mysql_row_props(MyPoolId, MyId, DataQ) ->
     {data, Result} = mysql:execute(MyPoolId, DataQ, [MyId]),
     [ResultRow] = mysql:get_result_rows(Result),
-    FieldNames = lists:map(fun ({_, FieldName, _, _}) -> FieldName end, mysql:get_result_field_info(Result)),
+    FieldNames = [string:to_lower(binary_to_list(FieldName)) || {_, FieldName, _, _} <- mysql:get_result_field_info(Result)],
     lists:zip(FieldNames, tuple_to_list(ResultRow)).
 
 find_changes(PListOld, PListNew) ->

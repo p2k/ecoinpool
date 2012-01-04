@@ -87,7 +87,7 @@ section about the MySQL Replicator for now (full documentation for that has not
 been written yet).
 
 In case you wonder where to configure the aspects of a pool server, this is done
-completely throuch CouchDB and/or the web frontend of ecoinpool. We'll get to
+completely through CouchDB and/or the web frontend of ecoinpool. We'll get to
 this right now.
 
 Start up ecoinpool with `./test_launch.sh` - if everything's alright you should

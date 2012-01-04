@@ -77,7 +77,9 @@
     
     main_q :: [main_q_entry()] | undefined,
     aux_q :: [aux_q_entry()] | undefined,
-    my_shares = [] :: [my_share()]
+    my_shares = [] :: [my_share()],
+    insert_stmt_head :: binary(),
+    insert_field_ids :: [integer()]
 }).
 
 -define(Log(F, P), io:format("~p:~b: " ++ F ++ "~n", [?MODULE, ?LINE] ++ P)).
@@ -101,7 +103,38 @@ start_link(ConfigIdStr, WorkerDb, MainPoolDb, AuxPoolDb, MyPoolId, MyTable, MyIn
 init([ConfigIdStr, WorkerDb, MainPoolDb, AuxPoolDb, MyPoolId, MyTable, MyInterval]) ->
     % Trap exit
     process_flag(trap_exit, true),
-    ?Log("ecoinpool_mysql_share_deployer starting. ID: ~s; with aux db: ~p", [ConfigIdStr, case AuxPoolDb of undefined -> false; _ -> true end]),
+    WithAuxChain = case AuxPoolDb of undefined -> false; _ -> true end,
+    ?Log("ecoinpool_mysql_share_deployer starting. ID: ~s; with aux db: ~p", [ConfigIdStr, WithAuxChain]),
+    % Check available columns
+    {data, MyFieldsResult} = mysql:fetch(MyPoolId, ["SHOW COLUMNS FROM `", MyTable, "`;"]),
+    MyFieldNames = [FName || {FName, _, _, _, _, _} <- mysql:get_result_rows(MyFieldsResult)],
+    {InsertFieldNames, InsertFieldIds} = lists:foldr(
+        fun (N, {IFN, IFI}) ->
+            I = case N of
+                <<"time">> -> #my_share.time;
+                <<"rem_host">> -> #my_share.rem_host;
+                <<"username">> -> #my_share.username;
+                <<"our_result">> -> #my_share.our_result;
+                <<"our_result_bitcoin">> when WithAuxChain -> #my_share.our_result_bitcoin;
+                <<"our_result_namecoin">> when WithAuxChain -> #my_share.our_result_namecoin;
+                <<"upstream_result">> -> #my_share.upstream_result;
+                <<"reason">> -> #my_share.reason;
+                <<"source">> -> #my_share.source;
+                <<"solution">> -> #my_share.solution;
+                <<"block_num">> -> #my_share.block_num;
+                <<"prev_block_hash">> -> #my_share.prev_block_hash;
+                <<"useragent">> -> #my_share.useragent;
+                _ -> 0
+            end,
+            if
+                I > 0 -> {[[$`, N, $`] | IFN], [I | IFI]};
+                true -> {IFN, IFI}
+            end
+        end,
+        {[], []},
+        MyFieldNames
+    ),
+    InsertStmtHead = iolist_to_binary(["INSERT INTO `", MyTable, "` (", string:join(InsertFieldNames, ", "), ") VALUES\n"]),
     % Load any stored sequence numbers
     StateFileName = ConfigIdStr ++ ".state",
     {MainPoolDbSeq, AuxPoolDbSeq} = case file:consult(StateFileName) of
@@ -138,7 +171,9 @@ init([ConfigIdStr, WorkerDb, MainPoolDb, AuxPoolDb, MyPoolId, MyTable, MyInterva
                                 my_table = MyTable,
                                 my_timer = MyTimer,
                                 main_q = case AuxPoolDbState of undefined -> undefined; _ -> [] end,
-                                aux_q = case AuxPoolDbState of undefined -> undefined; _ -> [] end
+                                aux_q = case AuxPoolDbState of undefined -> undefined; _ -> [] end,
+                                insert_stmt_head = InsertStmtHead,
+                                insert_field_ids = InsertFieldIds
                             }};
                         {error, Error} ->
                             stop_change_monitor(MainPoolDbState),
@@ -213,9 +248,9 @@ handle_info({change, StartRef, {RowProps}}, State=#state{config_id=ConfigId, wor
 
 handle_info(insert_my_shares, State=#state{my_shares=[]}) ->
     {noreply, State};
-handle_info(insert_my_shares, State=#state{state_file_name=StateFileName, my_shares=MyShares, my_pool_id=MyPoolId, my_table=MyTable, aux_db_state=AuxPoolDbState}) ->
+handle_info(insert_my_shares, State=#state{state_file_name=StateFileName, my_shares=MyShares, my_pool_id=MyPoolId, insert_stmt_head=InsertStmtHead, insert_field_ids=InsertFieldIds}) ->
     [#my_share{main_seq=MainPoolDbSeq, aux_seq=AuxPoolDbSeq} | _] = MyShares,
-    insert_my_shares(MyPoolId, MyTable, lists:reverse(MyShares), case AuxPoolDbState of undefined -> false; _ -> true end),
+    insert_my_shares(MyPoolId, lists:reverse(MyShares), InsertStmtHead, InsertFieldIds),
     write_state_file(StateFileName, MainPoolDbSeq, AuxPoolDbSeq),
     {noreply, State#state{my_shares=[]}};
 
@@ -392,51 +427,18 @@ stop_change_monitor(#db_state{changes_pid=ChangesPid}) ->
     catch exit(ChangesPid, normal),
     ok.
 
--spec insert_my_shares(MyPoolId :: atom(), MyTable :: string(), MyShares :: [my_share()], WithAuxChain :: boolean()) -> ok | {error, term()}.
-insert_my_shares(MyPoolId, MyTable, MyShares, WithAuxChain) ->
-    Stmt = ["INSERT INTO `", MyTable, "` (`time`, `rem_host`, `username`, `our_result`, ", if WithAuxChain -> "`our_result_bitcoin`, `our_result_namecoin`, "; true -> [] end, "`upstream_result`, `reason`, `source`, `solution`, `block_num`, `prev_block_hash`, `useragent`) VALUES\n"],
-    FullStmt = [Stmt, string:join([make_my_share_row(MyShare, WithAuxChain) || MyShare <- MyShares], ",\n"), $;],
+-spec insert_my_shares(MyPoolId :: atom(), MyShares :: [my_share()], InsertStmtHead :: binary(), InsertFieldIds :: [integer()]) -> ok | {error, term()}.
+insert_my_shares(MyPoolId, MyShares, InsertStmtHead, InsertFieldIds) ->
+    FullStmt = [InsertStmtHead, string:join([make_my_share_row(MyShare, InsertFieldIds) || MyShare <- MyShares], ",\n"), $;],
     case mysql:fetch(MyPoolId, FullStmt) of
         {updated, _} -> ok;
         {error, Error} -> ?Log("Error while inserting shares: ~p", [Error]), {error, Error}
     end.
 
--spec make_my_share_row(MyShare :: my_share(), WithAuxChain :: boolean()) -> iolist().
-make_my_share_row(MyShare, WithAuxChain) ->
-    #my_share{
-        time = Time,
-        rem_host = RemHost,
-        username = Username,
-        our_result = OurResult,
-        our_result_bitcoin = OurResultBitcoin,
-        our_result_namecoin = OurResultNamecoin,
-        upstream_result = UpstreamResult,
-        reason = Reason,
-        source = Source,
-        solution = Solution,
-        block_num = BlockNum,
-        prev_block_hash = PrevBlockHash,
-        useragent = Useragent
-    } = MyShare,
-    [
-        $(,
-        mysql:encode(Time), ", ",
-        mysql:encode(RemHost), ", ",
-        mysql:encode(Username), ", ",
-        mysql:encode(OurResult), ", ",
-        if
-            WithAuxChain -> [mysql:encode(OurResultBitcoin, true), ", ", mysql:encode(OurResultNamecoin, true), ", "];
-            true -> []
-        end,
-        mysql:encode(UpstreamResult), ", ",
-        mysql:encode(Reason), ", ",
-        mysql:encode(Source), ", ",
-        mysql:encode(Solution), ", ",
-        mysql:encode(BlockNum), ", ",
-        mysql:encode(PrevBlockHash), ", ",
-        mysql:encode(Useragent),
-        $)
-    ].
+-spec make_my_share_row(MyShare :: my_share(), InsertFieldIds :: [integer()]) -> iolist().
+make_my_share_row(MyShare, InsertFieldIds) ->
+    Data = [mysql:encode(element(FieldId, MyShare)) || FieldId <- InsertFieldIds],
+    [$(, string:join(Data, ", "), $)].
 
 -spec write_state_file(StateFileName :: string(), MainPoolDbSeq :: integer(), AuxPoolDbSeq :: integer()) -> ok | {error, term()}.
 write_state_file(StateFileName, MainPoolDbSeq, AuxPoolDbSeq) ->
