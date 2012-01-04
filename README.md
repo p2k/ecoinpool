@@ -96,9 +96,9 @@ you want to be able to close your console and keep the server running, you might
 want to try [GNU Screen](http://www.gnu.org/software/screen/) like this:
 `screen -D -R -S ecoinpool_test ./test_launch.sh`
 
-It might be worth knowing that you are on an Erlang console now. You can enter
-some commands and evaluate expressions (not covered in this readme). All console
-commands end with a period followed by a newline.
+> It might be worth knowing that you are on an Erlang console now. You can
+> enter some commands and evaluate expressions (not covered in this readme).
+> All console commands end with a period followed by a newline.
 
 If you like to stop ecoinpool, you can quit via Ctrl+G and entering "q" at the
 prompt. Alternatively you can hit Ctrl+C and enter "a" or simply kill the
@@ -108,24 +108,70 @@ still want to exit ecoinpool gracefully (which, as a little motivation, will
 send "Server Terminating" as an error message to connected clients) enter `q().`
 at the console.
 
+> At this point you might want to configure ebitcoin first. ebitcoin is the
+> block chain monitor/explorer which comes with ecoinpool as an add-on. It
+> enables ecoinpool to listen for block changes instead of polling for the
+> block number five times per second. See the section about "ebitcoin" below.
+
 After you started ecoinpool, head over to the main site at
 `http://<your domain>:5984/ecoinpool/_design/site/_show/home`. It should say
 "This server has been freshly installed and is not configured yet. Fix this.". In
 case you're no longer logged in on CouchDB (ecoinpool uses CouchDB's user and
 authentication system), do so by clicking "Login" on the lower right corner. The
-"Fix this" link will only appear for an admin user. Click it now.
+"Fix this" link will only appear for an admin user. Click it now and you will
+see the Subpool configuration page.
 
-You will see the Subpool configuration page. It should be self-explanatory. You
-can use "btc-pool" as a name and port 8888, if you don't know what to choose
-there. If you want merged mining (only for BitCoin), choose the desired chain
-from the list at "Aux Pool Chain" (currently only NameCoin) and enter e.g.
-"nmc-pool" as Aux Pool Name.
+First, choose the chain type for your pool, then enter a database name e.g.
+"btc-pool". Make sure to use a different database name than you used for ebitcoin.
+Next, you can optionally enter a display name which will be shown on the "Home"
+page instead of the database name.
 
-For the CoinDaemon and AuxDaemon configuration, an ebitcoin client can be chosen.
-See the section about "ebitcoin" below on how to set this up.
+The "Port" setting denotes the port to which the miners should connect to;
+ecoinpool will start listening for RPC requests on this port once the Subpool is
+activated. Set it to 8888 if you don't know which port to choose.
 
-Hit "Save Configuration" above when you're finished. Finally click
-"Activate Subpool" after the page reloaded and your pool is running.
+The "Round" setting controls if a round number should be stored along with the
+shares. On every candidate share (i.e. a share which potentially solves the
+block) the round number is increased, if enabled. Enter a start value into the
+text field if you want to use this feature.
+
+The next two fields control ebitcoin's work caching behaviour. If you're just in
+for a quick test, a cache size of 10 is enough. In other cases, the value should
+roughly resemble half of the number of workers in your pool. ecoinpool is
+constantly trying to refill the cache as fast as possible and even when the
+cache runs empty or is disabled it will stay fairly responsive. Be aware that
+the cache is completely discarded on a block change and subsequently refilled,
+so don't set this value too high. You may want to set the server logger to
+"debug" and watch the cache behaviour to get an optimal value. Remember, the
+cache is just a way to deal with simultanous requests. The maximum work age is
+the time in seconds until cached work will be discarded (this is _not_ the time
+a miner has to send in valid work). Usually the default is fine.
+
+Next is the CoinDaemon configuration. The options you can set here depend on the
+selected chain type. Daemons which support local work creation through the
+`getmemorypool` call will have two extra fields "Pay To" and "Tag". The former
+will override the default payout address on block solves; if you leave it
+empty, ecoinpool will create an account called "ecoinpool" via RPC call and use
+this one for payout. The other field allows you to add an arbitrary string to
+the coinbase (max. 20 characters) which will be appended to "eco@". E.g. if you
+set it to "ozco.in", the coinbase will start with "eco@ozco.in" (greetings fly
+out to Graet and his team). If you leave it empty, the coinbase will start with
+just "eco" as a default.
+
+When the Daemon also supports the ebitcoin add-on, another field
+"ebitcoin Client" will be displayed. It allows to choose from a list of
+appropriate clients, identified by their database name.
+
+Following the CoinDaemon configuration are the Aux Pool settings. These are used
+for merged mining (only for Bitcoin), choose the desired chain from the list
+(currently only NameCoin) and fill out the other fields just like for the main
+pool. The AuxDaemon configuration panel also behaves in the same way as for the
+CoinDaemon.
+
+Hit "Save Configuration" above when you're finished with everything. Finally
+click "Activate Subpool" after the page reloaded and your pool is running.
+Reward yourself with cake and a hot beverage of your choice for reading this
+far and getting the thing to run.
 
 Creating Accounts And Workers
 -----------------------------
@@ -157,7 +203,8 @@ ebitcoin
 
 ecoinpool comes bundled with ebitcoin, a block monitor and mini block explorer
 for bitcoin chains. ebitcoin is configured in the same way as ecoinpool, using
-a built-in web frontend.
+a built-in web frontend. Caution: Solidcoin is currently not supported by
+ebitcoin due to differences in its data structures.
 
 The main site for ebitcoin is at
 `http://<your domain>:5984/ebitcoin/_design/site/_show/home`. You will also find
@@ -167,13 +214,24 @@ installed and is not configured yet. Fix this.", just like for ecoinpool. Again,
 you must be logged in to access the configuration.
 
 After clicking the link, you will see the Client configuration page. Choose one
-of the supported block chains, enter a name and optionally configure the host
-and port of the daemon you want to connect to.
+of the supported block chains and enter a database name for that chain. You need
+only one client per chain, so choose a generic name like "btc-chain"; make sure
+not to use the database name of an existing Subpool. After that, you can
+optionally enter a display name which will be shown on the "Home" page instead
+of the database name. Lastly, you can change the host and port of the daemon to
+which ebitcoin will connect to, but for most cases, the defaults will do.
+
+> Be aware that ebitcoin wants to connect to the peer-to-peer port of your
+> daemon, not the RPC port. Also, ebitcoin will "believe" everything the
+> daemon throws at it, no verification is done. That's why it has to be a
+> trusted daemon preferably running on localhost.
 
 Hit "Save Configuration" when you're finished. Finally click "Activate Client"
-after the page reloaded and ebitcoin will start synchronizing the block chain.
-This will take some minutes depending on the chain size. You can follow the
-process on the console or by looking at the logfiles.
+after the page reloaded and ebitcoin will start loading the block chain into
+its own database. This will take some minutes depending on the chain size. You
+can follow the process on the console or by looking at the logfiles. Note that
+block monitoring will not function correctly until the complete chain has been
+synchronized.
 
 To use a client with ecoinpool, open the Subpool via ecoinpool's web interface.
 On the configuration tab you can select an ebitcoin client from within the

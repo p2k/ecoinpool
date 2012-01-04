@@ -30,9 +30,10 @@ userCtx.ready(function () {
     function renderClientConfig () {
         var config = [
             {id: "chain", name: "Chain:", field: {type: "select", options: poolTypeInfo.getAsOptions(poolTypeInfo.allEbitcoinTypes), value: doc.chain}},
-            {id: "name", name: "Name:", field: {type: "text", value: doc.name}},
-            {id: "host", name: "Target Host:", field: {type: "text", value: doc.host, placeholder: "localhost"}},
-            {id: "port", name: "Target Port:", field: {type: "text", value: doc.port}}
+            {id: "name", name: "Database Name:", field: {type: "text", value: doc.name}},
+            {id: "title", name: "Display Name:", field: {type: "text", value: doc.title, placeholder: "(optional)"}},
+            {id: "host", name: "Daemon Host:", field: {type: "text", value: doc.host, placeholder: "localhost"}},
+            {id: "port", name: "Daemon P2P Port:", field: {type: "text", value: doc.port}}
         ];
         
         var rev, toolbuttons = [{title: "Save Configuration", type: "save", click: saveClientConfig}];
@@ -94,9 +95,10 @@ userCtx.ready(function () {
         // Write back all fields and validate
         doc.chain = getFieldValue("#chain");
         doc.name = getFieldValue("#name");
+        doc.title = getFieldValue("#title");
         if (doc.name === undefined) {
             $("#name input").focus();
-            alert("Please enter a name!");
+            alert("Please enter a database name!");
             return;
         }
         doc.host = getFieldValue("#host");
@@ -150,7 +152,7 @@ userCtx.ready(function () {
     };
     
     // Add and select my navigation item
-    sidebar.addMainNavItem(siteURL + "_show/client/" + (doc._rev === undefined ? '' : doc._id), (doc._rev === undefined ? "New Client" : doc.name), true);
+    sidebar.addMainNavItem(siteURL + "_show/client/" + (doc._rev === undefined ? '' : doc._id), (doc._rev === undefined ? "New Client" : (doc.title !== undefined ? doc.title : doc.name)), true);
     
     // Start by loading the main configuration
     ebitcoinDb.openDoc("configuration", {

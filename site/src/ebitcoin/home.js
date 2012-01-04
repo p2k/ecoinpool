@@ -30,12 +30,26 @@ userCtx.ready(function () {
             key: "client",
             include_docs: true,
             success: function (resp) {
+                if (activeClients === undefined) {
+                    if (resp.rows.length == 0 || !userCtx.isAdmin()) {
+                        $("#content").empty();
+                        var fixthis = "";
+                        if (userCtx.isAdmin())
+                            fixthis = ' <a href="client/">Fix this</a>.';
+                        makeToolbar("This server has been freshly installed and is not configured yet." + fixthis);
+                        return;
+                    }
+                    else
+                        activeClients = [];
+                }
+                
                 var active = [], inactive = [];
                 $.each(resp.rows, function () {
                     var isActive = ($.inArray(this.id, activeClients) != -1);
                     var entry = {
                         id: this.id,
                         name: this.doc.name,
+                        title: this.doc.title,
                         chain: poolTypeInfo.get(this.doc.chain).title
                     };
                     if (isActive)
@@ -69,12 +83,6 @@ userCtx.ready(function () {
             activeClients = conf.active_clients;
             loadClients();
         },
-        error: function () {
-            $("#content").empty();
-            var fixthis = "";
-            if (userCtx.isAdmin())
-                fixthis = ' <a href="client/">Fix this</a>.';
-            makeToolbar("This server has been freshly installed and is not configured yet." + fixthis);
-        }
+        error: loadClients
     });
 });

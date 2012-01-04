@@ -97,7 +97,7 @@ along with ebitcoin.  If not, see <http://www.gnu.org/licenses/>.
     <tbody class="content">
     {{#each_striped clients}}
       <tr{{#if odd}} class="odd"{{/if}}>
-        <th><a href="client/{{id}}">{{name}}</a></th>
+        <th><a href="client/{{id}}">{{#if title}}{{title}}{{else}}{{name}}{{/if}}</a></th>
         <td>{{chain}}</td>
         <td class="last_block">(not implemented yet)</td>
       </tr>

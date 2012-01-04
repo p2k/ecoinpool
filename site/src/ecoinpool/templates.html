@@ -98,7 +98,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
     <tbody class="content">
     {{#each_striped subpools}}
       <tr{{#if odd}} class="odd"{{/if}}>
-        <th><a href="subpool/{{id}}">{{name}}</a></th>
+        <th><a href="subpool/{{id}}">{{#if title}}{{title}}{{else}}{{name}}{{/if}}</a></th>
         <td>{{type}}</td>
         <td>{{url}}</td>
         <td>{{round}}</td>
@@ -231,7 +231,7 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
             <td><input type="text" name="host" size="20" placeholder="localhost" value="{{host}}" /></td>
           </tr>
           <tr>
-            <th><label>Port:</label></th>
+            <th><label>RPC Port:</label></th>
             <td><input type="text" name="port" size="20" placeholder="{{default_port}}" value="{{port}}" /></td>
           </tr>
           <tr>

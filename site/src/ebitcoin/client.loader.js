@@ -12,7 +12,10 @@ function (doc, req) {
     else {
         if (doc.type != "client")
             return {code: 406, body: "This is not a Client ID!"};
-        name = doc.name;
+        if (doc.title !== undefined)
+            name = doc.title;
+        else
+            name = doc.name;
     }
     return ['<?xml version="1.0" encoding="UTF-8"?>',
         '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">',
@@ -30,7 +33,7 @@ function (doc, req) {
         '    $.couch.urlPrefix = "' + urlPrefix + '";',
         '    var siteURL = "' + siteURL + '";',
         '    var db_info = ' + JSON.stringify(req.info) + ';',
-        '    var doc = ' + (doc === null ? '{"_id": "' + req.uuid + '", "type": "sub-pool"}' : JSON.stringify(doc)) + ';',
+        '    var doc = ' + (doc === null ? '{"_id": "' + req.uuid + '", "type": "client"}' : JSON.stringify(doc)) + ';',
         '  </script>',
         '  <script type="text/javascript" src="' + siteURL + 'common.js"></script>',
         '  <script type="text/javascript" src="' + siteURL + 'client.js"></script>',

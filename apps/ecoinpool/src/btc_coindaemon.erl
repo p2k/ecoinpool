@@ -157,9 +157,9 @@ init([SubpoolId, Config]) ->
     
     FullTag = case proplists:get_value(tag, Config) of
         Tag when is_binary(Tag), byte_size(Tag) > 0 ->
-            <<"ecoinpool@", Tag/binary>>;
+            <<"eco@", Tag/binary>>;
         _ ->
-            <<"ecoinpool">>
+            <<"eco">>
     end,
     
     {TxTbl, WorkTbl} = case ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, txtbl}) of

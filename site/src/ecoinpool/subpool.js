@@ -201,7 +201,8 @@ userCtx.ready(function () {
         aux_daemon_config = aux_pool.aux_daemon;
         var config = [
             {id: "pool_type", name: "Main Chain:", field: {type: "select", options: poolTypeInfo.getAsOptions(poolTypeInfo.allMainTypes), value: doc.pool_type}},
-            {id: "name", name: "Name:", field: {type: "text", value: doc.name}},
+            {id: "name", name: "Database Name:", field: {type: "text", value: doc.name}},
+            {id: "title", name: "Display Name:", field: {type: "text", value: doc.title, placeholder: "(optional)"}},
             {id: "port", name: "Port:", field: {type: "text", value: doc.port}},
             {id: "round", name: "Round:", field: {type: "text", value: doc.round, optional: "Do not count rounds"}},
             {id: "max_cache_size", name: "Max. Cache Size:", field: {type: "text", value: doc.max_cache_size, optional: "Default (300)"}},
@@ -209,7 +210,7 @@ userCtx.ready(function () {
             {id: "coin_daemon", name: "CoinDaemon Config:", field: {type: "extended", label: "Edit...", value: daemonText(doc.coin_daemon)}},
             
             {id: "aux_pool_type", name: "Aux Pool Chain:", field: {type: "select", options: $.merge([{value: "", title: "(none)"}], poolTypeInfo.getAsOptions(poolTypeInfo.getAux(doc.pool_type))), value: aux_pool.pool_type}},
-            {id: "aux_pool_name", name: "Aux Pool Name:", field: {type: "text", value: aux_pool.name}},
+            {id: "aux_pool_name", name: "Aux Pool Database Name:", field: {type: "text", value: aux_pool.name}},
             {id: "aux_pool_round", name: "Aux Pool Round:", field: {type: "text", value: aux_pool.round, optional: "Do not count rounds"}},
             {id: "aux_daemon", name: "AuxDaemon Config:", field: {type: "extended", label: "Edit...", value: daemonText(aux_daemon_config)}}
         ];
@@ -668,9 +669,10 @@ userCtx.ready(function () {
         // Write back all fields and validate
         doc.pool_type = getFieldValue("#pool_type");
         doc.name = getFieldValue("#name");
+        doc.title = getFieldValue("#title");
         if (doc.name === undefined) {
             $("#name input").focus();
-            alert("Please enter a name!");
+            alert("Please enter a database name!");
             return;
         }
         doc.port = getFieldValue("#port", true);
@@ -771,7 +773,7 @@ userCtx.ready(function () {
     };
     
     // Add and select my navigation item
-    sidebar.addMainNavItem(siteURL + "_show/subpool/" + (doc._rev === undefined ? '' : doc._id), (doc._rev === undefined ? "New Subpool" : doc.name), true);
+    sidebar.addMainNavItem(siteURL + "_show/subpool/" + (doc._rev === undefined ? '' : doc._id), (doc._rev === undefined ? "New Subpool" : (doc.title !== undefined ? doc.title : doc.name)), true);
     
     // Start by loading the main configuration
     ecoinpoolDb.openDoc("configuration", {
@@ -842,7 +844,7 @@ userCtx.ready(function () {
                     else
                         changes.aux_db = undefined;
                     
-                    window.setTimeout(function () {startSharesMonitor(userId);}, 250);
+                    window.setTimeout(function () {startSharesMonitor(userId);}, 300);
                 }
                 displaySubpool(userId, userName, isSelf);
             }

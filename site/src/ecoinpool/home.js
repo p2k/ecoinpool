@@ -30,6 +30,19 @@ userCtx.ready(function () {
             key: "sub-pool",
             include_docs: true,
             success: function (resp) {
+                if (activeSubpools === undefined) {
+                    if (resp.rows.length == 0 || !userCtx.isAdmin()) {
+                        $("#content").empty();
+                        var fixthis = "";
+                        if (userCtx.isAdmin())
+                            fixthis = ' <a href="subpool/">Fix this</a>.';
+                        makeToolbar("This server has been freshly installed and is not configured yet." + fixthis);
+                        return;
+                    }
+                    else
+                        activeSubpools = [];
+                }
+                
                 var active = [], inactive = [];
                 $.each(resp.rows, function () {
                     var aux = (this.doc.aux_pool !== undefined ? " + " + poolTypeInfo.get(this.doc.aux_pool.pool_type).title : "");
@@ -37,6 +50,7 @@ userCtx.ready(function () {
                     var entry = {
                         id: this.id,
                         name: this.doc.name,
+                        title: this.doc.title,
                         type: poolTypeInfo.get(this.doc.pool_type).title + aux,
                         url: "http://" + location.hostname + ":" + this.doc.port + "/",
                         round: (this.doc.round === undefined ? "-" : this.doc.round)
@@ -72,12 +86,6 @@ userCtx.ready(function () {
             activeSubpools = conf.active_subpools;
             loadSubpools();
         },
-        error: function () {
-            $("#content").empty();
-            var fixthis = "";
-            if (userCtx.isAdmin())
-                fixthis = ' <a href="subpool/">Fix this</a>.';
-            makeToolbar("This server has been freshly installed and is not configured yet." + fixthis);
-        }
+        error: loadSubpools
     });
 });
