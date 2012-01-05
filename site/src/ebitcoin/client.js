@@ -101,9 +101,9 @@ userCtx.ready(function () {
             alert("Please enter a database name!");
             return;
         }
-        if (doc.name.match(/^[a-z0-9_$()+-/]+$/) == null) {
+        if (doc.name.match(/^[a-z][a-z0-9_$()+-/]*$/) == null) {
             $("#name input").focus();
-            alert("Only lowercase characters (a-z), digits (0-9), or any of the characters _, $, (, ), +, -, and / are allowed in database names.");
+            alert("Only lowercase characters (a-z), digits (0-9), or any of the characters _, $, (, ), +, -, and / are allowed in database names. Also must begin with a letter.");
             return;
         }
         doc.host = getFieldValue("#host");

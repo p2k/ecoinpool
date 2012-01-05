@@ -137,16 +137,16 @@ block) the round number is increased, if enabled. Enter a start value into the
 text field if you want to use this feature.
 
 The next two fields control ebitcoin's work caching behaviour. If you're just in
-for a quick test, a cache size of 10 is enough. In other cases, the value should
-roughly resemble half of the number of workers in your pool. ecoinpool is
-constantly trying to refill the cache as fast as possible and even when the
-cache runs empty or is disabled it will stay fairly responsive. Be aware that
-the cache is completely discarded on a block change and subsequently refilled,
-so don't set this value too high. You may want to set the server logger to
-"debug" and watch the cache behaviour to get an optimal value. Remember, the
-cache is just a way to deal with simultanous requests. The maximum work age is
-the time in seconds until cached work will be discarded (this is _not_ the time
-a miner has to send in valid work). Usually the default is fine.
+for a quick test, a cache size of 5 is enough. In other cases, the default value
+of 20 usually fits all needs for heavy load. ecoinpool is constantly trying to
+refill the cache as fast as possible and even when the cache runs empty or is
+disabled it will stay fairly responsive. Be aware that the cache is completely
+discarded on a block change and subsequently refilled, so don't set this value
+too high. You can examine the server.log if you want to find an optimal value
+yourself. Remember, the cache is just a way to deal with simultanous requests.
+The maximum work age is the time in seconds until cached work will be discarded
+(this is _not_ the time a miner has to send in valid work). Usually the default
+is fine, if you're running a pool this won't happen that often anyway.
 
 Next is the CoinDaemon configuration. The options you can set here depend on the
 selected chain type. Daemons which support local work creation through the

@@ -487,7 +487,7 @@ parse_subpool_document(SubpoolId, {DocProps}) ->
         <<"sc">> -> sc;
         _ -> undefined
     end,
-    MaxCacheSize = proplists:get_value(<<"max_cache_size">>, DocProps, 300),
+    MaxCacheSize = proplists:get_value(<<"max_cache_size">>, DocProps, 20),
     MaxWorkAge = proplists:get_value(<<"max_work_age">>, DocProps, 20),
     Round = proplists:get_value(<<"round">>, DocProps),
     WorkerShareSubpools = proplists:get_value(<<"worker_share_subpools">>, DocProps, []),

@@ -205,7 +205,7 @@ userCtx.ready(function () {
             {id: "title", name: "Display Name:", field: {type: "text", value: doc.title, placeholder: "(optional)"}},
             {id: "port", name: "Port:", field: {type: "text", value: doc.port}},
             {id: "round", name: "Round:", field: {type: "text", value: doc.round, optional: "Do not count rounds"}},
-            {id: "max_cache_size", name: "Max. Cache Size:", field: {type: "text", value: doc.max_cache_size, optional: "Default (300)"}},
+            {id: "max_cache_size", name: "Max. Cache Size:", field: {type: "text", value: doc.max_cache_size, optional: "Default (20)"}},
             {id: "max_work_age", name: "Max. Work Age:", field: {type: "text", value: doc.max_work_age, optional: "Default (20s)", suffix: "seconds"}},
             {id: "coin_daemon", name: "CoinDaemon Config:", field: {type: "extended", label: "Edit...", value: daemonText(doc.coin_daemon)}},
             
@@ -675,9 +675,9 @@ userCtx.ready(function () {
             alert("Please enter a database name!");
             return;
         }
-        if (doc.name.match(/^[a-z0-9_$()+-/]+$/) == null) {
+        if (doc.name.match(/^[a-z][a-z0-9_$()+-/]*$/) == null) {
             $("#name input").focus();
-            alert("Only lowercase characters (a-z), digits (0-9), or any of the characters _, $, (, ), +, -, and / are allowed in database names.");
+            alert("Only lowercase characters (a-z), digits (0-9), or any of the characters _, $, (, ), +, -, and / are allowed in database names. Also must begin with a letter.");
             return;
         }
         doc.port = getFieldValue("#port", true);
@@ -700,9 +700,9 @@ userCtx.ready(function () {
                 alert("Please enter an aux pool database name!");
                 return;
             }
-            if (doc.name.match(/^[a-z0-9_$()+-/]+$/) == null) {
+            if (doc.name.match(/^[a-z][a-z0-9_$()+-/]*$/) == null) {
                 $("#aux_pool_name input").focus();
-                alert("Only lowercase characters (a-z), digits (0-9), or any of the characters _, $, (, ), +, -, and / are allowed in database names.");
+                alert("Only lowercase characters (a-z), digits (0-9), or any of the characters _, $, (, ), +, -, and / are allowed in database names. Also must begin with a letter.");
                 return;
             }
             doc.aux_pool.round = getFieldValue("#aux_pool_round", true);
