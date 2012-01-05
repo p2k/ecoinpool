@@ -23,7 +23,7 @@
 
 -include_lib("mysql/include/mysql.hrl").
 
--export([start_link/7]).
+-export([start_link/8]).
 
 -export([init/1, handle_change/2, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -62,6 +62,11 @@
 %% ===================================================================
 
 % Notes:
+% - CouchFilter can be used to set a filter for the changes monitor, it can
+%   either be a single string FilterName or a tuple {FilterName, FilterArgs} or
+%   undefined to disable filtering.
+% - MyTriggerFields should be a list of strings or binaries with fields to be
+%   checked for changes. Set it to undefined to react to any change.
 % - MyInterval is in seconds.
 % - The primary key for the MySQL table must be INT and AUTO INCREMENT.
 % - CouchDB ID fields have to be strings, MySQL ID fields have to be integers.
@@ -70,8 +75,8 @@
 % - The keys of the property lists coming from MySQL will be converted to lower
 %   case strings prior to the call to MyToCouch; property lists for CouchDB,
 %   on the other hand, have binaries as their keys in all cases.
-start_link(CouchDb, CouchFilter, MyPoolId, MyTable, MyInterval, CouchToMy, MyToCouch) ->
-    InitParams = [CouchDb, MyPoolId, MyTable, MyInterval, CouchToMy, MyToCouch],
+start_link(CouchDb, CouchFilter, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCouch) ->
+    InitParams = [CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCouch],
     if
         MyInterval < 1 -> error(interval_less_than_one);
         true -> ok
@@ -89,7 +94,7 @@ start_link(CouchDb, CouchFilter, MyPoolId, MyTable, MyInterval, CouchToMy, MyToC
 %% Gen_Changes callbacks
 %% ===================================================================
 
-init([CouchDb, MyPoolId, MyTable, MyInterval, CouchToMy, MyToCouch]) ->
+init([CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCouch]) ->
     % Trap exit
     process_flag(trap_exit, true),
     % Get the MySQL ID field name
@@ -130,16 +135,27 @@ init([CouchDb, MyPoolId, MyTable, MyInterval, CouchToMy, MyToCouch]) ->
                     "CREATE TRIGGER `rev_on_insert` AFTER INSERT ON `", MyTable, "` FOR EACH ROW ",
                     "INSERT INTO `", MyTable, "_rev` (`my_id`, `couch_id`) VALUES (NEW.`", MyIdField, "`, REPLACE(UUID(), '-', ''));"
                 ]);
-            (<<"rev_on_update">>) ->
+            (<<"rev_on_update">>) when MyTriggerFields =:= [] ->
                 {updated, _} = mysql:fetch(MyPoolId, [
                     "CREATE TRIGGER `rev_on_update` AFTER UPDATE ON `", MyTable, "` FOR EACH ROW ",
-                    "UPDATE `", MyTable, "_rev` SET `changed` = 1 WHERE `my_id` = NEW.`", MyIdField, "`;"
+                    case MyTriggerFields of
+                        undefined ->
+                            "";
+                        _ ->
+                            ["BEGIN\n  IF NOT (", string:join([["OLD.`", F, "` <=> NEW.`", F, "`"] || F <- MyTriggerFields], " AND "), ") THEN\n    "]
+                    end,
+                    "UPDATE `", MyTable, "_rev` SET `changed` = 1 WHERE `my_id` = NEW.`", MyIdField, "`;",
+                    case MyTriggerFields of
+                        undefined -> "";
+                        _ -> "\n  END IF;\nEND;"
+                    end
                 ]);
             (<<"rev_on_delete">>) ->
                 {updated, _} = mysql:fetch(MyPoolId, [
                     "CREATE TRIGGER `rev_on_delete` AFTER DELETE ON `", MyTable, "` FOR EACH ROW ",
                     "UPDATE `", MyTable, "_rev` SET `deleted` = 1 WHERE `my_id` = OLD.`", MyIdField, "`;"
-                ])
+                ]);
+            _ -> ok
         end,
         MissingTriggers
     ),

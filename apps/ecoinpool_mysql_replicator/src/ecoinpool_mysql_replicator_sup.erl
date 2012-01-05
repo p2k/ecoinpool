@@ -45,6 +45,7 @@ init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}
                 {"workers/by_sub_pool", [{"sub_pool_id", SubPoolId}]},
                 ecoinpool_mysql_replicator,
                 MySQLPrefix ++ MyTable,
+                ["associateduserid", "username", "password"],
                 MyInterval,
                 fun ecoinpool_couch_to_my/1,
                 fun (MyProps) -> ecoinpool_my_to_couch(MyProps, SubPoolId) end
