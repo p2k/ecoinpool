@@ -43,6 +43,7 @@
     % the MySQL Replicator. It is used to bridge legacy MySQL worker tables to
     % CouchDB and also stores copies of the shares into a MySQL table.
     {ecoinpool_mysql_replicator, [
+        % Again, commented lines are default settings.
         %{couchdb_host, "localhost"},
         %{couchdb_port, 5984},
         %{couchdb_prefix, ""},
@@ -69,6 +70,7 @@
         % saving the deployment state file and for the "source" column.
         {share_deployer_configs, [
             % Non-MM Format: {<config ID string>, <pool name>, <MySQL shares table>, <MySQL write interval in seconds, 0 allowed>}
+            {"ltc_test_shares", "ltc-test", "shares", 60},
             % MM Format: {<config ID string>, <main pool name>, <aux pool name>, <MySQL shares table>, <MySQL write interval in seconds, 0 allowed>}
             {"btc_nmc_test_shares", "btc-test", "nmc-test", "shares", 60}
         ]}

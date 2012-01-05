@@ -241,6 +241,31 @@ be displayed.
 Technical information: In the current implementation, ebitcoin will only store
 block headers (for Namecoin, this includes the aux proof-of-work).
 
+Troubleshooting: Too Many Open Files (Linux)
+--------------------------------------------
+
+While testing the software on a larger pool (big thanks to WKNiGHT of Elitist
+Jerks) both CouchDB and ecoinpool were pushed beyond the system limits of open
+file descriptors, resulting in crashes about `{error,emfile}`. This happens
+because one file descriptor is required per connection and the default setting
+is 1024. You can check this, assuming your shell is bash, by running `ulimit -n`.
+Additionally, there is a kernel-level limit of file descriptors which you can
+see with `cat /proc/sys/fs/file-max`.
+
+To temporarily increase the number of descriptors on the kernel-level you could
+run `echo 65535 > /proc/sys/fs/file-max` as root (increasing the limit to 65535
+in this example). To make the change survive across reboots, edit
+`/etc/sysctl.conf` and add a line `fs.file-max = 65535`. You may want to set
+this number even higher, depending on your server load.
+
+For increasing the number of descriptors for the CouchDB and ecoinpool user,
+you have to edit `/etc/security/limits.conf` or `/etc/limits.conf`, depending on
+your linux distribution. You can either add a line `* - nofile 65535` to set
+this globally for all linux users or add a line for each user replacing the `*`
+with a username, e.g. `couchdb - nofile 65535` and `p2k - nofile 65535`. To
+make these changes take effect, you have to logout and login again. If couchdb
+was running, restart it too.
+
 Compaction
 ----------
 

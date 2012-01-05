@@ -675,6 +675,11 @@ userCtx.ready(function () {
             alert("Please enter a database name!");
             return;
         }
+        if (doc.name.match(/^[a-z0-9_$()+-/]+$/) == null) {
+            $("#name input").focus();
+            alert("Only lowercase characters (a-z), digits (0-9), or any of the characters _, $, (, ), +, -, and / are allowed in database names.");
+            return;
+        }
         doc.port = getFieldValue("#port", true);
         if (doc.port <= 0 || doc.port >= 65536) {
             $("#port input").focus();
@@ -692,7 +697,12 @@ userCtx.ready(function () {
             doc.aux_pool.name = getFieldValue("#aux_pool_name");
             if (doc.name === undefined) {
                 $("#aux_pool_name input").focus();
-                alert("Please enter an aux pool name!");
+                alert("Please enter an aux pool database name!");
+                return;
+            }
+            if (doc.name.match(/^[a-z0-9_$()+-/]+$/) == null) {
+                $("#aux_pool_name input").focus();
+                alert("Only lowercase characters (a-z), digits (0-9), or any of the characters _, $, (, ), +, -, and / are allowed in database names.");
                 return;
             }
             doc.aux_pool.round = getFieldValue("#aux_pool_round", true);
