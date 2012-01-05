@@ -126,18 +126,21 @@ init([CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCo
     end,
     % Check if the all the triggers exist, create if missing
     {data, TriggerCheckResult} = mysql:fetch(MyPoolId, ["SHOW TRIGGERS LIKE '", MyTable, "';"]),
+    InsertTriggerName = iolist_to_binary([MyTable, "_rev_on_insert"]),
+    UpdateTriggerName = iolist_to_binary([MyTable, "_rev_on_update"]),
+    DeleteTriggerName = iolist_to_binary([MyTable, "_rev_on_delete"]),
     ExistingTriggers = lists:map(fun (Row) -> element(1, Row) end, mysql:get_result_rows(TriggerCheckResult)),
-    MissingTriggers = [<<"rev_on_insert">>, <<"rev_on_update">>, <<"rev_on_delete">>] -- ExistingTriggers,
+    MissingTriggers = [InsertTriggerName, UpdateTriggerName, DeleteTriggerName] -- ExistingTriggers,
     lists:foreach(
         fun
-            (<<"rev_on_insert">>) ->
+            (InsertTriggerName) ->
                 {updated, _} = mysql:fetch(MyPoolId, [
-                    "CREATE TRIGGER `rev_on_insert` AFTER INSERT ON `", MyTable, "` FOR EACH ROW ",
+                    "CREATE TRIGGER `", InsertTriggerName, "` AFTER INSERT ON `", MyTable, "` FOR EACH ROW ",
                     "INSERT INTO `", MyTable, "_rev` (`my_id`, `couch_id`) VALUES (NEW.`", MyIdField, "`, REPLACE(UUID(), '-', ''));"
                 ]);
-            (<<"rev_on_update">>) when MyTriggerFields =:= [] ->
+            (UpdateTriggerName) when MyTriggerFields =:= [] ->
                 {updated, _} = mysql:fetch(MyPoolId, [
-                    "CREATE TRIGGER `rev_on_update` AFTER UPDATE ON `", MyTable, "` FOR EACH ROW ",
+                    "CREATE TRIGGER `", UpdateTriggerName, "` AFTER UPDATE ON `", MyTable, "` FOR EACH ROW ",
                     case MyTriggerFields of
                         undefined ->
                             "";
@@ -150,9 +153,9 @@ init([CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCo
                         _ -> "\n  END IF;\nEND;"
                     end
                 ]);
-            (<<"rev_on_delete">>) ->
+            (DeleteTriggerName) ->
                 {updated, _} = mysql:fetch(MyPoolId, [
-                    "CREATE TRIGGER `rev_on_delete` AFTER DELETE ON `", MyTable, "` FOR EACH ROW ",
+                    "CREATE TRIGGER `", DeleteTriggerName, "` AFTER DELETE ON `", MyTable, "` FOR EACH ROW ",
                     "UPDATE `", MyTable, "_rev` SET `deleted` = 1 WHERE `my_id` = OLD.`", MyIdField, "`;"
                 ]);
             (_) -> ok
