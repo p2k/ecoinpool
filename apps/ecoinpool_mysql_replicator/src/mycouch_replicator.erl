@@ -155,7 +155,7 @@ init([CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCo
                     "CREATE TRIGGER `rev_on_delete` AFTER DELETE ON `", MyTable, "` FOR EACH ROW ",
                     "UPDATE `", MyTable, "_rev` SET `deleted` = 1 WHERE `my_id` = OLD.`", MyIdField, "`;"
                 ]);
-            _ -> ok
+            (_) -> ok
         end,
         MissingTriggers
     ),
