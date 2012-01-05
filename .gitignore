@@ -6,6 +6,8 @@
 *.state
 erl_crash.dump
 
+test_launch.config
+
 .eunit
 deps/
 ebin/

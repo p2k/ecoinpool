@@ -82,9 +82,10 @@ Configuring and Starting
 ------------------------
 
 Before you can start ecoinpool, you have to configure the CouchDB connection. To
-do that, open `test_launch.config` and follow the instructions. Ignore the
-section about the MySQL Replicator for now (full documentation for that has not
-been written yet).
+do that, copy `test_launch.config.example` to `test_launch.config`, open it in
+your favorite text editor and follow the instructions. Ignore the section about
+the MySQL Replicator for now (full documentation for that has not been written
+yet).
 
 In case you wonder where to configure the aspects of a pool server, this is done
 completely through CouchDB and/or the web frontend of ecoinpool. We'll get to
