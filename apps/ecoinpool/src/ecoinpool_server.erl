@@ -530,7 +530,7 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
                             {ok, Worker, Action};
-                        [] ->
+                        _ ->
                             log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Req:get(ip), User]),
                             {error, authorization_required}
                     end

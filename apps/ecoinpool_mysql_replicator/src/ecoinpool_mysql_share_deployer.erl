@@ -78,6 +78,7 @@
     main_q :: [main_q_entry()] | undefined,
     aux_q :: [aux_q_entry()] | undefined,
     my_shares = [] :: [my_share()],
+    conv_ts :: fun(([integer()]) -> calendar:datetime()),
     insert_stmt_head :: binary(),
     insert_field_ids :: [integer()]
 }).
@@ -135,6 +136,10 @@ init([ConfigIdStr, WorkerDb, MainPoolDb, AuxPoolDb, MyPoolId, MyTable, MyInterva
         MyFieldNames
     ),
     InsertStmtHead = iolist_to_binary(["INSERT INTO `", MyTable, "` (", string:join(InsertFieldNames, ", "), ") VALUES\n"]),
+    % Get the server's time difference to UTC and setup the timestamp converter
+    {data, TimeDiffResult} = mysql:fetch(MyPoolId, <<"SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP());">>),
+    [{TimeDiff}] = mysql:get_result_rows(TimeDiffResult),
+    ConvTS = make_timestamp_converter(TimeDiff),
     % Load any stored sequence numbers
     StateFileName = ConfigIdStr ++ ".state",
     {MainPoolDbSeq, AuxPoolDbSeq} = case file:consult(StateFileName) of
@@ -172,6 +177,7 @@ init([ConfigIdStr, WorkerDb, MainPoolDb, AuxPoolDb, MyPoolId, MyTable, MyInterva
                                 my_timer = MyTimer,
                                 main_q = case AuxPoolDbState of undefined -> undefined; _ -> [] end,
                                 aux_q = case AuxPoolDbState of undefined -> undefined; _ -> [] end,
+                                conv_ts = ConvTS,
                                 insert_stmt_head = InsertStmtHead,
                                 insert_field_ids = InsertFieldIds
                             }};
@@ -194,7 +200,7 @@ handle_call(_Message, _From, State) ->
 handle_cast(_Message, State) ->
     {noreply, State}.
 
-handle_info({change, StartRef, {RowProps}}, State=#state{config_id=ConfigId, worker_db_state=WorkerDbState, main_db_state=MainPoolDbState, aux_db_state=AuxPoolDbState, aux_stored_seq=AuxStoredSeq, worker_name_tbl=WorkerNameTbl, my_timer=MyTimer, main_q=MainQ, aux_q=AuxQ, my_shares=MyShares}) ->
+handle_info({change, StartRef, {RowProps}}, State=#state{config_id=ConfigId, worker_db_state=WorkerDbState, main_db_state=MainPoolDbState, aux_db_state=AuxPoolDbState, aux_stored_seq=AuxStoredSeq, worker_name_tbl=WorkerNameTbl, my_timer=MyTimer, main_q=MainQ, aux_q=AuxQ, my_shares=MyShares, conv_ts=ConvTS}) ->
     Id = proplists:get_value(<<"id">>, RowProps),
     Deleted = proplists:get_value(<<"deleted">>, RowProps, false),
     Seq = proplists:get_value(<<"seq">>, RowProps),
@@ -219,7 +225,7 @@ handle_info({change, StartRef, {RowProps}}, State=#state{config_id=ConfigId, wor
                 true ->
                     case MainPoolDbState of
                         #db_state{start_ref=StartRef} ->
-                            {NewMainQ, NewAuxQ, NewMyShares} = handle_main_share(DocProps, Seq, MainQ, AuxQ, MyShares, WorkerNameTbl, WorkerDbState#db_state.db, AuxStoredSeq, ConfigId),
+                            {NewMainQ, NewAuxQ, NewMyShares} = handle_main_share(DocProps, Seq, MainQ, AuxQ, MyShares, WorkerNameTbl, WorkerDbState#db_state.db, AuxStoredSeq, ConfigId, ConvTS),
                             NewState = case NewMyShares of
                                 [] ->
                                     State#state{main_q=NewMainQ, aux_q=NewAuxQ, my_shares=NewMyShares};
@@ -304,8 +310,8 @@ code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
 
 
-handle_main_share(DocProps, Seq, MainQ, AuxQ, MyShares, WorkerNameTbl, WorkerDb, AuxStoredSeq, ConfigId) ->
-    [YR,MH,DY,HR,ME,SD] = proplists:get_value(<<"timestamp">>, DocProps),
+handle_main_share(DocProps, Seq, MainQ, AuxQ, MyShares, WorkerNameTbl, WorkerDb, AuxStoredSeq, ConfigId, ConvTS) ->
+    Time = ConvTS(proplists:get_value(<<"timestamp">>, DocProps)),
     WorkerId = proplists:get_value(<<"worker_id">>, DocProps),
     Username = lookup_worker_name(WorkerId, WorkerNameTbl, WorkerDb),
     ShareState = get_share_state(DocProps),
@@ -320,7 +326,7 @@ handle_main_share(DocProps, Seq, MainQ, AuxQ, MyShares, WorkerNameTbl, WorkerDb,
     end,
     RejectReason = proplists:get_value(<<"reject_reason">>, DocProps),
     S = #my_share{
-        time = {{YR,MH,DY}, {HR,ME,SD}},
+        time = Time,
         rem_host = proplists:get_value(<<"ip">>, DocProps),
         username = Username,
         our_result = OurResult,
@@ -481,3 +487,12 @@ get_share_state(DocProps) ->
 -spec string_to_hexbin(Str :: string()) -> binary().
 string_to_hexbin(Str) ->
     iolist_to_binary([io_lib:format("~2.16.0b", [X]) || X <- Str]).
+
+make_timestamp_converter({0,0,0}) ->
+    fun ([YR,MH,DY,HR,ME,SD]) -> {{YR,MH,DY}, {HR,ME,SD}} end;
+make_timestamp_converter(TimeDiff) ->
+    TimeDiffSeconds = calendar:time_to_seconds(TimeDiff),
+    fun ([YR,MH,DY,HR,ME,SD]) ->
+        S = calendar:datetime_to_gregorian_seconds({{YR,MH,DY}, {HR,ME,SD}}),
+        calendar:gregorian_seconds_to_datetime(S + TimeDiffSeconds)
+    end.
