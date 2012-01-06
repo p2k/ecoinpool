@@ -314,7 +314,7 @@ get_memory_pool(URL, Auth, TxTbl, OldMemorypool) ->
             {Result} = proplists:get_value(<<"result">>, Body),
             1 = proplists:get_value(<<"version">>, Result),
             
-            HashPrevBlock = ecoinpool_util:byte_reverse(ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"previousblockhash">>, Result))),
+            HashPrevBlock = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"previousblockhash">>, Result)), % This already is big endian... curses...
             CoinbaseValue = proplists:get_value(<<"coinbasevalue">>, Result),
             Timestamp = proplists:get_value(<<"time">>, Result),
             <<Bits:32/unsigned>> = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"bits">>, Result)),
