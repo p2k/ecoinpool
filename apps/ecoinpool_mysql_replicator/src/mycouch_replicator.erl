@@ -133,12 +133,12 @@ init([CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCo
     MissingTriggers = [InsertTriggerName, UpdateTriggerName, DeleteTriggerName] -- ExistingTriggers,
     lists:foreach(
         fun
-            (InsertTriggerName) ->
+            (N) when N =:= InsertTriggerName ->
                 {updated, _} = mysql:fetch(MyPoolId, [
                     "CREATE TRIGGER `", InsertTriggerName, "` AFTER INSERT ON `", MyTable, "` FOR EACH ROW ",
                     "INSERT INTO `", MyTable, "_rev` (`my_id`, `couch_id`) VALUES (NEW.`", MyIdField, "`, REPLACE(UUID(), '-', ''));"
                 ]);
-            (UpdateTriggerName) when MyTriggerFields =:= [] ->
+            (N) when N =:= UpdateTriggerName, MyTriggerFields =/= [] ->
                 {updated, _} = mysql:fetch(MyPoolId, [
                     "CREATE TRIGGER `", UpdateTriggerName, "` AFTER UPDATE ON `", MyTable, "` FOR EACH ROW ",
                     case MyTriggerFields of
@@ -153,7 +153,7 @@ init([CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCo
                         _ -> "\n  END IF;\nEND;"
                     end
                 ]);
-            (DeleteTriggerName) ->
+            (N) when N =:= DeleteTriggerName ->
                 {updated, _} = mysql:fetch(MyPoolId, [
                     "CREATE TRIGGER `", DeleteTriggerName, "` AFTER DELETE ON `", MyTable, "` FOR EACH ROW ",
                     "UPDATE `", MyTable, "_rev` SET `deleted` = 1 WHERE `my_id` = OLD.`", MyIdField, "`;"
