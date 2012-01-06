@@ -804,7 +804,7 @@ userCtx.ready(function () {
             return;
         }
         
-        var userId = /[?&]user_id=([^&])/.exec(window.location.search);
+        var userId = /[?&]user_id=([^&]+)/.exec(window.location.search);
         if (userId !== null) {
             userId = parseInt(userId[1]);
             if (isNaN(userId))
