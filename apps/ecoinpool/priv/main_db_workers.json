@@ -14,5 +14,8 @@
        "by_sub_pool_and_user_id": {
            "map": "function(doc) {if (doc.type === 'worker') emit([doc.sub_pool_id, doc.user_id], doc.name);}"
        }
+   },
+   "filters": {
+       "by_sub_pool": "function (doc, req) {return doc._deleted || (doc.type == 'worker' && doc.sub_pool_id == req.query.sub_pool_id);}"
    }
 }
