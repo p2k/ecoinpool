@@ -43,6 +43,8 @@
     update_site/0
 ]).
 
+-export([parse_configuration_document/1, parse_subpool_document/1, parse_worker_document/1]).
+
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 % Internal state record
@@ -153,26 +155,8 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
 
 handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
     case couchbeam:open_doc(ConfDb, "configuration") of
-        {ok, {DocProps}} ->
-            % Unpack and parse data
-            DocType = proplists:get_value(<<"type">>, DocProps),
-            ActiveSubpoolIds = proplists:get_value(<<"active_subpools">>, DocProps, []),
-            ViewUpdateInterval = proplists:get_value(<<"view_update_interval">>, DocProps, 300),
-            ActiveSubpoolIdsCheck = if is_list(ActiveSubpoolIds) -> lists:all(fun is_binary/1, ActiveSubpoolIds); true -> false end,
-            
-            if % Validate data
-                DocType =:= <<"configuration">>,
-                is_integer(ViewUpdateInterval),
-                ActiveSubpoolIdsCheck ->
-                    % Create record
-                    Configuration = #configuration{
-                        active_subpools=ActiveSubpoolIds,
-                        view_update_interval=if ViewUpdateInterval > 0 -> ViewUpdateInterval; true -> 0 end
-                    },
-                    {reply, {ok, Configuration}, State};
-                true ->
-                    {reply, {error, invalid}, State}
-            end;
+        {ok, Doc} ->
+            {reply, parse_configuration_document(Doc), State};
         _ ->
             {reply, {error, missing}, State}
     end;
@@ -180,7 +164,7 @@ handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
 handle_call({get_subpool_record, SubpoolId}, _From, State=#state{conf_db=ConfDb}) ->
     case couchbeam:open_doc(ConfDb, SubpoolId) of
         {ok, Doc} ->
-            {reply, parse_subpool_document(SubpoolId, Doc), State};
+            {reply, parse_subpool_document(Doc), State};
         _ ->
             {reply, {error, missing}, State}
     end;
@@ -188,7 +172,7 @@ handle_call({get_subpool_record, SubpoolId}, _From, State=#state{conf_db=ConfDb}
 handle_call({get_worker_record, WorkerId}, _From, State=#state{conf_db=ConfDb}) ->
     case couchbeam:open_doc(ConfDb, WorkerId) of
         {ok, Doc} ->
-            {reply, parse_worker_document(WorkerId, Doc), State};
+            {reply, parse_worker_document(Doc), State};
         _ ->
             {reply, {error, missing}, State}
     end;
@@ -199,7 +183,7 @@ handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=
         fun ({RowProps}, AccWorkers) ->
             Id = proplists:get_value(<<"id">>, RowProps),
             Doc = proplists:get_value(<<"doc">>, RowProps),
-            case parse_worker_document(Id, Doc) of
+            case parse_worker_document(Doc) of
                 {ok, Worker} ->
                     [Worker|AccWorkers];
                 {error, invalid} ->
@@ -476,7 +460,29 @@ do_update_views(DBS, PID) ->
     end,
     PID ! view_update_complete.
 
-parse_subpool_document(SubpoolId, {DocProps}) ->
+parse_configuration_document({DocProps}) ->
+    DocType = proplists:get_value(<<"type">>, DocProps),
+    ActiveSubpoolIds = proplists:get_value(<<"active_subpools">>, DocProps, []),
+    ViewUpdateInterval = proplists:get_value(<<"view_update_interval">>, DocProps, 300),
+    ActiveSubpoolIdsCheck = if is_list(ActiveSubpoolIds) -> lists:all(fun is_binary/1, ActiveSubpoolIds); true -> false end,
+    
+    if
+        DocType =:= <<"configuration">>,
+        is_integer(ViewUpdateInterval),
+        ActiveSubpoolIdsCheck ->
+            
+            % Create record
+            Configuration = #configuration{
+                active_subpools=ActiveSubpoolIds,
+                view_update_interval=if ViewUpdateInterval > 0 -> ViewUpdateInterval; true -> 0 end
+            },
+            {ok, Configuration};
+        true ->
+            {error, invalid}
+    end.
+
+parse_subpool_document({DocProps}) ->
+    SubpoolId = proplists:get_value(<<"_id">>, DocProps),
     DocType = proplists:get_value(<<"type">>, DocProps),
     Name = proplists:get_value(<<"name">>, DocProps),
     Port = proplists:get_value(<<"port">>, DocProps),
@@ -579,7 +585,8 @@ parse_auxpool_document({DocProps}) ->
             {error, invalid}
     end.
 
-parse_worker_document(WorkerId, {DocProps}) ->
+parse_worker_document({DocProps}) ->
+    WorkerId = proplists:get_value(<<"_id">>, DocProps),
     DocType = proplists:get_value(<<"type">>, DocProps),
     UserId = proplists:get_value(<<"user_id">>, DocProps, null),
     SubpoolId = proplists:get_value(<<"sub_pool_id">>, DocProps),

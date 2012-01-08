@@ -28,6 +28,7 @@
     start_link/1,
     reload_config/1,
     last_block_num/1,
+    load_full_block/2,
     add_blockchange_listener/2,
     remove_blockchange_listener/2
 ]).
@@ -66,7 +67,11 @@ reload_config(Client=#client{id=ClientId}) ->
 last_block_num(ClientId) ->
     gen_server:call({global, {?MODULE, ClientId}}, last_block_num).
 
-% Note: This will call gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockHash, BlockNum}) on a blockchange
+-spec load_full_block(ClientId :: binary(), BlockHashOrHeight :: binary() | integer()) -> loading | already | unknown.
+load_full_block(ClientId, BlockHash) ->
+    gen_server:call({global, {?MODULE, ClientId}}, {load_full_block, BlockHash}).
+
+% Note: This will callback gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockHash, BlockNum}) on a blockchange
 add_blockchange_listener(ClientId, ListenerRef) ->
     gen_server:cast({global, {?MODULE, ClientId}}, {add_blockchange_listener, ListenerRef}).
 
@@ -93,6 +98,23 @@ init([ClientId]) ->
 
 handle_call(last_block_num, _From, State=#state{last_block_num=LastBlockNum}) ->
     {reply, LastBlockNum, State};
+
+handle_call({load_full_block, BlockHashOrHeight}, _From, State=#state{client=Client}) ->
+    case ebitcoin_db:get_block_info(Client, BlockHashOrHeight) of
+        error ->
+            {reply, unknown, State};
+        {_, _, true} ->
+            {reply, already, State};
+        {_, BlockHash, false} ->
+            Getdata = #btc_getdata{
+                inventory=[#btc_inv_vect{
+                    type=msg_block,
+                    hash=ecoinpool_util:hexbin_to_bin(BlockHash)
+                }]
+            },
+            send_msg(State, Getdata),
+            {reply, loading, State}
+    end;
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
@@ -487,8 +509,8 @@ encode_message(Message=#btc_version{}) ->
 %    {inv, btc_protocol:encode_inv(Message)};
 %encode_message(Message=#btc_addr{}) ->
 %    {addr, btc_protocol:encode_addr(Message)};
-%encode_message(Message=#btc_getdata{}) ->
-%    {getdata, btc_protocol:encode_getdata(Message)};
+encode_message(Message=#btc_getdata{}) ->
+    {getdata, btc_protocol:encode_getdata(Message)};
 %encode_message(Message=#btc_getblocks{}) ->
 %    {getblocks, btc_protocol:encode_getblocks(Message)};
 encode_message(Message=#btc_getheaders{}) ->

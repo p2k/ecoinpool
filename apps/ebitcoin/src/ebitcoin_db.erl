@@ -32,6 +32,7 @@
     store_block/3,
     store_header/3,
     cut_branch/2,
+    get_block_info/2,
     get_last_block_info/1,
     get_block_height/2,
     get_block_locator_hashes/2,
@@ -76,6 +77,9 @@ store_header(#client{name=ClientName}, BlockNum, Header) ->
 
 cut_branch(#client{name=ClientName}, Height) ->
     gen_server:cast(?MODULE, {cut_branch, ClientName, Height}).
+
+get_block_info(#client{name=ClientName}, BlockHashOrHeight) ->
+    gen_server:call(?MODULE, {get_block_info, ClientName, BlockHashOrHeight}, infinity).
 
 get_last_block_info(#client{name=ClientName}) ->
     gen_server:call(?MODULE, {get_last_block_info, ClientName}, infinity).
@@ -183,6 +187,27 @@ handle_call({setup_client_dbs, ClientName, Chain}, _From, State=#state{srv_conn=
             {reply, error, State}
     end;
 
+handle_call({get_block_info, ClientName, BlockHash}, _From, State=#state{srv_conn=S}) when is_binary(BlockHash) ->
+    {ok, ClientDB} = couchbeam:open_db(S, binary:bin_to_list(ClientName)),
+    case couchbeam:open_doc(ClientDB, ecoinpool_util:bin_to_hexbin(BlockHash)) of
+        {ok, {DocProps}} ->
+            BlockHeight = proplists:get_value(<<"block_num">>, DocProps),
+            HasTransactions = proplists:get_value(<<"n_tx">>, DocProps) =/= 0,
+            {reply, {BlockHeight, BlockHash, HasTransactions}, State};
+        _ ->
+            {reply, error, State}
+    end;
+
+handle_call({get_block_info, ClientName, BlockHeight}, _From, State=#state{srv_conn=S}) when is_integer(BlockHeight) ->
+    {ok, ClientDB} = couchbeam:open_db(S, binary:bin_to_list(ClientName)),
+    case couchbeam_view:fetch(ClientDB, {"headers", "by_block_num"}, [{key, BlockHeight}, {limit, 1}]) of
+        {ok, []} ->
+            {reply, error, State};
+        {ok, [{RowProps}]} ->
+            BlockHash = ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"id">>, RowProps)),
+            handle_call({get_block_info, ClientName, BlockHash}, _From, State)
+    end;
+
 handle_call({get_last_block_info, ClientName}, _From, State=#state{srv_conn=S}) ->
     {ok, ClientDB} = couchbeam:open_db(S, binary:bin_to_list(ClientName)),
     case couchbeam_view:fetch(ClientDB, {"headers", "by_block_num"}, [{limit, 1}, descending]) of
@@ -242,16 +267,11 @@ handle_cast({store_block, ClientName, BlockNum, Block}, State=#state{srv_conn=S}
     
     StoreTransactions = case couchbeam:open_doc(ClientDB, BlockHash) of
         {error, _} -> % Create new, full header
-            case save_doc(ClientDB, make_block_header_document(BlockNum, BlockHash, Header, length(Txns))) of
-                ok ->
-                    true;
-                _ ->
-                    false
-            end;
+            save_doc(ClientDB, make_block_header_document(BlockNum, BlockHash, Header, length(Txns))) =:= ok;
         {ok, Doc} -> % Update existing partial header
             case couchbeam_doc:get_value(<<"n_tx">>, Doc) of
                 0 ->
-                    save_doc(ClientDB, couchbeam_doc:set_value(<<"n_tx">>, length(Txns), Doc));
+                    save_doc(ClientDB, couchbeam_doc:set_value(<<"n_tx">>, length(Txns), Doc)) =:= ok;
                 _ ->
                     log4erl:info(ebitcoin, "store_block: Skipping an already existing block."),
                     false

@@ -28,12 +28,18 @@
 
 -export([init/1, handle_change/2, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
+-record(state, {
+    active_subpools,
+    current_subpools,
+    subpool_records
+}).
+
 %% ===================================================================
 %% API functions
 %% ===================================================================
 
 start_link(ConfDb) ->
-    gen_changes:start_link(?MODULE, ConfDb, [continuous, heartbeat, {filter, "doctypes/pool_only"}], []).
+    gen_changes:start_link(?MODULE, ConfDb, [continuous, heartbeat, include_docs, {filter, "doctypes/pool_only"}], []).
 
 %% ===================================================================
 %% Gen_Changes callbacks
@@ -41,92 +47,99 @@ start_link(ConfDb) ->
 
 init([]) ->
     % Get already running subpools; useful if we were restarted
-    ActiveSubpoolIds = ecoinpool_sup:running_subpools(),
-    {ok, sets:from_list(ActiveSubpoolIds)}.
+    ActiveSubpools = sets:from_list(ecoinpool_sup:running_subpools()),
+    {ok, #state{active_subpools=ActiveSubpools, current_subpools=sets:new(), subpool_records=dict:new()}}.
 
-handle_change({ChangeProps}, CurrentSubpools) ->
+handle_change({ChangeProps}, State) ->
     case proplists:get_value(<<"id">>, ChangeProps) of
-        <<"configuration">> -> % The one and only root config document
-            gen_changes:cast(self(), reload_root_config); % Schedule root config reload
+        <<"configuration">> ->
+            gen_changes:cast(self(), {reload_root_config, proplists:get_value(<<"doc">>, ChangeProps)});
         OtherId ->
-            case sets:is_element(OtherId, CurrentSubpools) of
+            case proplists:get_value(<<"deleted">>, ChangeProps) of
                 true ->
-                    gen_changes:cast(self(), {reload_subpool, OtherId});
+                    gen_changes:cast(self(), {remove_subpool, OtherId, true});
                 _ ->
-                    ok
+                    gen_changes:cast(self(), {reload_subpool, proplists:get_value(<<"doc">>, ChangeProps)})
             end
     end,
-    {noreply, CurrentSubpools}.
+    {noreply, State}.
 
-handle_call(_Message, _From, CurrentSubpools) ->
-    {reply, error, CurrentSubpools}.
+handle_call(_Message, _From, State) ->
+    {reply, error, State}.
 
-handle_cast(reload_root_config, CurrentSubpools) ->
-    % Load the root configuration, crash on error
-    {ok, #configuration{active_subpools=ActiveSubpoolIds, view_update_interval=ViewUpdateInterval}} = ecoinpool_db:get_configuration(),
+handle_cast({reload_root_config, Doc}, State=#state{active_subpools=ActiveSubpools, subpool_records=SubpoolRecords}) ->
+    {ok, #configuration{active_subpools=CurrentSubpoolIds, view_update_interval=ViewUpdateInterval}} = ecoinpool_db:parse_configuration_document(Doc),
     
-    % Set the view update interval
     ecoinpool_db:set_view_update_interval(ViewUpdateInterval),
     
-    CurrentSubpoolIds = sets:to_list(CurrentSubpools),
+    ActiveSubpoolIds = sets:to_list(ActiveSubpools),
     
     lists:foreach( % Add new sub-pools
         fun (SubpoolId) ->
-            gen_changes:cast(self(), {reload_subpool, SubpoolId})
-        end,
-        ActiveSubpoolIds -- CurrentSubpoolIds
-    ),
-    lists:foreach( % Remove deleted sub-pools
-        fun (SubpoolId) ->
-            gen_changes:cast(self(), {remove_subpool, SubpoolId})
+            case dict:find(SubpoolId, SubpoolRecords) of
+                {ok, Subpool} ->
+                    gen_changes:cast(self(), {reload_subpool, Subpool});
+                _ ->
+                    ok % If we don't have the subpool record now, it has to follow later in the changes stream
+            end
         end,
         CurrentSubpoolIds -- ActiveSubpoolIds
     ),
+    lists:foreach( % Remove deleted sub-pools
+        fun (SubpoolId) ->
+            gen_changes:cast(self(), {remove_subpool, SubpoolId, false})
+        end,
+        ActiveSubpoolIds -- CurrentSubpoolIds
+    ),
     
-    {noreply, CurrentSubpools};
+    {noreply, State#state{current_subpools=sets:from_list(CurrentSubpoolIds)}};
 
-handle_cast({reload_subpool, SubpoolId}, CurrentSubpools) ->
-    % Load the sub-pool configuration (here to check if valid)
-    case ecoinpool_db:get_subpool_record(SubpoolId) of
-        {ok, Subpool} ->
-            % Check if sub-pool is already there
-            case sets:is_element(SubpoolId, CurrentSubpools) of
-                true -> % Yes: Reload the sub-pool, leave others as they are
-                    ecoinpool_sup:reload_subpool(Subpool);
-                _ -> % No: Add new sub-pool
-                    ecoinpool_sup:start_subpool(SubpoolId)
-            end,
-            % Add (if not already there)
-            {noreply, sets:add_element(SubpoolId, CurrentSubpools)};
-        
-        {error, missing} -> % Stop if missing
+handle_cast({reload_subpool, Doc={_}}, State=#state{subpool_records=SubpoolRecords}) ->
+    case ecoinpool_db:parse_subpool_document(Doc) of
+        {ok, Subpool=#subpool{id=SubpoolId}} ->
+            % Store sub-pool and check if it has to be activated/reloaded
+            handle_cast({reload_subpool, Subpool}, State#state{subpool_records=dict:store(SubpoolId, Subpool, SubpoolRecords)});
+        {error, invalid} ->
+            log4erl:warn("ecoinpool_cfg_monitor: reload_subpool: Ignoring an invalid subpool document."),
+            {noreply, State}
+    end;
+
+handle_cast({reload_subpool, Subpool=#subpool{id=SubpoolId}}, State=#state{active_subpools=ActiveSubpools, current_subpools=CurrentSubpools}) ->
+    % Check if sub-pool is already active
+    case sets:is_element(SubpoolId, ActiveSubpools) of
+        true -> % Yes: Reload the sub-pool, leave others as they are
+            ecoinpool_sup:reload_subpool(Subpool),
+            {noreply, State};
+        _ -> % No: Add new sub-pool, if we should
             case sets:is_element(SubpoolId, CurrentSubpools) of
                 true ->
-                    ecoinpool_sup:stop_subpool(SubpoolId),
-                    {noreply, sets:del_element(SubpoolId, CurrentSubpools)};
+                    ecoinpool_sup:start_subpool(SubpoolId),
+                    {noreply, State#state{active_subpools=sets:add_element(SubpoolId, ActiveSubpools)}};
                 _ ->
-                    {noreply, CurrentSubpools}
-            end;
-        
-        {error, invalid} -> % Ignore on invalid
-            log4erl:warn("ecoinpool_cfg_monitor: reload_subpool: Invalid document for subpool ID: ~s.", [SubpoolId]),
-            {noreply, CurrentSubpools}
+                    {noreply, State}
+            end
     end;
 
-handle_cast({remove_subpool, SubpoolId}, CurrentSubpools) ->
-    case sets:is_element(SubpoolId, CurrentSubpools) of
+handle_cast({remove_subpool, SubpoolId, DeleteRecord}, State=#state{active_subpools=ActiveSubpools, subpool_records=SubpoolRecords}) ->
+    State1 = if
+        DeleteRecord ->
+            State#state{subpool_records=dict:erase(SubpoolId, SubpoolRecords)};
+        true ->
+            State
+    end,
+    case sets:is_element(SubpoolId, ActiveSubpools) of
         true ->
             ecoinpool_sup:stop_subpool(SubpoolId),
-            {noreply, sets:del_element(SubpoolId, CurrentSubpools)};
+            {noreply, State1#state{active_subpools=sets:del_element(SubpoolId, ActiveSubpools)}};
         _ ->
-            {noreply, CurrentSubpools}
+            {noreply, State1}
     end;
 
-handle_cast(_Message, CurrentSubpools) ->
-    {noreply, CurrentSubpools}.
+handle_cast(_Message, State) ->
+    {noreply, State}.
 
-handle_info(_Message, CurrentSubpools) ->
-    {noreply, CurrentSubpools}.
+handle_info(_Message, State) ->
+    {noreply, State}.
 
-terminate(_Reason, _CurrentSubpools) ->
+terminate(_Reason, _State) ->
     ok.
