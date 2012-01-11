@@ -483,17 +483,6 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     });
     
     addType({
-        type: "sc",
-        title: "SolidCoin",
-        hps: 131072,
-        cb: false,
-        ebc: false,
-        rpc: 8555,
-        aux: [],
-        auxonly: false
-    });
-    
-    addType({
         type: "ltc",
         title: "LiteCoin",
         hps: 131072,

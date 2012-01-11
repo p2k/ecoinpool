@@ -33,14 +33,13 @@ behaviour_info(callbacks) ->
         
         % getwork_method()
         %   Should return an atom which is the name of the only valid getwork
-        %   method (static); this is typically getwork for bitcoin networks and
-        %   sc_getwork for solidcoin networks.
+        %   method (static); this is typically getwork for bitcoin networks.
         {getwork_method, 0},
         
         % sendwork_method()
         %   Should return an atom which is the name of the method which is used
         %   to return shares (static); this is typically getwork for bitcoin
-        %   networks and sc_testwork for solidcoin networks.
+        %   networks.
         {sendwork_method, 0},
         
         % share_target()

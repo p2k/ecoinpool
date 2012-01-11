@@ -24,7 +24,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([init/0, dsha256_hash/1, tree_pair_dsha256_hash/2, sha256_midstate/1, rs_hash/1, scrypt_hash/1]).
+-export([init/0, dsha256_hash/1, tree_pair_dsha256_hash/2, sha256_midstate/1, scrypt_hash/1]).
 
 -export([tree_dsha256_hash/1, tree_level_dsha256_hash/1, first_tree_branches_dsha256_hash/1, fold_tree_branches_dsha256_hash/2]).
 
@@ -54,9 +54,6 @@ tree_pair_dsha256_hash(_, _) ->
     erlang:nif_error(nif_library_not_loaded).
 
 sha256_midstate(_) ->
-    erlang:nif_error(nif_library_not_loaded).
-
-rs_hash(_) ->
     erlang:nif_error(nif_library_not_loaded).
 
 scrypt_hash(_) ->
@@ -132,9 +129,6 @@ sha256_midstate_test() ->
 
 dsha256_hash_test() ->
     ?assertEqual(base64:decode(<<"AAAAAAAAAuPFkwailUxBO6pxrRh9Z7v/pxJh6LLeoc8=">>), dsha256_hash(btc_sample_header())).
-
-rs_hash_test() ->
-    ?assertEqual(base64:decode(<<"AAAAAA/q/9gMdBn4bwSEjvPhseM26WEQ9apzJDT+5/o=">>), rs_hash(sc_coindaemon:sample_header())).
 
 scrypt_test() ->
     ?assertEqual(base64:decode(<<"AAAAARDINXlmV230bzuALKiX3retGLEvHCTs/2OG69k=">>), scrypt_hash(scrypt_coindaemon:sample_header())).
