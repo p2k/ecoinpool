@@ -1,6 +1,6 @@
 
 /* This code was taken from the official BLAKE-512 site, modified by RealSolid
-   and later slightly refurbished by me. */
+   and later slightly refurbished by me. It is free of patents and copyright. */
 
 #include <string.h>
 #include <stdio.h>

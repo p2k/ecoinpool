@@ -25,9 +25,9 @@
  *
  * This file was originally written by Colin Percival as part of the Tarsnap
  * online backup system.
- *
- * Some minor modifications made by p2k.
  */
+
+// This file was modified by p2k
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -682,3 +682,36 @@ void scrypt_1024_1_1_256(const unsigned char *input, unsigned char *output)
 	scrypt_1024_1_1_256_sp(input, output, scratchpad);
 }
 
+//assumes input is 64 bytes (or longer)
+void midstate_sha256(const unsigned char *in, unsigned char *out)
+{
+    SHA256_CTX ctx;
+    
+    SHA256_Init(&ctx);
+    SHA256_Update(&ctx, in, 64);
+    memcpy(out, &ctx.state, 32);
+}
+
+// Output is 32 bytes
+void sha256(const unsigned char *in, size_t size, unsigned char *out)
+{
+    SHA256_CTX ctx;
+    
+    SHA256_Init(&ctx);
+    SHA256_Update(&ctx, in, size);
+    SHA256_Final(out, &ctx);
+}
+
+// Output is 32 bytes
+void double_sha256(const unsigned char *in, size_t size, unsigned char *out)
+{
+    SHA256_CTX ctx;
+    
+    SHA256_Init(&ctx);
+    SHA256_Update(&ctx, in, size);
+    SHA256_Final(out, &ctx);
+    
+    SHA256_Init(&ctx);
+    SHA256_Update(&ctx, out, 32);
+    SHA256_Final(out, &ctx);
+}

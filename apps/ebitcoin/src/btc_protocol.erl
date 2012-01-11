@@ -716,9 +716,6 @@ hash160_from_address_test_() ->
         ?_assertError(invalid_bitcoin_address, hash160_from_address(<<"166rK7eEVgnGvs9aA7jvu8NoPv8KzbPQ3M">>))
     ].
 
-dsha256_hash_test() ->
-    ?assertEqual(base64:decode(<<"AAAAAAAAAuPFkwailUxBO6pxrRh9Z7v/pxJh6LLeoc8=">>), ecoinpool_hash:dsha256_hash(sample_header())).
-
 encode_auxpow_test_() ->
     EAuxPOW = base64:decode(<<"AQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////83BEttCxoDRbIAUiz6vm1t9PgsbckHZOle+WNcwqSrg4YrqhbT1iWOlPGlOFOQN0kBAAAAAAAAAP////8BWhNWKgEAAABDQQSKuGvFWJdPA1AObmrj/iAuKXxBMm3i0trgHhYTnFaawlsMBgC6+TJT/tGzwZKttrsZnPGrV140gzm0T1mSxwTPrAAAAAAn8KtiOt5HXpwN4tQEQmbmWxSuBmMGJ7G1IAAAAAAAAAX5sGhq0WwiZ8xTBoel7dwxqSCGNxb7vNhMJQ25IHqi3hysmwX/aJ/fZUAqEAaqOgT3jaG1e2Lq+ADAGw5IA2cW8tH7fHUYZPkos3eNfblB+CdOpVo/AcrNCe1KMyl0S45wnoGRrDIbjq1BnZOD+qlE6ukuDHZ7/XFXtiWpJoSkB4j4tkEOQaVNpJP90NoIqyIoCWZFZH+doHbK1C4mW/MuAAAAAAAAAAAAAQAAAEyrZVt1wzmfhMbzPXs2PSYpWQPh3PrtWdoBAAAAAAAAXWb6XgsqHvp1esikEjISO0HGWIJsAtxLrASDiRMmw/mubJlOS20LGmSgcoo=">>),
     AuxHash = binary_part(EAuxPOW, {57, 32}),

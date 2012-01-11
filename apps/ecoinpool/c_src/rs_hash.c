@@ -6,7 +6,7 @@
 
 /* Header files, who needs them? */
 extern void blake512_hash(uint8_t *out, const uint8_t *in);
-extern void Sha256(uint8_t* in, uint8_t* out);
+extern void sha256(const unsigned char *in, size_t size, unsigned char *out);
 
 extern const uint8_t BlockHash_1_MemoryPAD8[];
 
@@ -69,5 +69,5 @@ void BlockHash_1(uint8_t *p512bytes, uint8_t *final_hash)
 	    x++;
     }
 
-    Sha256(work1, final_hash);
+    sha256(work1, 512, final_hash);
 }

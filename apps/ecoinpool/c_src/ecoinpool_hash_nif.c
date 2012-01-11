@@ -25,9 +25,8 @@
 /* Header files are for beginners. */
 extern void BlockHash_1(unsigned char *p512bytes, unsigned char *final_hash);
 extern void scrypt_1024_1_1_256(const unsigned char *input, unsigned char *output);
-extern void DoubleSha256(const unsigned char* in, size_t size, unsigned char* out);
-extern void TreeDoubleSha256(const unsigned char* in, unsigned char* out);
-extern void MidstateSha256(const unsigned char* in, unsigned char* out);
+extern void midstate_sha256(const unsigned char *in, unsigned char *out);
+extern void double_sha256(const unsigned char *in, size_t size, unsigned char *out);
 
 static void reverse32(unsigned char *dst, const unsigned char *src)
 {
@@ -53,7 +52,7 @@ static ERL_NIF_TERM dsha256_hash_nif(ErlNifEnv* env, int argc, const ERL_NIF_TER
     
     ERL_NIF_TERM ret;
     unsigned char *final_hash = enif_make_new_binary(env, 32, &ret);
-    DoubleSha256(bin.data, bin.size, final_hash);
+    double_sha256(bin.data, bin.size, final_hash);
     reverse32(final_hash, final_hash);
     
     return ret;
@@ -70,7 +69,7 @@ static ERL_NIF_TERM tree_pair_dsha256_hash_nif(ErlNifEnv* env, int argc, const E
     unsigned char *final_hash = enif_make_new_binary(env, 32, &ret);
     reverse32(&in[0], bin1.data);
     reverse32(&in[32], bin2.data);
-    TreeDoubleSha256(in, final_hash);
+    double_sha256(in, 64, final_hash);
     reverse32(final_hash, final_hash);
     
     return ret;
@@ -84,7 +83,7 @@ static ERL_NIF_TERM sha256_midstate_nif(ErlNifEnv* env, int argc, const ERL_NIF_
     
     ERL_NIF_TERM ret;
     unsigned char *midstate = enif_make_new_binary(env, 32, &ret);
-    MidstateSha256(bin.data, midstate);
+    midstate_sha256(bin.data, midstate);
     
     return ret;
 }

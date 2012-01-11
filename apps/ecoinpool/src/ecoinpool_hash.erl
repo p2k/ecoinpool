@@ -124,13 +124,19 @@ r_tree_dsha256(Hashlist, Size) ->
 
 -ifdef(TEST).
 
+btc_sample_header() ->
+    base64:decode(<<"AQAAAGpJl3mr0KHNIp5GxjMf1fuqR1/qIRK3OIAGAAAAAAAARyDUB5doFsGHiCruAnPtGoxaosJyISVkCbtLbEzHA/l2JMpOmhEOGkFECaA=">>).
+
+sha256_midstate_test() ->
+    ?assertEqual(base64:decode(<<"GMtM3JT43UT02aEl8Xgf636xxQ9rOCso6HBfhUuwlzU=">>), sha256_midstate(btc_sample_header())).
+
 dsha256_hash_test() ->
-    ?assertEqual(base64:decode(<<"UD2DGaSDSM3GEKWC9791S1gz32UDhgbrSFEHkN/JlZU=">>), dsha256_hash(<<"hello">>)).
+    ?assertEqual(base64:decode(<<"AAAAAAAAAuPFkwailUxBO6pxrRh9Z7v/pxJh6LLeoc8=">>), dsha256_hash(btc_sample_header())).
 
 rs_hash_test() ->
     ?assertEqual(base64:decode(<<"AAAAAA/q/9gMdBn4bwSEjvPhseM26WEQ9apzJDT+5/o=">>), rs_hash(sc_coindaemon:sample_header())).
 
 scrypt_test() ->
-    ?assertEqual(base64:decode(<<"AAAAARDINXlmV230bzuALKiX3retGLEvHCTs/2OG69k=">>), scrypt_hash(ltc_coindaemon:sample_header())).
+    ?assertEqual(base64:decode(<<"AAAAARDINXlmV230bzuALKiX3retGLEvHCTs/2OG69k=">>), scrypt_hash(scrypt_coindaemon:sample_header())).
 
 -endif.
