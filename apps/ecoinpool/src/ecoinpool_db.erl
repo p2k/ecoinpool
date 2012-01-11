@@ -271,7 +271,7 @@ handle_cast({store_share,
             if
                 AuxWorkStale ->
                     log4erl:debug(db, "~s&~s: Storing ~p&stale share from ~s/~s", [SubpoolName, AuxpoolName, MainState, WorkerName, element(1, Peer)]),
-                    store_invalid_share_in_db(WorkerId, UserId, Peer, stale, undefined, Hash, undefined, undefined, undefined, Round, AuxDB),
+                    store_invalid_share_in_db(WorkerId, UserId, Peer, stale, undefined, Hash, undefined, undefined, undefined, AuxRound, AuxDB),
                     State;
                 true ->
                     #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum, prev_block=AuxPrevBlock} = AuxWork,
@@ -306,7 +306,7 @@ handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round, aux_po
                 #workunit{aux_work=#auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum, prev_block=AuxPrevBlock}} ->
                     store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, AuxRound, AuxDB);
                 _ ->
-                    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, undefined, Hash, undefined, undefined, undefined, Round, AuxDB)
+                    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, undefined, Hash, undefined, undefined, undefined, AuxRound, AuxDB)
             end;
         _ ->
             log4erl:debug(db, "~s: Storing invalid share from ~s/~s, reason: ~p", [SubpoolName, WorkerName, element(1, Peer), Reason]),

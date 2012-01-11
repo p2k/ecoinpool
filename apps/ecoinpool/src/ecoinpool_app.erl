@@ -32,6 +32,17 @@
 start(_StartType, _StartArgs) ->
     % Init hash library
     ok = ecoinpool_hash:init(),
+    % Get or create an unique server ID
+    ServerIdFile = filename:join(code:priv_dir(ecoinpool), "server_id.txt"),
+    ServerId = case file:read_file(ServerIdFile) of
+        {ok, Data} ->
+            Data;
+        {error, _} ->
+            NewServerId = ecoinpool_util:new_random_uuid(),
+            ok = file:write_file(ServerIdFile, NewServerId),
+            NewServerId
+    end,
+    application:set_env(ecoinpool, server_id, ServerId),
     % Load configuration
     {ok, DBHost} = application:get_env(ecoinpool, db_host),
     {ok, DBPort} = application:get_env(ecoinpool, db_port),
@@ -41,7 +52,7 @@ start(_StartType, _StartArgs) ->
     log4erl:conf(filename:join(code:priv_dir(ecoinpool), "log4erl.conf")),
     {ok, VSN} = application:get_key(ecoinpool, vsn),
     log4erl:warn("==> Welcome to ecoinpool v~s written by p2k! <==", [VSN]),
-    ecoinpool_sup:start_link({DBHost, DBPort, DBPrefix, DBOptions}).
+    ecoinpool_sup:start_link(ServerId, {DBHost, DBPort, DBPrefix, DBOptions}).
 
 stop(_State) ->
     ok.

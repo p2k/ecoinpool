@@ -56,3 +56,25 @@
     lp_heartbeat :: boolean()
 }).
 -type worker() :: #worker{}.
+
+-record(share, {
+    subpool_id :: binary(),
+    is_aux = false :: boolean(),
+    pool_name :: binary(),
+    worker_id :: binary(),
+    worker_name :: binary(),
+    user_id :: term(),
+    peer :: peer(),
+    timestamp :: erlang:timestamp(),
+    state :: invalid | valid | candidate,
+    reject_reason :: reject_reason() | undefined,
+    hash :: binary() | undefined,
+    parent_hash :: binary() | undefined,
+    target :: binary() | undefined,
+    block_num :: integer() | undefined,
+    prev_block :: binary() | undefined,
+    round :: integer() | undefined,
+    data :: binary() | undefined,
+    is_local = true :: boolean()
+}).
+-type share() :: #share{}.

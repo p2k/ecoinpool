@@ -27,7 +27,7 @@
 
 %% API
 -export([
-    start_link/1,
+    start_link/2,
     running_subpools/0,
     start_subpool/1,
     reload_subpool/1,
@@ -48,8 +48,8 @@
 %% API functions
 %% ===================================================================
 
-start_link(DBConfig) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, [DBConfig]).
+start_link(ServerId, DBConfig) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [ServerId, DBConfig]).
 
 running_subpools() ->
     lists:foldl(
@@ -96,7 +96,7 @@ crash_transfer_ets(Key) ->
 %% Supervisor callbacks
 %% ===================================================================
 
-init([DBConfig]) ->
+init([_ServerId, DBConfig]) ->
     {ok, { {one_for_one, 5, 10}, [
         {ecoinpool_crash_repo, {ebitcoin_crash_repo, start_link, [{local, ecoinpool_crash_repo}]}, permanent, 5000, worker, [ebitcoin_crash_repo]},
         {ecoinpool_rpc, {ecoinpool_rpc, start_link, []}, permanent, 5000, worker, [ecoinpool_rpc]},

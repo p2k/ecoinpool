@@ -35,7 +35,6 @@
     url,
     auth,
     
-    poll_timer,
     ebtc_id,
     block_num,
     prev_block,
@@ -71,18 +70,18 @@ init([SubpoolId, Config]) ->
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
     Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
     
-    {PollTimer, EBtcId} = case proplists:get_value(ebitcoin_client_id, Config) of
+    EBtcId = case proplists:get_value(ebitcoin_client_id, Config) of
         undefined ->
-            {ok, T} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
-            {T, undefined};
+            {ok, _} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
+            undefined;
         Id ->
             ebitcoin_client:add_blockchange_listener(Id, self()),
-            {undefined, Id}
+            Id
     end,
     
     ecoinpool_server:auxdaemon_ready(SubpoolId, ?MODULE, self()),
     
-    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, poll_timer=PollTimer, ebtc_id=EBtcId}}.
+    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, ebtc_id=EBtcId}}.
 
 handle_call(get_aux_work, _From, OldState) ->
     % Check if a new block must be fetched
@@ -119,13 +118,7 @@ handle_info(poll_daemon, State) ->
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{poll_timer=PollTimer, ebtc_id=EBtcId}) ->
-    case PollTimer of
-        undefined ->
-            ebitcoin_client:remove_blockchange_listener(EBtcId, self());
-        _ ->
-            timer:cancel(PollTimer)
-    end,
+terminate(_Reason, #state{}) ->
     log4erl:warn(daemon, "NMC AuxDaemon terminated."),
     ok.
 
@@ -156,7 +149,7 @@ check_fetch_now(_, #state{last_fetch=undefined}) ->
     {true, starting};
 check_fetch_now(_, #state{block_num=undefined}) ->
     {true, starting};
-check_fetch_now(Now, #state{poll_timer=undefined, block_num=BlockNum, last_fetch=LastFetch}) -> % Non-polling
+check_fetch_now(Now, #state{ebtc_id=EBtcId, block_num=BlockNum, last_fetch=LastFetch}) when is_binary(EBtcId) -> % Non-polling
     case BlockNum of
         {pushed, NewBlockNum} ->
             {true, {new_block, NewBlockNum}};

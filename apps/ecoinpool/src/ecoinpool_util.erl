@@ -20,7 +20,7 @@
 
 -module(ecoinpool_util).
 
--export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, byte_reverse/1, bn2mpi_le/1, mpi2bn_le/1, send_http_req/3]).
+-export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, byte_reverse/1, bn2mpi_le/1, mpi2bn_le/1, send_http_req/3, new_random_uuid/0]).
 
 -on_load(module_init/0).
 
@@ -112,3 +112,10 @@ mpi2bn_le(MPI) ->
 send_http_req(URL, Auth, PostData) ->
     {ok, VSN} = application:get_key(ecoinpool, vsn),
     ibrowse:send_req(URL, [{"User-Agent", "ecoinpool/" ++ VSN}, {"Accept", "application/json"}], post, PostData, [{basic_auth, Auth}, {content_type, "application/json"}]).
+
+new_random_uuid() ->
+    R1 = random:uniform(16#ffffffff)-1,
+    R2 = random:uniform(16#ffffffff)-1,
+    R3 = random:uniform(16#ffffffff)-1,
+    R4 = random:uniform(16#ffffffff)-1,
+    bin_to_hexbin(<<R1:32, R2:32, R3:32, R4:32>>).

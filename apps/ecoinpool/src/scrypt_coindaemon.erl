@@ -56,7 +56,6 @@
     tag,
     pay_to,
     
-    poll_timer,
     ebtc_id,
     txtbl,
     worktbl,
@@ -176,18 +175,18 @@ init([SubpoolId, Config]) ->
             {ets:new(txtbl, [set, protected]), ets:new(worktbl, [set, protected])}
     end,
     
-    {PollTimer, EBtcId} = case proplists:get_value(ebitcoin_client_id, Config) of
+    EBtcId = case proplists:get_value(ebitcoin_client_id, Config) of
         undefined ->
-            {ok, T} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
-            {T, undefined};
+            {ok, _} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
+            undefined;
         Id ->
             ebitcoin_client:add_blockchange_listener(Id, self()),
-            {undefined, Id}
+            Id
     end,
     
     ecoinpool_server:coindaemon_ready(SubpoolId, self()),
     
-    {ok, #state{subpool=SubpoolId, pool_type=PoolType, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, poll_timer=PollTimer, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}}.
+    {ok, #state{subpool=SubpoolId, pool_type=PoolType, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}}.
 
 handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, worktbl=WorkTbl, txtbl=TxTbl}) ->
     {Header, <<>>} = btc_protocol:decode_header(BData),
@@ -252,7 +251,7 @@ handle_info({'ETS-TRANSFER', WorkTbl, _FromPid, {?MODULE, SubpoolId, worktbl}}, 
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(Reason, #state{subpool=SubpoolId, pool_type=PoolType, poll_timer=PollTimer, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}) ->
+terminate(Reason, #state{subpool=SubpoolId, pool_type=PoolType, txtbl=TxTbl, worktbl=WorkTbl}) ->
     case Reason of
         normal -> ok;
         shutdown -> ok;
@@ -261,12 +260,6 @@ terminate(Reason, #state{subpool=SubpoolId, pool_type=PoolType, poll_timer=PollT
             CrashRepoPid = ecoinpool_sup:crash_repo_pid(),
             ets:give_away(TxTbl, CrashRepoPid, {?MODULE, SubpoolId, txtbl}),
             ets:give_away(WorkTbl, CrashRepoPid, {?MODULE, SubpoolId, worktbl})
-    end,
-    case PollTimer of
-        undefined ->
-            ebitcoin_client:remove_blockchange_listener(EBtcId, self());
-        _ ->
-            timer:cancel(PollTimer)
     end,
     log4erl:warn(daemon, "SCrypt-~p CoinDaemon terminated.", [PoolType]),
     ok.
@@ -348,7 +341,7 @@ check_fetch_now(_, #state{last_fetch=undefined}) ->
     {true, starting};
 check_fetch_now(_, #state{block_num=undefined}) ->
     {true, starting};
-check_fetch_now(Now, #state{poll_timer=undefined, block_num=BlockNum, last_fetch=LastFetch}) -> % Non-polling
+check_fetch_now(Now, #state{ebtc_id=EBtcId, block_num=BlockNum, last_fetch=LastFetch}) when is_binary(EBtcId) -> % Non-polling
     case BlockNum of
         {pushed, NewBlockNum} ->
             {true, {new_block, NewBlockNum}};

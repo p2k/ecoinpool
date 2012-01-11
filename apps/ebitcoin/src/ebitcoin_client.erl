@@ -72,6 +72,7 @@ load_full_block(ClientId, BlockHash) ->
     gen_server:call({global, {?MODULE, ClientId}}, {load_full_block, BlockHash}).
 
 % Note: This will callback gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockHash, BlockNum}) on a blockchange
+% Also, the listener will be monitored and automatically removed if it goes down.
 add_blockchange_listener(ClientId, ListenerRef) ->
     gen_server:cast({global, {?MODULE, ClientId}}, {add_blockchange_listener, ListenerRef}).
 
@@ -91,8 +92,11 @@ init([ClientId]) ->
     gen_server:cast(self(), {reload_config, Client}),
     % Recover from crash
     BCListeners = case ebitcoin_sup:crash_fetch(ClientId) of
-        error -> [];
-        {ok, Value} -> log4erl:info(ebitcoin, "~s: Recovered ~b listener(s) from the crash repo", [ClientId, length(Value)]), Value
+        error ->
+            [];
+        {ok, Value} ->
+            log4erl:info(ebitcoin, "~s: Recovered ~b listener(s) from the crash repo", [ClientId, length(Value)]),
+            [{ListenerRef, erlang:monitor(process, ListenerRef)} || ListenerRef <- Value]
     end,
     {ok, #state{client = #client{}, node_nonce = crypto:rand_uniform(0, 16#10000000000000000), bc_listeners = BCListeners}}.
 
@@ -191,22 +195,24 @@ handle_cast({resync, FinalBlock}, State=#state{client=Client, last_block_num=Blo
     {noreply, State#state{resync_mode=NewR}};
 
 handle_cast({add_blockchange_listener, ListenerRef}, State=#state{client=#client{name=Name}, bc_listeners=BCListeners}) ->
-    case lists:member(ListenerRef, BCListeners) of
+    case proplists:is_defined(ListenerRef, BCListeners) of
         true ->
             {noreply, State};
         false ->
             log4erl:info(ebitcoin, "~s: Adding blockchange listener: ~p", [Name, ListenerRef]),
-            {noreply, State#state{bc_listeners=[ListenerRef|BCListeners]}}
+            ListenerMRef = erlang:monitor(process, ListenerRef),
+            {noreply, State#state{bc_listeners=[{ListenerRef, ListenerMRef} | BCListeners]}}
     end;
 
 handle_cast({remove_blockchange_listener, ListenerRef}, State=#state{client=#client{name=Name}, bc_listeners=BCListeners}) ->
-    case lists:member(ListenerRef, BCListeners) of
-        true ->
-            log4erl:info(ebitcoin, "~s: Removing blockchange listener: ~p", [Name, ListenerRef]),
-            {noreply, State#state{bc_listeners=lists:delete(ListenerRef, BCListeners)}};
-        false ->
+    case proplists:lookup(ListenerRef, BCListeners) of
+        none ->
             log4erl:warn(ebitcoin, "~s: Could not remove blockchange listener: ~p", [Name, ListenerRef]),
-            {noreply, State}
+            {noreply, State};
+        {_, ListenerMRef} ->
+            log4erl:info(ebitcoin, "~s: Removing blockchange listener: ~p", [Name, ListenerRef]),
+            erlang:demonitor(ListenerMRef, [flush]),
+            {noreply, State#state{bc_listeners=proplists:delete(ListenerRef, BCListeners)}}
     end;
 
 handle_cast(_Message, State) ->
@@ -231,6 +237,10 @@ handle_info({tcp_error, _Socket, Reason}, State=#state{client=#client{name=Name}
     log4erl:error(ebitcoin, "~s: Socket error: ~p", [Name, Reason]),
     {noreply, State};
 
+handle_info({'DOWN', _, _, ListenerRef, _}, State=#state{client=#client{name=Name}, bc_listeners=BCListeners}) ->
+    log4erl:info(ebitcoin, "~s: Removing blockchange listener: ~p", [Name, ListenerRef]),
+    {noreply, State#state{bc_listeners=proplists:delete(ListenerRef, BCListeners)}};
+
 handle_info(_Message, State) ->
     {noreply, State}.
 
@@ -244,7 +254,7 @@ terminate(_, #state{bc_listeners=[]}) ->
     ok;
 terminate(_Reason, #state{client=#client{id=ClientId, name=Name}, bc_listeners=BCListeners}) ->
     log4erl:error(ebitcoin, "~s: Storing ~b listener(s) in the crash repo", [Name, length(BCListeners)]),
-    ebitcoin_sup:crash_store(ClientId, BCListeners),
+    ebitcoin_sup:crash_store(ClientId, [ListenerRef || {ListenerRef, _} <- BCListeners]),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -540,4 +550,4 @@ make_getheaders(Client, BlockNum) ->
 broadcast_blockchange([], _, _, _) ->
     ok;
 broadcast_blockchange(BCListeners, ClientId, BlockHash, BlockNum) ->
-    lists:foreach(fun (ListenerRef) -> gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockHash, BlockNum}) end, BCListeners).
+    lists:foreach(fun ({ListenerRef, _}) -> gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockHash, BlockNum}) end, BCListeners).
