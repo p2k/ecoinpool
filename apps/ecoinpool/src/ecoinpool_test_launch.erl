@@ -24,8 +24,8 @@
 start() ->
     ok = application:start(sasl),
     ok = application:start(crypto),
-    ok = application:start(crypto),
     ok = application:start(public_key),
+    ok = application:start(ssl),
     ok = application:start(log4erl),
     ok = application:start(ibrowse),
     ok = application:start(couchbeam),
