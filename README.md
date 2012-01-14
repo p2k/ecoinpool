@@ -13,8 +13,7 @@ coin pool software, yet not everything is 100% solid and waterproof and some
 features are missing in this version. Nevertheless, everything you need to get
 started and give it a try is there.
 
-ecoinpool supports Bitcoin, Bitcoin+Namecoin (merged), Litecoin, Fairbrix
-and Solidcoin.
+ecoinpool supports Bitcoin, Bitcoin+Namecoin (merged), Litecoin and Fairbrix.
 
 Contact
 -------
@@ -204,8 +203,7 @@ ebitcoin
 
 ecoinpool comes bundled with ebitcoin, a block monitor and mini block explorer
 for bitcoin chains. ebitcoin is configured in the same way as ecoinpool, using
-a built-in web frontend. Caution: Solidcoin is currently not supported by
-ebitcoin due to differences in its data structures.
+a built-in web frontend.
 
 The main site for ebitcoin is at
 `http://<your domain>:5984/ebitcoin/_design/site/_show/home`. You will also find

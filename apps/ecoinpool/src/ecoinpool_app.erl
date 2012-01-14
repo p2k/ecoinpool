@@ -48,6 +48,10 @@ start(_StartType, _StartArgs) ->
     {ok, DBPort} = application:get_env(ecoinpool, db_port),
     {ok, DBPrefix} = application:get_env(ecoinpool, db_prefix),
     {ok, DBOptions} = application:get_env(ecoinpool, db_options),
+    case application:get_env(ecoinpool, blowfish_secret) of % Make sure this is not set to the default
+        {ok, "Replace me!"} -> error(please_set_a_better_blowfish_secret);
+        {ok, _} -> ok
+    end,
     % log4erl
     log4erl:conf(filename:join(code:priv_dir(ecoinpool), "log4erl.conf")),
     {ok, VSN} = application:get_key(ecoinpool, vsn),

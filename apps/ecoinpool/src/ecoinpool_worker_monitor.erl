@@ -42,7 +42,7 @@ start_link(ConfDb) ->
     % This module only monitors new changes, so get the current sequence number
     {ok, DbInfo} = couchbeam:db_info(ConfDb),
     Seq = couchbeam_doc:get_value(<<"update_seq">>, DbInfo),
-    case gen_changes:start_link(?MODULE, ConfDb, [continuous, heartbeat, {filter, "doctypes/workers_only"}, {since, Seq}], []) of
+    case gen_changes:start_link(?MODULE, ConfDb, [continuous, heartbeat, include_docs, {filter, "doctypes/workers_only"}, {since, Seq}], []) of
         {ok, PID} ->
             true = register(?MODULE, PID),
             {ok, PID};
@@ -67,13 +67,13 @@ init([]) ->
             {ok, #state{all_subpools=sets:from_list(ActiveSubpoolIds)}}
     end.
 
-handle_change({ChangeProps}, State) ->
+handle_change({ChangeProps}, State=#state{notify_map=NotifyMap, all_subpools=AllSubpoolIds}) ->
     WorkerId = proplists:get_value(<<"id">>, ChangeProps),
     case proplists:get_value(<<"deleted">>, ChangeProps) of
         true ->
-            gen_changes:cast(self(), {broadcast_remove_worker, WorkerId});
+            broadcast_remove_worker(WorkerId, AllSubpoolIds);
         _ ->
-            gen_changes:cast(self(), {broadcast_update_worker, WorkerId})
+            broadcast_update_worker(proplists:get_value(<<"doc">>, ChangeProps), NotifyMap)
     end,
     {noreply, State}.
 
@@ -133,16 +133,28 @@ handle_cast({set_worker_notifications, SubpoolId, NotifyForSubpoolIds}, State=#s
             {noreply, State#state{all_subpools=sets:add_element(SubpoolId, AllSubpoolIds), notify_map=NotifyMap}}
     end;
 
-handle_cast({broadcast_remove_worker, WorkerId}, State=#state{all_subpools=AllSubpoolIds}) ->
+handle_cast(_Message, State) ->
+    {noreply, State}.
+
+handle_info(_Message, State) ->
+    {noreply, State}.
+
+terminate(_Reason, _State) ->
+    ok.
+
+%% ===================================================================
+%% Other functions
+%% ===================================================================
+
+broadcast_remove_worker(WorkerId, AllSubpoolIds) ->
     lists:foreach(
         fun (SubpoolId) -> ecoinpool_server:remove_worker(SubpoolId, WorkerId) end,
         sets:to_list(AllSubpoolIds)
-    ),
-    {noreply, State};
+    ).
 
-handle_cast({broadcast_update_worker, WorkerId}, State=#state{notify_map=NotifyMap}) ->
+broadcast_update_worker(Doc, NotifyMap) ->
     % Load the worker record
-    case ecoinpool_db:get_worker_record(WorkerId) of
+    case ecoinpool_db:parse_worker_document(Doc) of
         {ok, Worker=#worker{sub_pool_id=SubpoolId}} ->
             % Query the notification map where to send this worker to
             case dict:find(SubpoolId, NotifyMap) of
@@ -155,18 +167,6 @@ handle_cast({broadcast_update_worker, WorkerId}, State=#state{notify_map=NotifyM
                 _ ->
                     ok
             end;
-        {error, missing} -> % Ignore missing workers (shouldn't happen anyway)
-            log4erl:warn("ecoinpool_worker_monitor: broadcast_update_worker: Missing document for worker ID: ~s.", [WorkerId]);
         {error, invalid} -> % Ignore invalid workers
-            log4erl:warn("ecoinpool_worker_monitor: broadcast_update_worker: Invalid document for worker ID: ~s.", [WorkerId])
-    end,
-    {noreply, State};
-
-handle_cast(_Message, State) ->
-    {noreply, State}.
-
-handle_info(_Message, State) ->
-    {noreply, State}.
-
-terminate(_Reason, _State) ->
-    ok.
+            log4erl:warn("ecoinpool_worker_monitor: broadcast_update_worker: Ignoring an invalid worker document.")
+    end.

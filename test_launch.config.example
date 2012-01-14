@@ -22,7 +22,14 @@
         
         % The next line should be changed, depending on your CouchDB
         % authentication settings:   username      password
-        {db_options, [{basic_auth, {"ecoinpool", "localtest"}}]}
+        {db_options, [{basic_auth, {"ecoinpool", "localtest"}}]},
+        
+        % The last line in this section contains your blowfish secret key, share
+        % this among your servers and don't tell it to anyone else. Minimum key
+        % length is 4 bytes, maximum is 56 bytes.
+        % If you have pwgen (a password generator), try "pwgen -s 56 1" to get
+        % 56 random characters.
+        {blowfish_secret, "Replace me!"}
     ]},
     
     % This is the ebitcoin configuration. ebitcoin forms a separate application,

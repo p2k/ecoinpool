@@ -93,14 +93,19 @@ ecoinpool_couch_to_my(CouchProps) ->
     [
         {"associateduserid", proplists:get_value(<<"user_id">>, CouchProps)},
         {"username", proplists:get_value(<<"name">>, CouchProps)},
-        {"password", proplists:get_value(<<"pass">>, CouchProps)}
+        {"password", ecoinpool_util:parse_json_password(proplists:get_value(<<"pass">>, CouchProps))}
     ].
 
 ecoinpool_my_to_couch(MyProps, SubPoolId) ->
+    Name = proplists:get_value("username", MyProps),
+    Pass = case proplists:get_value("password", MyProps) of
+        undefined -> undefined;
+        P -> ecoinpool_util:make_json_password(P, Name)
+    end,
     [
         {<<"type">>, <<"worker">>},
         {<<"sub_pool_id">>, SubPoolId},
         {<<"user_id">>, proplists:get_value("associateduserid", MyProps)},
-        {<<"name">>, proplists:get_value("username", MyProps)},
-        {<<"pass">>, proplists:get_value("password", MyProps)}
+        {<<"name">>, Name},
+        {<<"pass">>, Pass}
     ].

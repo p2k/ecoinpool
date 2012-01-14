@@ -27,34 +27,25 @@
 
 -export([
     start_link/1,
+    get_couchdb_connection/0,
     get_configuration/0,
     get_subpool_record/1,
     get_worker_record/1,
     get_workers_for_subpools/1,
     set_subpool_round/2,
     set_auxpool_round/2,
-    setup_shares_db/1,
-    store_share/6,
-    store_invalid_share/4,
-    store_invalid_share/5,
-    store_invalid_share/6,
     setup_sub_pool_user_id/3,
-    set_view_update_interval/1,
     update_site/0
 ]).
 
--export([parse_configuration_document/1, parse_subpool_document/1, parse_worker_document/1]).
+-export([parse_configuration_document/1, parse_subpool_document/1, parse_worker_document/1, check_design_doc/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 % Internal state record
 -record(state, {
     srv_conn,
-    conf_db,
-    view_update_interval = 0,
-    view_update_timer,
-    view_update_dbs,
-    view_update_running = false
+    conf_db
 }).
 
 %% ===================================================================
@@ -64,6 +55,10 @@
 -spec start_link({DBHost :: string(), DBPort :: integer(), DBPrefix :: string(), DBOptions :: [term()]}) -> {ok, pid()} | ignore | {error, {already_started, pid()} | term()}.
 start_link({DBHost, DBPort, DBPrefix, DBOptions}) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [{DBHost, DBPort, DBPrefix, DBOptions}], []).
+
+-spec get_couchdb_connection() -> term().
+get_couchdb_connection() ->
+    gen_server:call(?MODULE, get_couchdb_connection).
 
 -spec get_configuration() -> {ok, configuration()} | {error, invalid | missing}.
 get_configuration() ->
@@ -89,35 +84,9 @@ set_subpool_round(#subpool{id=SubpoolId}, Round) ->
 set_auxpool_round(#subpool{id=SubpoolId}, Round) ->
     gen_server:cast(?MODULE, {set_auxpool_round, SubpoolId, Round}).
 
--spec setup_shares_db(SubpoolOrAuxpool :: subpool() | auxpool()) -> ok | error.
-setup_shares_db(#subpool{name=SubpoolName}) ->
-    gen_server:call(?MODULE, {setup_shares_db, SubpoolName});
-setup_shares_db(#auxpool{name=AuxpoolName}) ->
-    gen_server:call(?MODULE, {setup_shares_db, AuxpoolName}).
-
--spec store_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Workunit :: workunit(), Hash :: binary(), Candidates :: [candidate()]) -> ok.
-store_share(Subpool, Peer, Worker, Workunit, Hash, Candidates) ->
-    gen_server:cast(?MODULE, {store_share, Subpool, Peer, Worker, Workunit, Hash, Candidates}).
-
--spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Reason :: reject_reason()) -> ok.
-store_invalid_share(Subpool, Peer, Worker, Reason) ->
-    store_invalid_share(Subpool, Peer, Worker, undefined, undefined, Reason).
-
--spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Hash :: binary(), Reason :: reject_reason()) -> ok.
-store_invalid_share(Subpool, Peer, Worker, Hash, Reason) ->
-    store_invalid_share(Subpool, Peer, Worker, undefined, Hash, Reason).
-
--spec store_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Workunit :: workunit() | undefined, Hash :: binary() | undefined, Reason :: reject_reason()) -> ok.
-store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, Reason) ->
-    gen_server:cast(?MODULE, {store_invalid_share, Subpool, Peer, Worker, Workunit, Hash, Reason}).
-
 -spec setup_sub_pool_user_id(SubpoolId :: binary(), UserName :: binary(), Callback :: fun(({ok, UserId :: integer()} | {error, Reason :: binary()}) -> any())) -> ok.
 setup_sub_pool_user_id(SubpoolId, UserName, Callback) ->
     gen_server:cast(?MODULE, {setup_sub_pool_user_id, SubpoolId, UserName, Callback}).
-
--spec set_view_update_interval(Seconds :: integer()) -> ok.
-set_view_update_interval(Seconds) ->
-    gen_server:cast(?MODULE, {set_view_update_interval, Seconds}).
 
 -spec update_site() -> ok.
 update_site() ->
@@ -152,6 +121,9 @@ init([{DBHost, DBPort, DBPrefix, DBOptions}]) ->
     gen_server:cast(?MODULE, start_monitors),
     % Return initial state
     {ok, #state{srv_conn=S, conf_db=ConfDb}}.
+
+handle_call(get_couchdb_connection, _From, State=#state{srv_conn=S}) ->
+    {reply, S, State};
 
 handle_call(get_configuration, _From, State=#state{conf_db=ConfDb}) ->
     case couchbeam:open_doc(ConfDb, "configuration") of
@@ -196,20 +168,6 @@ handle_call({get_workers_for_subpools, SubpoolIds}, _From, State=#state{conf_db=
     ),
     {reply, Workers, State};
 
-handle_call({setup_shares_db, SubpoolName}, _From, State=#state{srv_conn=S}) ->
-    case couchbeam:open_or_create_db(S, SubpoolName) of
-        {ok, DB} ->
-            lists:foreach(fun check_design_doc/1, [
-                {DB, "stats", "shares_db_stats.json"},
-                {DB, "timed_stats", "shares_db_timed_stats.json"},
-                {DB, "auth", "shares_db_auth.json"}
-            ]),
-            {reply, ok, State};
-        {error, Error} ->
-            log4erl:error(db, "shares_db - couchbeam:open_or_create_db/3 returned an error:~n~p", [Error]),
-            {reply, error, State}
-    end;
-
 handle_call(_Message, _From, State=#state{}) ->
     {reply, error, State}.
 
@@ -246,83 +204,6 @@ handle_cast({set_auxpool_round, SubpoolId, Round}, State=#state{conf_db=ConfDb})
     end,
     {noreply, State};
 
-handle_cast({store_share,
-            #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool},
-            Peer,
-            #worker{id=WorkerId, user_id=UserId, name=WorkerName},
-            #workunit{target=Target, block_num=BlockNum, prev_block=PrevBlock, data=BData, aux_work=AuxWork, aux_work_stale=AuxWorkStale},
-            Hash,
-            Candidates}, State=#state{srv_conn=S}) ->
-    % This code will change if multi aux chains are supported
-    Now = erlang:now(),
-    {MainState, AuxState} = lists:foldl(
-        fun
-            (main, {_, AS}) -> {candidate, AS};
-            (aux, {MS, _}) -> {MS, candidate};
-            (_, Acc) -> Acc
-        end,
-        {valid, valid},
-        Candidates
-    ),
-    
-    NewState = case Auxpool of
-        #auxpool{name=AuxpoolName, round=AuxRound} when AuxWork =/= undefined ->
-            {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
-            if
-                AuxWorkStale ->
-                    log4erl:debug(db, "~s&~s: Storing ~p&stale share from ~s/~s", [SubpoolName, AuxpoolName, MainState, WorkerName, element(1, Peer)]),
-                    store_invalid_share_in_db(WorkerId, UserId, Peer, stale, undefined, Hash, undefined, undefined, undefined, AuxRound, AuxDB),
-                    State;
-                true ->
-                    #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum, prev_block=AuxPrevBlock} = AuxWork,
-                    log4erl:debug(db, "~s&~s: Storing ~p&~p share from ~s/~s", [SubpoolName, AuxpoolName, MainState, AuxState, WorkerName, element(1, Peer)]),
-                    case store_share_in_db(WorkerId, UserId, Peer, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, BData, AuxRound, AuxDB) of
-                        ok ->
-                            store_view_update(AuxDB, Now, State);
-                        _ ->
-                            State
-                    end
-            end;
-        _ ->
-            log4erl:debug(db, "~s: Storing ~p share from ~s/~s", [SubpoolName, MainState, WorkerName, element(1, Peer)]),
-            State
-    end,
-    
-    {ok, DB} = couchbeam:open_db(S, SubpoolName),
-    case store_share_in_db(WorkerId, UserId, Peer, MainState, Hash, Target, BlockNum, PrevBlock, BData, Round, DB) of
-        ok ->
-            {noreply, store_view_update(DB, Now, NewState)};
-        _ ->
-            {noreply, NewState}
-    end;
-
-handle_cast({store_invalid_share, #subpool{name=SubpoolName, round=Round, aux_pool=Auxpool}, Peer, #worker{id=WorkerId, user_id=UserId, name=WorkerName}, Workunit, Hash, Reason}, State=#state{srv_conn=S}) ->
-    % This code will change if multi aux chains are supported
-    case Auxpool of
-        #auxpool{name=AuxpoolName, round=AuxRound} ->
-            log4erl:debug(db, "~s&~s: Storing invalid share from ~s/~s, reason: ~p", [SubpoolName, AuxpoolName, WorkerName, element(1, Peer), Reason]),
-            {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
-            case Workunit of
-                #workunit{aux_work=#auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum, prev_block=AuxPrevBlock}} ->
-                    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, AuxRound, AuxDB);
-                _ ->
-                    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, undefined, Hash, undefined, undefined, undefined, AuxRound, AuxDB)
-            end;
-        _ ->
-            log4erl:debug(db, "~s: Storing invalid share from ~s/~s, reason: ~p", [SubpoolName, WorkerName, element(1, Peer), Reason]),
-            ok
-    end,
-    
-    {ok, DB} = couchbeam:open_db(S, SubpoolName),
-    case Workunit of
-        #workunit{target=Target, block_num=BlockNum, prev_block=PrevBlock} ->
-            store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, Target, BlockNum, PrevBlock, Round, DB);
-        _ ->
-            store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, undefined, undefined, undefined, Round, DB)
-    end,
-    
-    {noreply, State};
-
 handle_cast({setup_sub_pool_user_id, SubpoolId, UserName, Callback}, State=#state{srv_conn=S}) ->
     {ok, UsersDB} = couchbeam:open_db(S, "_users"),
     case couchbeam:open_doc(UsersDB, <<"org.couchdb.user:", UserName/binary>>) of
@@ -350,27 +231,6 @@ handle_cast({setup_sub_pool_user_id, SubpoolId, UserName, Callback}, State=#stat
     end,
     {noreply, State};
 
-handle_cast({set_view_update_interval, Seconds}, State=#state{view_update_interval=OldViewUpdateInterval, view_update_timer=OldViewUpdateTimer, view_update_dbs=OldViewUpdateDBS}) ->
-    if
-        Seconds =:= OldViewUpdateInterval ->
-            {noreply, State}; % No change
-        true ->
-            timer:cancel(OldViewUpdateTimer),
-            case Seconds of
-                0 ->
-                    log4erl:info(db, "View updates disabled."),
-                    {noreply, State#state{view_update_interval=0, view_update_timer=undefined, view_update_dbs=undefined}};
-                _ ->
-                    log4erl:info(db, "Set view update timer to ~bs.", [Seconds]),
-                    {ok, Timer} = timer:send_interval(Seconds * 1000, update_views),
-                    ViewUpdateDBS = case OldViewUpdateDBS of
-                        undefined -> dict:new();
-                        _ -> OldViewUpdateDBS
-                    end,
-                    {noreply, State#state{view_update_interval=Seconds, view_update_timer=Timer, view_update_dbs=ViewUpdateDBS}}
-            end
-    end;
-
 handle_cast(update_site, State=#state{conf_db=ConfDb}) ->
     {ok, SDoc} = file:read_file(filename:join(code:priv_dir(ecoinpool), "main_db_site.json")),
     Doc = ejson:decode(SDoc),
@@ -386,44 +246,10 @@ handle_cast(update_site, State=#state{conf_db=ConfDb}) ->
 handle_cast(_Message, State) ->
     {noreply, State}.
 
-handle_info(update_views, State=#state{view_update_dbs=undefined}) ->
-    {noreply, State};
-
-handle_info(update_views, State=#state{view_update_interval=ViewUpdateInterval, view_update_running=ViewUpdateRunning, view_update_dbs=ViewUpdateDBS}) ->
-    case ViewUpdateRunning of
-        false ->
-            Now = erlang:now(),
-            USecLimit = ViewUpdateInterval * 1000000,
-            NewViewUpdateDBS = dict:filter(
-                fun (_, TS) -> timer:now_diff(Now, TS) =< USecLimit end,
-                ViewUpdateDBS
-            ),
-            case dict:size(NewViewUpdateDBS) of
-                0 ->
-                    {noreply, State#state{view_update_dbs=NewViewUpdateDBS}};
-                _ ->
-                    DBS = dict:fetch_keys(NewViewUpdateDBS),
-                    PID = self(),
-                    spawn(fun () -> do_update_views(DBS, PID) end),
-                    {noreply, State#state{view_update_running=erlang:now(), view_update_dbs=NewViewUpdateDBS}}
-            end;
-        _ ->
-            {noreply, State} % Ignore message if already running
-    end;
-
-handle_info(view_update_complete, State=#state{view_update_running=ViewUpdateRunning}) ->
-    MS = timer:now_diff(erlang:now(), ViewUpdateRunning),
-    log4erl:info(db, "View update finished after ~.1fs.", [MS / 1000000]),
-    {noreply, State#state{view_update_running=false}};
-
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{view_update_timer=ViewUpdateTimer}) ->
-    case ViewUpdateTimer of
-        undefined -> ok;
-        _ -> timer:cancel(ViewUpdateTimer)
-    end,
+terminate(_Reason, #state{}) ->
     ok.
 
 code_change(_OldVersion, State=#state{}, _Extra) ->
@@ -443,38 +269,46 @@ check_design_doc({DB, Name, Filename}) ->
             ok
     end.
 
-do_update_views(DBS, PID) ->
-    try
-        lists:foreach(
-            fun (DB) ->
-                couchbeam_view:fetch(DB, {"stats", "state"}),
-                couchbeam_view:fetch(DB, {"timed_stats", "all_valids"})
-            end,
-            DBS
-        )
-    catch
-        exit:Reason ->
-            log4erl:error(db, "Exception in do_update_views: ~p", [Reason]);
-        error:Reason ->
-            log4erl:error(db, "Exception in do_update_views: ~p", [Reason])
-    end,
-    PID ! view_update_complete.
-
 parse_configuration_document({DocProps}) ->
     DocType = proplists:get_value(<<"type">>, DocProps),
     ActiveSubpoolIds = proplists:get_value(<<"active_subpools">>, DocProps, []),
-    ViewUpdateInterval = proplists:get_value(<<"view_update_interval">>, DocProps, 300),
     ActiveSubpoolIdsCheck = if is_list(ActiveSubpoolIds) -> lists:all(fun is_binary/1, ActiveSubpoolIds); true -> false end,
+    ShareLoggers = case proplists:get_value(<<"share_loggers">>, DocProps) of
+        undefined ->
+            [{<<"default_couchdb">>, couchdb, []}, {<<"default_logfile">>, logfile, []}];
+        {Props} ->
+            lists:foldr(
+                fun
+                    ({LoggerId, <<"couchdb">>}, Acc) ->
+                        [{LoggerId, couchdb, []} | Acc];
+                    ({LoggerId, <<"logfile">>}, Acc) ->
+                        [{LoggerId, logfile, []} | Acc];
+                    ({LoggerId, {LoggerProps}}, Acc) ->
+                        case proplists:get_value(<<"type">>, LoggerProps) of
+                            Type when is_binary(Type) ->
+                                Options = [{binary_to_atom(BinName, utf8), Value} || {BinName, Value} <- proplists:delete(<<"type">>, LoggerProps)],
+                                [{LoggerId, binary_to_atom(Type, utf8), Options} | Acc];
+                            _ ->
+                                Acc
+                        end;
+                    (_, Acc) ->
+                        Acc
+                end,
+                [],
+                Props
+            );
+        _ ->
+            []
+    end,
     
     if
         DocType =:= <<"configuration">>,
-        is_integer(ViewUpdateInterval),
         ActiveSubpoolIdsCheck ->
             
             % Create record
             Configuration = #configuration{
                 active_subpools=ActiveSubpoolIds,
-                view_update_interval=if ViewUpdateInterval > 0 -> ViewUpdateInterval; true -> 0 end
+                share_loggers=ShareLoggers
             },
             {ok, Configuration};
         true ->
@@ -499,13 +333,8 @@ parse_subpool_document({DocProps}) ->
     WorkerShareSubpools = proplists:get_value(<<"worker_share_subpools">>, DocProps, []),
     WorkerShareSubpoolsOk = is_binary_list(WorkerShareSubpools),
     CoinDaemonConfig = case proplists:get_value(<<"coin_daemon">>, DocProps) of
-        {CDP} ->
-            lists:map(
-                fun ({BinName, Value}) -> {binary_to_atom(BinName, utf8), Value} end,
-                CDP
-            );
-        _ ->
-            []
+        {CDP} -> [{binary_to_atom(BinName, utf8), Value} || {BinName, Value} <- CDP];
+        _ -> []
     end,
     {AuxPool, AuxPoolOk} = case proplists:get_value(<<"aux_pool">>, DocProps) of
         undefined ->
@@ -556,13 +385,8 @@ parse_auxpool_document({DocProps}) ->
     end,
     Round = proplists:get_value(<<"round">>, DocProps),
     AuxDaemonConfig = case proplists:get_value(<<"aux_daemon">>, DocProps) of
-        {CDP} ->
-            lists:map(
-                fun ({BinName, Value}) -> {binary_to_atom(BinName, utf8), Value} end,
-                CDP
-            );
-        _ ->
-            []
+        {CDP} -> [{binary_to_atom(BinName, utf8), Value} || {BinName, Value} <- CDP];
+        _ -> []
     end,
     
     if
@@ -588,10 +412,10 @@ parse_auxpool_document({DocProps}) ->
 parse_worker_document({DocProps}) ->
     WorkerId = proplists:get_value(<<"_id">>, DocProps),
     DocType = proplists:get_value(<<"type">>, DocProps),
-    UserId = proplists:get_value(<<"user_id">>, DocProps, null),
+    UserId = proplists:get_value(<<"user_id">>, DocProps),
     SubpoolId = proplists:get_value(<<"sub_pool_id">>, DocProps),
     Name = proplists:get_value(<<"name">>, DocProps),
-    Pass = proplists:get_value(<<"pass">>, DocProps, null),
+    Pass = ecoinpool_util:parse_json_password(proplists:get_value(<<"pass">>, DocProps)),
     LP = proplists:get_value(<<"lp">>, DocProps, true),
     LPHeartbeat = proplists:get_value(<<"lp_heartbeat">>, DocProps, true),
     
@@ -601,7 +425,7 @@ parse_worker_document({DocProps}) ->
         SubpoolId =/= <<>>,
         is_binary(Name),
         Name =/= <<>>,
-        is_binary(Pass) or (Pass =:= null),
+        is_binary(Pass) or (Pass =:= undefined),
         is_boolean(LP),
         is_boolean(LPHeartbeat) ->
             
@@ -621,86 +445,7 @@ parse_worker_document({DocProps}) ->
             {error, invalid}
     end.
 
--spec make_share_document(WorkerId :: binary(), UserId :: term(), Peer :: peer(), State :: valid | candidate, Hash :: binary(), ParentHash :: binary() | undefined, Target :: binary(), BlockNum :: integer(), PrevBlock :: binary(), BData :: binary(), Round :: integer()) -> {[]}.
-make_share_document(WorkerId, UserId, {IP, UserAgent}, State, Hash, ParentHash, Target, BlockNum, PrevBlock, BData, Round) ->
-    {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
-    filter_undefined({[
-        {<<"worker_id">>, WorkerId},
-        {<<"user_id">>, UserId},
-        {<<"ip">>, binary:list_to_bin(IP)},
-        {<<"user_agent">>, apply_if_defined(UserAgent, fun binary:list_to_bin/1)},
-        {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
-        {<<"state">>, case State of valid -> <<"valid">>; candidate -> <<"candidate">> end},
-        {<<"hash">>, ecoinpool_util:bin_to_hexbin(Hash)},
-        {<<"parent_hash">>, apply_if_defined(ParentHash, fun ecoinpool_util:bin_to_hexbin/1)},
-        {<<"target">>, ecoinpool_util:bin_to_hexbin(Target)},
-        {<<"block_num">>, BlockNum},
-        {<<"prev_block">>, apply_if_defined(PrevBlock, fun ecoinpool_util:bin_to_hexbin/1)},
-        {<<"round">>, Round},
-        {<<"data">>, case State of valid -> undefined; candidate -> base64:encode(BData) end}
-    ]}).
-
--spec make_reject_share_document(WorkerId :: binary(), UserId :: term(), Peer :: peer(), Reason :: reject_reason(), Hash :: binary() | undefined, ParentHash :: binary() | undefined, Target :: binary() | undefined, BlockNum :: integer() | undefined, PrevBlock :: binary() | undefined, Round :: integer()) -> {[]}.
-make_reject_share_document(WorkerId, UserId, {IP, UserAgent}, Reason, Hash, ParentHash, Target, BlockNum, PrevBlock, Round) ->
-    {{YR,MH,DY}, {HR,ME,SD}} = calendar:universal_time(),
-    filter_undefined({[
-        {<<"worker_id">>, WorkerId},
-        {<<"user_id">>, UserId},
-        {<<"ip">>, binary:list_to_bin(IP)},
-        {<<"user_agent">>, apply_if_defined(UserAgent, fun binary:list_to_bin/1)},
-        {<<"timestamp">>, [YR,MH,DY,HR,ME,SD]},
-        {<<"state">>, <<"invalid">>},
-        {<<"reject_reason">>, atom_to_binary(Reason, latin1)},
-        {<<"hash">>, apply_if_defined(Hash, fun ecoinpool_util:bin_to_hexbin/1)},
-        {<<"parent_hash">>, apply_if_defined(ParentHash, fun ecoinpool_util:bin_to_hexbin/1)},
-        {<<"target">>, apply_if_defined(Target, fun ecoinpool_util:bin_to_hexbin/1)},
-        {<<"block_num">>, BlockNum},
-        {<<"prev_block">>, apply_if_defined(PrevBlock, fun ecoinpool_util:bin_to_hexbin/1)},
-        {<<"round">>, Round}
-    ]}).
-
-apply_if_defined(undefined, _) ->
-    undefined;
-apply_if_defined(Value, Fun) ->
-    Fun(Value).
-
-filter_undefined({DocProps}) ->
-    {lists:filter(fun ({_, undefined}) -> false; (_) -> true end, DocProps)}.
-
 is_binary_list(List) when is_list(List) ->
     lists:all(fun erlang:is_binary/1, List);
 is_binary_list(_) ->
     false.
-
-store_share_in_db(WorkerId, UserId, Peer, State, Hash, Target, BlockNum, PrevBlock, BData, Round, DB) ->
-    store_share_in_db(WorkerId, UserId, Peer, State, Hash, undefined, Target, BlockNum, PrevBlock, BData, Round, DB).
-
-store_share_in_db(WorkerId, UserId, Peer, State, Hash, ParentHash, Target, BlockNum, PrevBlock, BData, Round, DB) ->
-    Doc = make_share_document(WorkerId, UserId, Peer, State, Hash, ParentHash, Target, BlockNum, PrevBlock, BData, Round),
-    try
-        couchbeam:save_doc(DB, Doc),
-        ok
-    catch error:Reason ->
-        log4erl:warn(db, "store_share_in_db: ignored error:~n~p", [Reason]),
-        error
-    end.
-
--spec store_invalid_share_in_db(WorkerId :: binary(), UserId :: term(), Peer :: peer(), Reason :: reject_reason(), Hash :: binary() | undefined, Target :: binary() | undefined, BlockNum :: integer() | undefined, PrevBlock :: binary() | undefined, Round :: integer(), DB :: tuple()) -> ok | error.
-store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, Target, BlockNum, PrevBlock, Round, DB) ->
-    store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, undefined, Target, BlockNum, PrevBlock, Round, DB).
-
--spec store_invalid_share_in_db(WorkerId :: binary(), UserId :: term(), Peer :: peer(), Reason :: reject_reason(), Hash :: binary() | undefined, ParentHash :: binary() | undefined, Target :: binary() | undefined, BlockNum :: integer() | undefined, PrevBlock :: binary() | undefined, Round :: integer(), DB :: tuple()) -> ok | error.
-store_invalid_share_in_db(WorkerId, UserId, Peer, Reason, Hash, ParentHash, Target, BlockNum, PrevBlock, Round, DB) ->
-    Doc = make_reject_share_document(WorkerId, UserId, Peer, Reason, Hash, ParentHash, Target, BlockNum, PrevBlock, Round),
-    try
-        couchbeam:save_doc(DB, Doc),
-        ok
-    catch error:Reason ->
-        log4erl:warn(db, "store_invalid_share_in_db: ignored error:~n~p", [Reason]),
-        error
-    end.
-
-store_view_update(_, _, State=#state{view_update_dbs=undefined}) ->
-    State;
-store_view_update(DB, TS, State=#state{view_update_dbs=ViewUpdateDBS}) ->
-    State#state{view_update_dbs=dict:store(DB, TS, ViewUpdateDBS)}.

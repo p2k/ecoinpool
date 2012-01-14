@@ -152,8 +152,8 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
             list_to_atom(lists:concat([PoolType, "_coindaemon"]))
     end,
     
-    % Setup the shares database
-    ok = ecoinpool_db:setup_shares_db(Subpool),
+    % Send a notification so potential database systems can setup the shares database
+    ecoinpool_share_broker:notify_subpool(Subpool),
     
     % Schedule workers reload if worker_share_subpools changed
     % Note: this includes an initial load, because even if no share subpools
@@ -528,7 +528,7 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
                     {error, authorization_required};
                 {User, Password} ->
                     case ets:lookup(WorkerTbl, User) of
-                        [Worker=#worker{pass=Pass}] when Pass =:= null; Pass =:= Password ->
+                        [Worker=#worker{pass=Pass}] when Pass =:= undefined; Pass =:= Password ->
                             {ok, Worker, Action};
                         _ ->
                             log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Req:get(ip), User]),
@@ -566,7 +566,7 @@ check_work(Req, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerNa
     case CoinDaemon:analyze_result(Req:get(params)) of
         error ->
             log4erl:warn(server, "~s: Wrong data from ~s/~s: ~p", [SubpoolName, WorkerName, element(1, Peer), Req:get(params)]),
-            ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, data),
+            ecoinpool_share_broker:notify_invalid_share(Subpool, Peer, Worker, data),
             Req:error(invalid_request),
             [];
         Results ->
@@ -592,8 +592,8 @@ check_work(Req, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerNa
                 end,
                 Results
             ),
-            % Process results in new process
-            spawn(fun () -> process_results(Req, ResultsWithWU, Subpool, Worker, CoinDaemon, MMM) end),
+            % Process results (this is fast enough)
+            process_results(Req, ResultsWithWU, Subpool, Worker, CoinDaemon, MMM),
             % Combine candidate announcements (used by check_new_round)
             lists:foldl(
                 fun
@@ -613,16 +613,16 @@ process_results(Req, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
         fun
             ({stale, Hash}, {AccReplyItems, _, AccCandidates}) ->
-                ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Hash, stale),
+                ecoinpool_share_broker:notify_invalid_share(Subpool, Peer, Worker, Hash, stale),
                 {[invalid | AccReplyItems], "Stale or unknown work", AccCandidates};
             ({duplicate, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
-                ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, duplicate),
+                ecoinpool_share_broker:notify_invalid_share(Subpool, Peer, Worker, Workunit, Hash, duplicate),
                 {[invalid | AccReplyItems], "Duplicate work", AccCandidates};
             ({target, Workunit, Hash}, {AccReplyItems, _, AccCandidates}) ->
-                ecoinpool_db:store_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
+                ecoinpool_share_broker:notify_invalid_share(Subpool, Peer, Worker, Workunit, Hash, target),
                 {[invalid | AccReplyItems], "Hash does not meet share target", AccCandidates};
             ({ok, Workunit, Hash, BData, TheCandidates}, {AccReplyItems, AccRejectReason, AccCandidates}) ->
-                ecoinpool_db:store_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash, TheCandidates),
+                ecoinpool_share_broker:notify_share(Subpool, Peer, Worker, Workunit#workunit{data=BData}, Hash, TheCandidates),
                 NewCandidates = lists:foldl(
                     fun (Chain, Acc) -> [{Chain, Workunit, Hash, BData} | Acc] end,
                     AccCandidates,
@@ -641,21 +641,12 @@ process_results(Req, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker
         _ ->
             Req:ok(CoinDaemon:make_reply(ReplyItems), [{reject_reason, RejectReason} | Options])
     end,
-    % Send candidates
-    lists:foreach(
-        fun (C={Chain, _, _, _}) ->
-            case send_candidate(C, CoinDaemon, MMM) of
-                accepted ->
-                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got accepted!", [SubpoolName, WorkerName, element(1, Peer), Chain]);
-                rejected ->
-                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got rejected!", [SubpoolName, WorkerName, element(1, Peer), Chain]);
-                {error, Message} ->
-                    log4erl:error(server, "~s: Upstream error from ~s/~s to ~p chain! Message: ~p", [SubpoolName, WorkerName, element(1, Peer), Chain, Message])
-            end
-        end,
-        Candidates
-    ).
-
+    % Send candidates asynchronously, if there are any
+    case Candidates of
+        [] -> ok;
+        _ -> IP = element(1, Peer), spawn(fun () -> send_candidates(Candidates, CoinDaemon, MMM, SubpoolName, WorkerName, IP) end), ok
+    end.
+    
 check_work_age(_, WorkQueue, WorkQueueSize, _, _) when WorkQueueSize =< 0 ->
     {WorkQueue, WorkQueueSize}; % Done
 
@@ -721,9 +712,6 @@ check_aux_pool_config(SubpoolName, SubpoolId, OldAuxpool, OldMMM, Auxpool, Start
     % Derive the AuxDaemon module name from PoolType + "_auxdaemon"
     AuxDaemonModule = list_to_atom(lists:concat([PoolType, "_auxdaemon"])),
     
-    % Setup the shares database
-    ok = ecoinpool_db:setup_shares_db(Auxpool),
-    
     OldAuxDaemonModule = case OldMMM of
         undefined -> undefined;
         _ -> [M] = OldMMM:aux_daemon_modules(), M
@@ -765,6 +753,21 @@ hash_is_below_target(Hash, #workunit{target=Target}) ->
     Hash =< Target;
 hash_is_below_target(Hash, #auxwork{target=Target}) ->
     Hash =< Target.
+
+send_candidates(Candidates, CoinDaemon, MMM, SubpoolName, WorkerName, IP) ->
+    lists:foreach(
+        fun (C={Chain, _, _, _}) ->
+            case send_candidate(C, CoinDaemon, MMM) of
+                accepted ->
+                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got accepted!", [SubpoolName, WorkerName, IP, Chain]);
+                rejected ->
+                    log4erl:warn(server, "~s: Data sent upstream from ~s/~s to ~p chain got rejected!", [SubpoolName, WorkerName, IP, Chain]);
+                {error, Message} ->
+                    log4erl:error(server, "~s: Upstream error from ~s/~s to ~p chain! Message: ~p", [SubpoolName, WorkerName, IP, Chain, Message])
+            end
+        end,
+        Candidates
+    ).
 
 send_candidate({main, _, _, BData}, CoinDaemon, _) ->
     CoinDaemon:send_result(BData);

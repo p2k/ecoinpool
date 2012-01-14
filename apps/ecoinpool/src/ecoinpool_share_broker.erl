@@ -19,7 +19,7 @@
 %%
 
 -module(ecoinpool_share_broker).
--behaviour(gen_event).
+-behaviour(gen_server).
 
 -include("ecoinpool_misc_types.hrl").
 -include("ecoinpool_db_records.hrl").
@@ -28,11 +28,10 @@
 -export([
     start_link/0,
     
-    new_polling_monitor/1,
-    new_polling_monitor/2,
-    new_polling_monitor/3,
-    new_polling_monitor/4,
-    poll_for_changes/2,
+    add_share_logger/3,
+    remove_share_logger/2,
+    
+    notify_subpool/1,
     
     notify_share/1,
     notify_share/6,
@@ -41,60 +40,31 @@
     notify_invalid_share/6
 ]).
 
-% Callbacks from gen_event
--export([init/1, handle_event/2, handle_call/2, handle_info/2, terminate/2, code_change/3]).
+% Callbacks from gen_server
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--define(POLLING_MONITOR_TIMEOUT, 60 * 1000000).
--define(POLLING_MONITOR_TIMEOUT_CHECK, 10 * 1000).
-
--record(polling_monitor, {
-    type :: subpool | user | worker,
-    subpool_id :: binary(),
-    is_aux = false :: boolean(),
-    user_worker_id :: term(),
-    last_return :: erlang:timestamp(),
-    waiting :: {pid() | atom(), reference()} | undefined,
-    has_changes = false :: boolean()
-}).
-
--record(state, {
-    pmon_tbl :: ets:tid(),
-    pmons :: dict()
-}).
+-define(SERVER, ecoinpool_share_broker_sup).
+-define(MAX_RESTART_COUNT, 5).
+-define(MAX_RESTART_INTERVAL, 5000).
 
 %% ===================================================================
 %% API functions
 %% ===================================================================
 
 start_link() ->
-    case gen_event:start_link({local, ?MODULE}) of
-        {ok, Pid} ->
-            gen_event:add_handler(Pid, ?MODULE, []),
-            {ok, Pid};
-        {error, Error} ->
-            {error, Error}
-    end.
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-% Returns a token (hex binary)
-new_polling_monitor(SubpoolId) ->
-    new_polling_monitor(SubpoolId, false).
+-spec add_share_logger(Id :: binary(), Type :: binary(), Options :: [conf_property()]) -> term().
+add_share_logger(Id, Type, Options) ->
+    gen_server:call(?SERVER, {add_share_logger, Id, Type, Options}).
 
-new_polling_monitor(SubpoolId, Aux) ->
-    gen_event:call(?MODULE, ?MODULE, {new_polling_monitor, subpool, Aux, SubpoolId, undefined}).
+-spec remove_share_logger(Id :: binary(), Type :: binary()) -> term().
+remove_share_logger(Id, Type) ->
+    gen_server:call(?SERVER, {remove_share_logger, Id, Type}).
 
-new_polling_monitor(SubpoolId, Type, UserId) ->
-    new_polling_monitor(SubpoolId, false, Type, UserId).
-   
-new_polling_monitor(SubpoolId, Aux, user, UserId) ->
-    gen_event:call(?MODULE, ?MODULE, {new_polling_monitor, user, Aux, SubpoolId, UserId});
-new_polling_monitor(SubpoolId, Aux, worker, WorkerId) ->
-    gen_event:call(?MODULE, ?MODULE, {new_polling_monitor, worker, Aux, SubpoolId, WorkerId}).
-
-% Will reply by sending (tbd) to the given process
--spec poll_for_changes(To :: pid() | atom(), Token :: binary()) -> ok.
-poll_for_changes(To, Token) ->
-    ?MODULE ! {poll_for_changes, To, Token},
-    ok.
+-spec notify_subpool(Subpool :: subpool()) -> ok.
+notify_subpool(Subpool) ->
+    gen_event:notify(?MODULE, Subpool).
 
 -spec notify_share(Share :: share()) -> ok.
 notify_share(Share=#share{}) ->
@@ -108,7 +78,7 @@ notify_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_pool=Auxp
             Hash,
             Candidates) ->
     % This code will change if multi aux chains are supported
-    Timestamp = erlang:now(),
+    Timestamp = os:timestamp(),
     {MainState, AuxState} = lists:foldl(
         fun
             (main, {_, AS}) -> {candidate, AS};
@@ -123,14 +93,15 @@ notify_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_pool=Auxp
             if
                 AuxWorkStale ->
                     notify_share(#share{
+                        timestamp = Timestamp,
                         subpool_id = SubpoolId,
                         is_aux = true,
                         pool_name = AuxpoolName,
                         worker_id = WorkerId,
                         worker_name = WorkerName,
                         user_id = UserId,
-                        peer = Peer,
-                        timestamp = Timestamp,
+                        ip = element(1, Peer),
+                        user_agent = element(2, Peer),
                         
                         state = invalid,
                         reject_reason = stale,
@@ -140,14 +111,15 @@ notify_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_pool=Auxp
                 true ->
                     #auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum, prev_block=AuxPrevBlock} = AuxWork,
                     notify_share(#share{
+                        timestamp = Timestamp,
                         subpool_id = SubpoolId,
                         is_aux = true,
                         pool_name = AuxpoolName,
                         worker_id = WorkerId,
                         worker_name = WorkerName,
                         user_id = UserId,
-                        peer = Peer,
-                        timestamp = Timestamp,
+                        ip = element(1, Peer),
+                        user_agent = element(2, Peer),
                         
                         state = AuxState,
                         hash = AuxHash,
@@ -164,13 +136,14 @@ notify_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_pool=Auxp
     end,
     
     notify_share(#share{
+        timestamp = Timestamp,
         subpool_id = SubpoolId,
         pool_name = SubpoolName,
         worker_id = WorkerId,
         worker_name = WorkerName,
         user_id = UserId,
-        peer = Peer,
-        timestamp = Timestamp,
+        ip = element(1, Peer),
+        user_agent = element(2, Peer),
         
         state = MainState,
         hash = Hash,
@@ -192,20 +165,21 @@ notify_invalid_share(Subpool, Peer, Worker, Hash, Reason) ->
 -spec notify_invalid_share(Subpool :: subpool(), Peer :: peer(), Worker :: worker(), Workunit :: workunit() | undefined, Hash :: binary() | undefined, Reason :: reject_reason()) -> ok.
 notify_invalid_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_pool=Auxpool}, Peer, #worker{id=WorkerId, user_id=UserId, name=WorkerName}, Workunit, Hash, Reason) ->
     % This code will change if multi aux chains are supported
-    Timestamp = erlang:now(),
+    Timestamp = os:timestamp(),
     case Auxpool of
         #auxpool{name=AuxpoolName, round=AuxRound} ->
             case Workunit of
                 #workunit{aux_work=#auxwork{aux_hash=AuxHash, target=AuxTarget, block_num=AuxBlockNum, prev_block=AuxPrevBlock}} ->
                     notify_share(#share{
+                        timestamp = Timestamp,
                         subpool_id = SubpoolId,
                         is_aux = true,
                         pool_name = AuxpoolName,
                         worker_id = WorkerId,
                         worker_name = WorkerName,
                         user_id = UserId,
-                        peer = Peer,
-                        timestamp = Timestamp,
+                        ip = element(1, Peer),
+                        user_agent = element(2, Peer),
                         
                         state = invalid,
                         reject_reason = Reason,
@@ -218,14 +192,15 @@ notify_invalid_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_p
                     });
                 _ ->
                     notify_share(#share{
+                        timestamp = Timestamp,
                         subpool_id = SubpoolId,
                         is_aux = true,
                         pool_name = AuxpoolName,
                         worker_id = WorkerId,
                         worker_name = WorkerName,
                         user_id = UserId,
-                        peer = Peer,
-                        timestamp = Timestamp,
+                        ip = element(1, Peer),
+                        user_agent = element(2, Peer),
                         
                         state = invalid,
                         reject_reason = Reason,
@@ -240,13 +215,14 @@ notify_invalid_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_p
     case Workunit of
         #workunit{target=Target, block_num=BlockNum, prev_block=PrevBlock} ->
             notify_share(#share{
+                timestamp = Timestamp,
                 subpool_id = SubpoolId,
                 pool_name = SubpoolName,
                 worker_id = WorkerId,
                 worker_name = WorkerName,
                 user_id = UserId,
-                peer = Peer,
-                timestamp = Timestamp,
+                ip = element(1, Peer),
+                user_agent = element(2, Peer),
                 
                 state = invalid,
                 reject_reason = Reason,
@@ -258,13 +234,14 @@ notify_invalid_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_p
             });
         _ ->
             notify_share(#share{
+                timestamp = Timestamp,
                 subpool_id = SubpoolId,
                 pool_name = SubpoolName,
                 worker_id = WorkerId,
                 worker_name = WorkerName,
                 user_id = UserId,
-                peer = Peer,
-                timestamp = Timestamp,
+                ip = element(1, Peer),
+                user_agent = element(2, Peer),
                 
                 state = invalid,
                 reject_reason = Reason,
@@ -274,144 +251,81 @@ notify_invalid_share(#subpool{id=SubpoolId, name=SubpoolName, round=Round, aux_p
     end.
 
 %% ===================================================================
-%% Gen_Event callbacks
+%% Gen_Server callbacks
 %% ===================================================================
 
 init([]) ->
-    PMonTbl = ets:new(pmon_tbl, [set, protected]),
-    {ok, _} = timer:send_interval(?POLLING_MONITOR_TIMEOUT_CHECK, timeout_check),
-    {ok, #state{pmon_tbl=PMonTbl, pmons=dict:new()}}.
+    case gen_event:start_link({local, ?MODULE}) of
+        {ok, Pid} ->
+            gen_event:add_sup_handler(Pid, longpolling_sharelogger, []),
+            {ok, dict:from_list([{longpolling_sharelogger, {[], undefined, 0}}])};
+        {error, Error} ->
+            {error, Error}
+    end.
 
-handle_event(#share{subpool_id=SubpoolId, is_aux=IsAux, worker_id=WorkerId, user_id=UserId, state=State}, State=#state{pmon_tbl=PMonTbl, pmons=PMons}) ->
-    Pos = case State of invalid -> 2; valid -> 3; candidate -> 4 end,
-    NewPMons = dict:map(
-        fun
-            (Token, PM=#polling_monitor{type=Type, subpool_id=ThisSubpoolId, is_aux=ThisAux, user_worker_id=UserOrWorkerId, waiting=Waiting, has_changes=HasChanges}) when ThisSubpoolId =:= SubpoolId, ThisAux =:= IsAux ->
-                Key = case Type of
-                    subpool ->
-                        Token;
-                    user when UserId =:= UserOrWorkerId ->
-                        {Token, WorkerId};
-                    worker when WorkerId =:= UserOrWorkerId ->
-                        Token;
-                    _ ->
-                        undefined
-                end,
-                case Key of
-                    undefined ->
-                        PM;
-                    _ ->
-                        case ets:member(PMonTbl, Key) of
-                            true ->
-                                ets:update_counter(PMonTbl, Key, {Pos, 1});
-                            _ ->
-                                ets:insert(PMonTbl, setelement(Pos, {Key, 0,0,0}, 1))
-                        end,
-                        case Waiting of
-                            undefined ->
-                                if
-                                    HasChanges ->
-                                        PM;
-                                    true ->
-                                        PM#polling_monitor{has_changes=true}
-                                end;
-                            {To, MRef} ->
-                                send_reply_and_flush(Token, Type, To, PMonTbl),
-                                erlang:demonitor(MRef, [flush]),
-                                PM#polling_monitor{last_return=erlang:now(), waiting=undefined}
-                        end
-                end;
-            (_, PM) ->
-                PM
-        end,
-        PMons
-    ),
-    {ok, State#state{pmons=NewPMons}}.
+handle_call({add_share_logger, Id, Type, Options}, _From, State) ->
+    Module = list_to_atom(lists:concat([Type, "_sharelogger"])),
+    case gen_event:add_sup_handler(?MODULE, {Module, Id}, Options) of
+        ok ->
+            {reply, ok, dict:store({Module, Id}, {Options, undefined, 0}, State)};
+        Result ->
+            {reply, Result, State}
+    end;
 
-handle_call({new_polling_monitor, Type, Aux, SubpoolId, UserOrWorkerId}, State=#state{pmons=PMons}) ->
-    Token = ecoinpool_util:new_random_uuid(),
-    PMon = #polling_monitor{
-        type=Type,
-        subpool_id=SubpoolId,
-        is_aux=Aux,
-        user_worker_id=UserOrWorkerId,
-        last_return=erlang:now()
-    },
-    {ok, Token, State#state{pmons=dict:store(Token, PMon, PMons)}}.
+handle_call({remove_share_logger, Id, Type}, _From, State) ->
+    Module = list_to_atom(lists:concat([Type, "_sharelogger"])),
+    Result = gen_event:delete_handler(?MODULE, {Module, Id}, shutdown),
+    {reply, Result, dict:erase({Module, Id}, State)};
 
-handle_info({poll_for_changes, To, Token}, State=#state{pmon_tbl=PMonTbl, pmons=PMons}) ->
-    NewPMons = case dict:find(Token, PMons) of
-        {ok, PM=#polling_monitor{type=Type, waiting=Waiting, has_changes=HasChanges}} ->
+handle_call(_Message, _From, State) ->
+    {reply, error, State}.
+
+handle_cast(_Message, State) ->
+    {noreply, State}.
+
+handle_info({gen_event_EXIT, Handler, _Reason}, State) ->
+    case dict:find(Handler, State) of
+        {ok, {Options, LastRestart, RestartCount}} ->
+            Now = erlang:now(),
+            Diff = case LastRestart of
+                undefined ->
+                    ?MAX_RESTART_INTERVAL + 1;
+                _ ->
+                    timer:now_diff(Now, LastRestart) div 1000
+            end,
+            {NewState, DoRestart} = if
+                Diff > ?MAX_RESTART_INTERVAL -> % Reset restart counter
+                    log4erl:error("Restarting crashed sharelogger: ~p", [Handler]),
+                    {dict:store(Handler, {Options, Now, 1}, State), true};
+                RestartCount >= ?MAX_RESTART_COUNT -> % Give up
+                    log4erl:error("Giving up sharelogger: ~p", [Handler]),
+                    {dict:erase(Handler, State), false};
+                true -> % Retry
+                    log4erl:error("Restarting crashed sharelogger (~bx): ~p", [RestartCount + 1, Handler]),
+                    {dict:store(Handler, {Options, LastRestart, RestartCount + 1}, State), true}
+            end,
             if
-                HasChanges ->
-                    send_reply_and_flush(Token, Type, To, PMonTbl),
-                    dict:store(Token, PM#polling_monitor{last_return=erlang:now(), has_changes=false}, PMons);
-                true -> % Set to wait
-                    case Waiting of
-                        undefined ->
-                            ok;
-                        {To, MRef} ->
-                            Waiting ! {share_changes_result, {error, kicked}}, % Kick out already waiting
-                            erlang:demonitor(MRef, [flush])
-                    end,
-                    dict:store(Token, PM#polling_monitor{waiting={To, erlang:monitor(process, To)}}, PMons)
+                DoRestart ->
+                    case gen_event:add_sup_handler(?MODULE, Handler, Options) of
+                        ok ->
+                            {noreply, NewState};
+                        Result ->
+                            log4erl:error("Could not restart sharelogger: ~p - ~p", [Handler, Result]),
+                            {noreply, dict:erase(Handler, State)}
+                    end;
+                true ->
+                    {noreply, NewState}
             end;
         error ->
-            To ! {share_changes_result, {error, invalid_token}}, % Reply invalid token
-            PMons
-    end,
-    {ok, State#state{pmons=NewPMons}};
+            log4erl:error("Unknown sharelogger: ~p", [Handler]),
+            {noreply, State}
+    end;
 
-handle_info(timeout_check, State=#state{pmons=PMons}) ->
-    Now = erlang:now(),
-    NewPMons = dict:filter(
-        fun
-            (_, #polling_monitor{last_return=LastReturn, waiting=undefined}) ->
-                case timer:now_diff(Now, LastReturn) of
-                    Diff when Diff > ?POLLING_MONITOR_TIMEOUT ->
-                        false;
-                    _ ->
-                        true
-                end;
-            (_, _) ->
-                true
-        end,
-        PMons
-    ),
-    {ok, State#state{pmons=NewPMons}};
-
-handle_info({'DOWN', _, _, To, _}, State=#state{pmons=PMons}) ->
-    NewPMons = dict:map(
-        fun
-            (_, PM=#polling_monitor{waiting={ThisTo, _}}) when ThisTo =:= To -> PM#polling_monitor{last_return=erlang:now(), waiting=undefined};
-            (_, V) -> V
-        end,
-        PMons
-    ),
-    {ok, State#state{pmons=NewPMons}}.
+handle_info(_Message, State) ->
+    {noreply, State}.
 
 terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
-
-%% ===================================================================
-%% Other functions
-%% ===================================================================
-
-send_reply_and_flush(Token, user, To, PMonTbl) ->
-    Data = [{WorkerId, Invalid, Valid, Candidate} || [WorkerId, Invalid, Valid, Candidate] <- ets:match(PMonTbl, {{Token, '$1'}, '$2', '$3', '$4'})],
-    To ! {share_changes_result, {ok, Data}},
-    do_flush(Token, user, PMonTbl);
-send_reply_and_flush(Token, Type, To, PMonTbl) -> % Type can here be either subpool or worker
-    Data = case ets:lookup(PMonTbl, Token) of
-        [{_, Invalid, Valid, Candidate}] -> {Invalid, Valid, Candidate}
-    end,
-    To ! {share_changes_result, {ok, Data}},
-    do_flush(Token, Type, PMonTbl).
-
-do_flush(Token, user, PMonTbl) ->
-    ets:match_delete(PMonTbl, {{Token, '_'}, '_', '_', '_'});
-do_flush(Token, _, PMonTbl) -> % Type can here be either subpool or worker
-    ets:delete(PMonTbl, Token).

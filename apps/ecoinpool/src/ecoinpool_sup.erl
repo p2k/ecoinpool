@@ -100,5 +100,6 @@ init([_ServerId, DBConfig]) ->
     {ok, { {one_for_one, 5, 10}, [
         {ecoinpool_crash_repo, {ebitcoin_crash_repo, start_link, [{local, ecoinpool_crash_repo}]}, permanent, 5000, worker, [ebitcoin_crash_repo]},
         {ecoinpool_rpc, {ecoinpool_rpc, start_link, []}, permanent, 5000, worker, [ecoinpool_rpc]},
+        {ecoinpool_share_broker, {ecoinpool_share_broker, start_link, []}, permanent, 5000, worker, [ecoinpool_share_broker]},
         {ecoinpool_db, {ecoinpool_db_sup, start_link, [DBConfig]}, permanent, 5000, supervisor, [ecoinpool_db_sup]}
     ]} }.

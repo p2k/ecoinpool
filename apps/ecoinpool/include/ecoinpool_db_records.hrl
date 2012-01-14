@@ -20,7 +20,7 @@
 
 -record(configuration, {
     active_subpools :: [binary()],
-    view_update_interval :: integer()
+    share_loggers :: [conf_property()]
 }).
 -type configuration() :: #configuration{}.
 
@@ -58,14 +58,15 @@
 -type worker() :: #worker{}.
 
 -record(share, {
+    timestamp :: erlang:timestamp(),
     subpool_id :: binary(),
     is_aux = false :: boolean(),
     pool_name :: binary(),
     worker_id :: binary(),
     worker_name :: binary(),
     user_id :: term(),
-    peer :: peer(),
-    timestamp :: erlang:timestamp(),
+    ip :: string(),
+    user_agent :: string(),
     state :: invalid | valid | candidate,
     reject_reason :: reject_reason() | undefined,
     hash :: binary() | undefined,

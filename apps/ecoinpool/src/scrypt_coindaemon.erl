@@ -149,7 +149,7 @@ init([SubpoolId, Config]) ->
     Port = proplists:get_value(port, Config, DefaultPort),
     URL = lists:flatten(io_lib:format("http://~s:~b/", [Host, Port])),
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
-    Pass = binary:bin_to_list(proplists:get_value(pass, Config, <<"pass">>)),
+    Pass = binary:bin_to_list(ecoinpool_util:parse_json_password(proplists:get_value(pass, Config, <<"pass">>))),
     
     PayTo = btc_protocol:hash160_from_address(case proplists:get_value(pay_to, Config) of
         undefined ->

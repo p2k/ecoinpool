@@ -20,7 +20,32 @@
 
 -module(ecoinpool_util).
 
--export([hexbin_to_bin/1, hexstr_to_list/1, bin_to_hexbin/1, list_to_hexstr/1, bits_to_target/1, endian_swap/1, byte_reverse/1, bn2mpi_le/1, mpi2bn_le/1, send_http_req/3, new_random_uuid/0]).
+-export([
+    hexbin_to_bin/1,
+    hexstr_to_list/1,
+    
+    bin_to_hexbin/1,
+    list_to_hexstr/1,
+    
+    bits_to_target/1,
+    
+    endian_swap/1,
+    byte_reverse/1,
+    
+    bn2mpi_le/1,
+    mpi2bn_le/1,
+    
+    send_http_req/3,
+    new_random_uuid/0,
+    
+    blowfish_encrypt/2,
+    blowfish_encrypt/3,
+    blowfish_decrypt/3,
+    
+    parse_json_password/1,
+    make_json_password/1,
+    make_json_password/2
+]).
 
 -on_load(module_init/0).
 
@@ -119,3 +144,74 @@ new_random_uuid() ->
     R3 = random:uniform(16#ffffffff)-1,
     R4 = random:uniform(16#ffffffff)-1,
     bin_to_hexbin(<<R1:32, R2:32, R3:32, R4:32>>).
+
+blowfish_encrypt(Key, Text) ->
+    IVec = crypto:strong_rand_bytes(8),
+    {IVec, blowfish_encrypt(Key, IVec, Text, <<>>)}.
+
+blowfish_encrypt(Key, IVec, Text) ->
+    blowfish_encrypt(Key, IVec, Text, <<>>).
+
+blowfish_encrypt(_, _, <<>>, Acc) ->
+    Acc;
+blowfish_encrypt(Key, IVec, <<Block:64/bits, T/binary>>, Acc) ->
+    CipherBlock = crypto:blowfish_cbc_encrypt(Key, IVec, Block),
+    blowfish_encrypt(Key, CipherBlock, T, <<Acc/binary, CipherBlock/binary>>);
+blowfish_encrypt(Key, IVec, Rest, Acc) ->
+    Padding = binary:copy(<<0>>, 8 - byte_size(Rest)),
+    CipherBlock = crypto:blowfish_cbc_encrypt(Key, IVec, <<Rest/binary, Padding/binary>>),
+    <<Acc/binary, CipherBlock/binary>>.
+
+blowfish_decrypt(Key, IVec, Cipher) ->
+    blowfish_decrypt(Key, IVec, Cipher, <<>>).
+
+blowfish_decrypt(_, _, <<>>, Acc) ->
+    Acc;
+blowfish_decrypt(Key, IVec, <<LastCipherBlock:64/bits>>, Acc) ->
+    Block = crypto:blowfish_cbc_decrypt(Key, IVec, LastCipherBlock),
+    case re:run(Block, "\\0+$", [dollar_endonly, {capture, first, index}]) of
+        nomatch ->
+            <<Acc/binary, Block/binary>>;
+        {match,[{Index, _}]} ->
+            Trimmed = binary_part(Block, 0, Index),
+            <<Acc/binary, Trimmed/binary>>
+    end;
+blowfish_decrypt(Key, IVec, <<CipherBlock:64/bits, T/binary>>, Acc) ->
+    Block = crypto:blowfish_cbc_decrypt(Key, IVec, CipherBlock),
+    blowfish_decrypt(Key, CipherBlock, T, <<Acc/binary, Block/binary>>).
+
+parse_json_password(undefined) ->
+    undefined;
+parse_json_password(Plain) when is_binary(Plain) ->
+    Plain;
+parse_json_password({Encrypted}) ->
+    try
+        IVecB64 = proplists:get_value(<<"i">>, Encrypted),
+        true = is_binary(IVecB64),
+        IVec = base64:decode(IVecB64),
+        8 = byte_size(IVec),
+        CipherB64 = proplists:get_value(<<"c">>, Encrypted),
+        true = is_binary(CipherB64),
+        Cipher = base64:decode(CipherB64),
+        0 = byte_size(Cipher) rem 8,
+        ecoinpool_util:blowfish_decrypt(application:get_env(ecoinpool, blowfish_secret), IVec, Cipher)
+    catch _:_ ->
+        invalid
+    end;
+parse_json_password(_) ->
+    invalid.
+
+make_json_password(Plain) ->
+    {IVec, Cipher} = blowfish_encrypt(application:get_env(ecoinpool, blowfish_secret), Plain),
+    {[
+        {<<"c">>, base64:encode(Cipher)},
+        {<<"i">>, base64:encode(IVec)}
+    ]}.
+
+make_json_password(Plain, Seed) ->
+    <<IVec:64/bits, _/binary>> = crypto:sha(Seed),
+    Cipher = blowfish_encrypt(application:get_env(ecoinpool, blowfish_secret), IVec, Plain),
+    {[
+        {<<"c">>, base64:encode(Cipher)},
+        {<<"i">>, base64:encode(IVec)}
+    ]}.
