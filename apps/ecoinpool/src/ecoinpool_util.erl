@@ -194,7 +194,8 @@ parse_json_password({Encrypted}) ->
         true = is_binary(CipherB64),
         Cipher = base64:decode(CipherB64),
         0 = byte_size(Cipher) rem 8,
-        ecoinpool_util:blowfish_decrypt(application:get_env(ecoinpool, blowfish_secret), IVec, Cipher)
+        {ok, Key} = application:get_env(ecoinpool, blowfish_secret),
+        ecoinpool_util:blowfish_decrypt(Key, IVec, Cipher)
     catch _:_ ->
         invalid
     end;
@@ -202,15 +203,17 @@ parse_json_password(_) ->
     invalid.
 
 make_json_password(Plain) ->
-    {IVec, Cipher} = blowfish_encrypt(application:get_env(ecoinpool, blowfish_secret), Plain),
+    {ok, Key} = application:get_env(ecoinpool, blowfish_secret),
+    {IVec, Cipher} = blowfish_encrypt(Key, Plain),
     {[
         {<<"c">>, base64:encode(Cipher)},
         {<<"i">>, base64:encode(IVec)}
     ]}.
 
 make_json_password(Plain, Seed) ->
+    {ok, Key} = application:get_env(ecoinpool, blowfish_secret),
     <<IVec:64/bits, _/binary>> = crypto:sha(Seed),
-    Cipher = blowfish_encrypt(application:get_env(ecoinpool, blowfish_secret), IVec, Plain),
+    Cipher = blowfish_encrypt(Key, IVec, Plain),
     {[
         {<<"c">>, base64:encode(Cipher)},
         {<<"i">>, base64:encode(IVec)}
