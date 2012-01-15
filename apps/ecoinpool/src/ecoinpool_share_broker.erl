@@ -264,11 +264,13 @@ init([]) ->
     end.
 
 handle_call({add_share_logger, Id, Type, Options}, _From, State) ->
+    OptionsWithId = [{id, Id} | Options],
     Module = list_to_atom(lists:concat([Type, "_sharelogger"])),
-    case gen_event:add_sup_handler(?MODULE, {Module, Id}, Options) of
+    case gen_event:add_sup_handler(?MODULE, {Module, Id}, OptionsWithId) of
         ok ->
-            {reply, ok, dict:store({Module, Id}, {Options, undefined, 0}, State)};
+            {reply, ok, dict:store({Module, Id}, {OptionsWithId, undefined, 0}, State)};
         Result ->
+            log4erl:error("Could not add share logger ~p, reason:~n~p", [{Module, Id}, Result]),
             {reply, Result, State}
     end;
 

@@ -32,6 +32,8 @@
     start_subpool/1,
     reload_subpool/1,
     stop_subpool/1,
+    start_mysql/5,
+    stop_mysql/1,
     crash_store/2,
     crash_fetch/1,
     crash_repo_pid/0,
@@ -77,6 +79,31 @@ reload_subpool(Subpool) ->
 stop_subpool(SubpoolId) ->
     case supervisor:terminate_child(?MODULE, {subpool, SubpoolId}) of
         ok -> supervisor:delete_child(?MODULE, {subpool, SubpoolId});
+        Error -> Error
+    end.
+
+start_mysql(MySQLHost, MySQLPort, MySQLUser, MySQLPassword, MySQLDatabase) ->
+    PoolId = list_to_atom(lists:concat([MySQLHost, "_", MySQLDatabase, "_", MySQLUser])),
+    LogFun = fun (_Module, _Line, Level, MsgFun) ->
+        {Msg, Params} = MsgFun(),
+        case Level of
+            debug -> log4erl:debug("~p:~n  " ++ Msg, [PoolId] ++ Params);
+            normal -> log4erl:info("~p:~n  " ++ Msg, [PoolId] ++ Params);
+            warning -> log4erl:warn("~p:~n  " ++ Msg, [PoolId] ++ Params);
+            error -> log4erl:error("~p:~n  " ++ Msg, [PoolId] ++ Params);
+            _ -> ok
+        end
+    end,
+    case supervisor:start_child(?MODULE, {{mysql, PoolId}, {mysql, start_link, [PoolId, MySQLHost, MySQLPort, MySQLUser, MySQLPassword, MySQLDatabase, LogFun]}, transient, 5000, worker, [mysql]}) of
+        {ok, _} -> {ok, PoolId};
+        {ok, _, _} -> {ok, PoolId};
+        {error, {already_started, _}} -> {ok, PoolId};
+        Error -> Error
+    end.
+
+stop_mysql(PoolId) ->
+    case supervisor:terminate_child(?MODULE, {mysql, PoolId}) of
+        ok -> supervisor:delete_child(?MODULE, {mysql, PoolId});
         Error -> Error
     end.
 
