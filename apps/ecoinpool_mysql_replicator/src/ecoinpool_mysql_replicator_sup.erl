@@ -90,17 +90,21 @@ init([{CouchDBHost, CouchDBPort, CouchDBPrefix, CouchDBOptions, CouchDBDatabase}
 
 
 ecoinpool_couch_to_my(CouchProps) ->
+    {ok, Key} = application:get_env(ecoinpool_mysql_replicator, blowfish_secret),
     [
         {"associateduserid", proplists:get_value(<<"user_id">>, CouchProps)},
         {"username", proplists:get_value(<<"name">>, CouchProps)},
-        {"password", ecoinpool_util:parse_json_password(proplists:get_value(<<"pass">>, CouchProps))}
+        {"password", ecoinpool_util:parse_json_password(Key, proplists:get_value(<<"pass">>, CouchProps))}
     ].
 
 ecoinpool_my_to_couch(MyProps, SubPoolId) ->
     Name = proplists:get_value("username", MyProps),
     Pass = case proplists:get_value("password", MyProps) of
-        undefined -> undefined;
-        P -> ecoinpool_util:make_json_password(P, Name)
+        undefined ->
+            undefined;
+        P ->
+            {ok, Key} = application:get_env(ecoinpool_mysql_replicator, blowfish_secret),
+            ecoinpool_util:make_json_password(Key, P, Name)
     end,
     [
         {<<"type">>, <<"worker">>},

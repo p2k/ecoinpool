@@ -71,6 +71,9 @@
             {"24aa68ec6c910de0850ed0c575621ec9", "pool_worker", 15}
         ]},
         
+        % Next is your blowfish secret key. Copy it from above.
+        {blowfish_secret, "Replace me!"},
+        
         % And the last one, also to be likely changed, is the shares deployer
         % configuration. There are two possible formats here, one with and one
         % without using merged mining. The config ID is used as basename for

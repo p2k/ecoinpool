@@ -43,8 +43,9 @@
     blowfish_decrypt/3,
     
     parse_json_password/1,
-    make_json_password/1,
-    make_json_password/2
+    parse_json_password/2,
+    make_json_password/2,
+    make_json_password/3
 ]).
 
 -on_load(module_init/0).
@@ -180,11 +181,15 @@ blowfish_decrypt(Key, IVec, <<CipherBlock:64/bits, T/binary>>, Acc) ->
     Block = crypto:blowfish_cbc_decrypt(Key, IVec, CipherBlock),
     blowfish_decrypt(Key, CipherBlock, T, <<Acc/binary, Block/binary>>).
 
-parse_json_password(undefined) ->
+parse_json_password(X) ->
+    {ok, Key} = application:get_env(ecoinpool, blowfish_secret),
+    parse_json_password(Key, X).
+
+parse_json_password(_, undefined) ->
     undefined;
-parse_json_password(Plain) when is_binary(Plain) ->
+parse_json_password(_, Plain) when is_binary(Plain) ->
     Plain;
-parse_json_password({Encrypted}) ->
+parse_json_password(Key, {Encrypted}) ->
     try
         IVecB64 = proplists:get_value(<<"i">>, Encrypted),
         true = is_binary(IVecB64),
@@ -194,24 +199,24 @@ parse_json_password({Encrypted}) ->
         true = is_binary(CipherB64),
         Cipher = base64:decode(CipherB64),
         0 = byte_size(Cipher) rem 8,
-        {ok, Key} = application:get_env(ecoinpool, blowfish_secret),
         ecoinpool_util:blowfish_decrypt(Key, IVec, Cipher)
     catch _:_ ->
         invalid
     end;
-parse_json_password(_) ->
+parse_json_password(_, _) ->
     invalid.
 
-make_json_password(Plain) ->
+make_json_password(Plain, Seed) ->
     {ok, Key} = application:get_env(ecoinpool, blowfish_secret),
+    make_json_password(Key, Plain, Seed).
+
+make_json_password(Key, Plain, random) ->
     {IVec, Cipher} = blowfish_encrypt(Key, Plain),
     {[
         {<<"c">>, base64:encode(Cipher)},
         {<<"i">>, base64:encode(IVec)}
-    ]}.
-
-make_json_password(Plain, Seed) ->
-    {ok, Key} = application:get_env(ecoinpool, blowfish_secret),
+    ]};
+make_json_password(Key, Plain, Seed) ->
     <<IVec:64/bits, _/binary>> = crypto:sha(Seed),
     Cipher = blowfish_encrypt(Key, IVec, Plain),
     {[

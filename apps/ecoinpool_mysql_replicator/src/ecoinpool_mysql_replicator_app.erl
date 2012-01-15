@@ -41,6 +41,10 @@ start(_StartType, _StartArgs) ->
     {ok, MySQLPrefix} = application:get_env(ecoinpool_mysql_replicator, mysql_prefix),
     {ok, MySQLOptions} = application:get_env(ecoinpool_mysql_replicator, mysql_options),
     {ok, MySQLDatabase} = application:get_env(ecoinpool_mysql_replicator, mysql_database),
+    case application:get_env(ecoinpool_mysql_replicator, blowfish_secret) of % Make sure this is not set to the default
+        {ok, "Replace me!"} -> error(please_set_a_better_blowfish_secret);
+        {ok, _} -> ok
+    end,
     {ok, ReplicatorConfigs} = application:get_env(ecoinpool_mysql_replicator, replicator_configs),
     {ok, ShareDeployerConfigs} = application:get_env(ecoinpool_mysql_replicator, share_deployer_configs),
     ecoinpool_mysql_replicator_sup:start_link(

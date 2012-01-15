@@ -291,40 +291,53 @@ handle_bitcoin(Block=#btc_block{header=Header}, State=#state{client=Client}) ->
 
 handle_bitcoin(#btc_headers{long_headers=LongHeaders}, State=#state{client=Client, bc_listeners=BCListeners, last_block_num=OldLastBlockNum, last_block_hash=OldLastBlockHash, resync_mode=R}) ->
     #client{id=ClientId, name=Name} = Client,
-    {LastBlockNum, LastBlockHash, _} = lists:foldl(
-        fun
-            (_, {LBN, LBH, true}) ->
-                {LBN, LBH, true};
-            ({Header, _}, {LBN, LBH, false}) ->
-                #btc_header{hash_prev_block=HashPrevBlock} = Header,
-                BlockNum = case LBH of
-                    undefined ->
-                        undefined;
-                    HashPrevBlock ->
-                        LBN + 1;
-                    _ ->
-                        log4erl:debug(ebitcoin, "~s: Searching for a prev block...", [Name]),
-                        case ebitcoin_db:get_block_height(Client, HashPrevBlock) of
-                            {ok, FoundBN} ->
-                                log4erl:warn(ebitcoin, "~s: Branching detected! Difference: ~b block(s)", [Name, LBN-FoundBN]),
-                                ebitcoin_db:cut_branch(Client, FoundBN + 1),
-                                FoundBN + 1;
-                            {error, _} ->
-                                log4erl:error(ebitcoin, "~s: Received an orphan block in headers message!", [Name]),
-                                undefined
-                        end
-                end,
-                case BlockNum of
-                    undefined ->
-                        {LBN, LBH, true};
-                    _ ->
-                        ebitcoin_db:store_header(Client, BlockNum, Header),
-                        {BlockNum, btc_protocol:get_hash(Header), false}
-                end
-        end,
-        {OldLastBlockNum, OldLastBlockHash, false},
-        LongHeaders
-    ),
+    {LastBlockNum, LastBlockHash} = case LongHeaders of
+        [] ->
+            {OldLastBlockNum, OldLastBlockHash};
+        [{Header, _} | _] -> % Check the first
+            #btc_header{hash_prev_block=HashPrevBlock} = Header,
+            StartBlockNum = case OldLastBlockHash of
+                undefined ->
+                    undefined;
+                HashPrevBlock ->
+                    OldLastBlockNum + 1;
+                _ ->
+                    log4erl:debug(ebitcoin, "~s: Searching for a prev block...", [Name]),
+                    case ebitcoin_db:get_block_height(Client, HashPrevBlock) of
+                        {ok, FoundBN} ->
+                            log4erl:warn(ebitcoin, "~s: Branching detected! Difference: ~b block(s)", [Name, OldLastBlockNum-FoundBN]),
+                            ebitcoin_db:cut_branch(Client, FoundBN + 1),
+                            FoundBN + 1;
+                        {error, _} ->
+                            log4erl:error(ebitcoin, "~s: Received an orphan block in headers message!", [Name]),
+                            undefined
+                    end
+            end,
+            case StartBlockNum of
+                undefined ->
+                    {OldLastBlockNum, OldLastBlockHash};
+                _ ->
+                    Result = lists:foldl(
+                        fun
+                            ({H=#btc_header{hash_prev_block=LBH}, _}, {BN, LBH, Acc}) ->
+                                TBH = btc_protocol:get_hash(H),
+                                {BN + 1, TBH, Acc ++ [{BN, TBH, H}]};
+                            (_, _) ->
+                                cancel
+                        end,
+                        {StartBlockNum, HashPrevBlock, []},
+                        LongHeaders
+                    ),
+                    case Result of
+                        cancel ->
+                            log4erl:error(ebitcoin, "~s: Received headers are not consecutive!", [Name]),
+                            {OldLastBlockNum, OldLastBlockHash};
+                        {LBN, LBH, PreparedHeaders} ->
+                            ebitcoin_db:store_headers(Client, PreparedHeaders),
+                            {LBN-1, LBH}
+                    end
+            end
+    end,
     StoredNow = LastBlockNum-OldLastBlockNum,
     NewR = case R of
         {Got, undefined, FinalBlock} ->

@@ -31,6 +31,7 @@
     setup_client_dbs/1,
     store_block/3,
     store_header/3,
+    store_headers/2,
     cut_branch/2,
     get_block_info/2,
     get_last_block_info/1,
@@ -74,6 +75,10 @@ store_block(#client{name=ClientName}, BlockNum, Block) ->
 
 store_header(#client{name=ClientName}, BlockNum, Header) ->
     gen_server:cast(?MODULE, {store_header, ClientName, BlockNum, Header}).
+
+-spec store_headers(Client :: #client{}, Headers :: [{BlockNum :: integer(), BlockHash :: binary(), Header :: btc_header()}]) -> ok.
+store_headers(#client{name=ClientName}, Headers) ->
+    gen_server:cast(?MODULE, {store_headers, ClientName, Headers}).
 
 cut_branch(#client{name=ClientName}, Height) ->
     gen_server:cast(?MODULE, {cut_branch, ClientName, Height}).
@@ -304,6 +309,13 @@ handle_cast({store_header, ClientName, BlockNum, Header}, State=#state{srv_conn=
         _ ->
             {noreply, State}
     end;
+
+handle_cast({store_headers, ClientName, Headers}, State=#state{srv_conn=S}) ->
+    ClientDBName = binary:bin_to_list(ClientName),
+    {ok, ClientDB} = couchbeam:open_db(S, ClientDBName),
+    Docs = make_block_header_documents(Headers),
+    couchbeam:save_docs(ClientDB, Docs),
+    {noreply, store_view_update(ClientDBName, erlang:now(), State)};
 
 handle_cast({cut_branch, ClientName, Height}, State=#state{srv_conn=S}) ->
     ClientDBName = binary:bin_to_list(ClientName),
@@ -593,6 +605,9 @@ make_block_header_document(BlockNum, BlockHash, Header=#btc_header{}, NTx) ->
         AuxPOW ->
             {DocProps ++ [{<<"aux_pow">>, make_btc_aux_pow_part(AuxPOW)}]}
     end.
+
+make_block_header_documents(Headers) ->
+    [make_block_header_document(BlockNum, ecoinpool_util:bin_to_hexbin(BlockHash), Header, 0) || {BlockNum, BlockHash, Header} <- Headers].
 
 make_tx_document(BlockHash, Index, Tx=#btc_tx{}) ->
     {TxPart} = make_btc_tx_part(Tx),
