@@ -244,7 +244,7 @@ handle_main_share(Share, State=#state{always_log_data=AlwaysLogData, main_q=Main
         source = PoolName,
         solution = Solution,
         block_num = BlockNum,
-        prev_block_hash = PrevBlock,
+        prev_block_hash = ecoinpool_util:bin_to_hexbin(PrevBlock),
         useragent = UserAgent
     },
     {NewMainQ, NewAuxQ, NewMyShares} = if
