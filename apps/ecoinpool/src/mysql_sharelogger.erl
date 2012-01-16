@@ -275,7 +275,7 @@ check_share_queues(MainQ, AuxQ=[], MyShares) ->
     {MainQ, AuxQ, MyShares};
 check_share_queues(MainQ=[{WorkerId, Hash, S} | MainQT], AuxQ, MyShares) ->
     CleanedAuxQ = lists:dropwhile(
-        fun ({AuxWorkerId, ParentHash, _, _, _}) ->
+        fun ({AuxWorkerId, ParentHash, _, _}) ->
             (AuxWorkerId =/= WorkerId) orelse (ParentHash =/= Hash)
         end,
         AuxQ
@@ -286,7 +286,7 @@ check_share_queues(MainQ=[{WorkerId, Hash, S} | MainQT], AuxQ, MyShares) ->
             HasLaterCorrelations = lists:any(
                 fun ({OtherWorkerId, OtherHash, _}) ->
                     lists:any(
-                        fun ({AuxWorkerId, ParentHash, _, _, _}) ->
+                        fun ({AuxWorkerId, ParentHash, _, _}) ->
                             (AuxWorkerId =:= OtherWorkerId) andalso (ParentHash =:= OtherHash)
                         end,
                         AuxQ
