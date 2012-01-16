@@ -50,7 +50,7 @@
     url,
     auth,
     tag,
-    pay_to,
+    coinbaser_config,
     
     mmm,
     
@@ -146,13 +146,10 @@ init([SubpoolId, Config]) ->
     User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
     Pass = binary:bin_to_list(ecoinpool_util:parse_json_password(proplists:get_value(pass, Config, <<"pass">>))),
     
-    PayTo = btc_protocol:hash160_from_address(case proplists:get_value(pay_to, Config) of
-        undefined ->
-            {ok, Address} = get_default_payout_address(URL, {User, Pass}),
-            Address;
-        Address ->
-            Address
-    end),
+    CoinbaserConfig = ecoinpool_coinbaser:make_config(
+        proplists:get_value(pay_to, Config),
+        fun () -> {ok, DefaultAddress} = get_default_payout_address(URL, {User, Pass}), DefaultAddress end
+    ),
     
     FullTag = case proplists:get_value(tag, Config) of
         Tag when is_binary(Tag), byte_size(Tag) > 0 ->
@@ -181,7 +178,7 @@ init([SubpoolId, Config]) ->
     
     ecoinpool_server:coindaemon_ready(SubpoolId, self()),
     
-    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, pay_to=PayTo, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}}.
+    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, tag=FullTag, coinbaser_config=CoinbaserConfig, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}}.
 
 handle_call({send_result, BData}, _From, State=#state{url=URL, auth=Auth, worktbl=WorkTbl, txtbl=TxTbl}) ->
     {Header, <<>>} = btc_protocol:decode_header(BData),
@@ -216,12 +213,12 @@ handle_cast(post_workunit, OldState) ->
     % Check if new work must be fetched
     State = fetch_work_with_state(OldState),
     % Extract state variables
-    #state{subpool=SubpoolId, tag=Tag, pay_to=PubkeyHash160, worktbl=WorkTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx, aux_work=AuxWork} = State,
+    #state{subpool=SubpoolId, tag=Tag, coinbaser_config=CoinbaserConfig, worktbl=WorkTbl, block_num=BlockNum, memorypool=Memorypool, coinbase_tx=OldCoinbaseTx, aux_work=AuxWork} = State,
     #memorypool{tx_index=TxIndex, first_tree_branches=FirstTreeBranches} = Memorypool,
     % Create/update coinbase
     CoinbaseTx = case OldCoinbaseTx of
         undefined ->
-            make_coinbase_tx(Memorypool, Tag, PubkeyHash160, make_script_sig_trailer(AuxWork));
+            make_coinbase_tx(Memorypool, Tag, CoinbaserConfig, make_script_sig_trailer(AuxWork));
         _ ->
             increment_coinbase_extra_nonce(OldCoinbaseTx)
     end,
@@ -462,17 +459,14 @@ make_btc_header(#memorypool{hash_prev_block=HashPrevBlock, timestamp=Timestamp, 
     HashMerkleRoot = ecoinpool_hash:fold_tree_branches_dsha256_hash(HashedTx, FT),
     #btc_header{hash_prev_block=HashPrevBlock, hash_merkle_root=HashMerkleRoot, timestamp=Timestamp, bits=Bits}.
 
-make_coinbase_tx(#memorypool{timestamp=Timestamp, coinbase_value=CoinbaseValue}, Tag, PubkeyHash160, ScriptSigTrailer) ->
+make_coinbase_tx(#memorypool{timestamp=Timestamp, coinbase_value=CoinbaseValue}, Tag, CoinbaserConfig, ScriptSigTrailer) ->
     TxIn = #btc_tx_in{
         prev_output_hash = <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0>>,
         prev_output_index = 16#ffffffff,
         signature_script = [Tag, Timestamp, 0 | ScriptSigTrailer]
     },
-    TxOut = #btc_tx_out{
-        value = CoinbaseValue,
-        pk_script = [op_dup, op_hash160, PubkeyHash160, op_equalverify, op_checksig]
-    },
-    #btc_tx{tx_in=[TxIn], tx_out=[TxOut]}.
+    TxOut = ecoinpool_coinbaser:run(CoinbaserConfig, CoinbaseValue),
+    #btc_tx{tx_in=[TxIn], tx_out=TxOut}.
 
 increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
     #btc_tx_in{signature_script = [Tag, Timestamp, ExtraNonce | ScriptSigTrailer]} = TxIn,

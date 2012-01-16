@@ -41,6 +41,8 @@ encode(N, Acc) ->
     C = lists:nth(N rem 58 + 1, ?BASE58_TABLE),
     encode(N div 58, <<C:8/unsigned, Acc/binary>>).
 
+decode(S) when is_list(S) ->
+    decode(list_to_binary(S));
 decode(<<$1, T/binary>>) ->
     TDec = decode(T),
     <<0, TDec/binary>>;

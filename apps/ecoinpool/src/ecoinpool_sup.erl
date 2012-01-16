@@ -87,10 +87,10 @@ start_mysql(MySQLHost, MySQLPort, MySQLUser, MySQLPassword, MySQLDatabase) ->
     LogFun = fun (_Module, _Line, Level, MsgFun) ->
         {Msg, Params} = MsgFun(),
         case Level of
-            debug -> log4erl:debug("~p:~n  " ++ Msg, [PoolId] ++ Params);
-            normal -> log4erl:info("~p:~n  " ++ Msg, [PoolId] ++ Params);
-            warning -> log4erl:warn("~p:~n  " ++ Msg, [PoolId] ++ Params);
-            error -> log4erl:error("~p:~n  " ++ Msg, [PoolId] ++ Params);
+            debug -> log4erl:debug(db, "~p:~n  " ++ Msg, [PoolId] ++ Params);
+            normal -> log4erl:info(db, "~p:~n  " ++ Msg, [PoolId] ++ Params);
+            warning -> log4erl:warn(db, "~p:~n  " ++ Msg, [PoolId] ++ Params);
+            error -> log4erl:error(db, "~p:~n  " ++ Msg, [PoolId] ++ Params);
             _ -> ok
         end
     end,
