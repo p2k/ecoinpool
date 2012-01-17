@@ -240,7 +240,7 @@ handle_main_share(Share, State=#state{always_log_data=AlwaysLogData, main_q=Main
         our_result = OurResult,
         our_result_bitcoin = OurResult,
         upstream_result = case ShareState of candidate -> 1; _ -> 0 end,
-        reason = RejectReason,
+        reason = case RejectReason of undefined -> undefined; _ -> atom_to_binary(RejectReason, utf8) end,
         source = PoolName,
         solution = Solution,
         block_num = BlockNum,
@@ -313,6 +313,8 @@ check_share_queues(MainQ=[{WorkerId, Hash, S} | MainQT], AuxQ, MyShares) ->
                     S#my_share{our_result_namecoin=1, upstream_result=1, solution=AuxSolution};
                 valid ->
                     S#my_share{our_result_namecoin=1};
+                invalid when S#my_share.our_result_bitcoin =:= 1 ->
+                    S#my_share{reason = <<"partial-stale">>};
                 invalid ->
                     S
             end,
