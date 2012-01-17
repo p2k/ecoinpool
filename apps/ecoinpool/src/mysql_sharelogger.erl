@@ -224,7 +224,7 @@ handle_main_share(Share, State=#state{always_log_data=AlwaysLogData, main_q=Main
     Time = ConvTS(Timestamp),
     OurResult = case ShareState of invalid -> 0; _ -> 1 end,
     Solution = if
-        AlwaysLogData; ShareState =:= candidate ->
+        AlwaysLogData, Data =/= undefined; ShareState =:= candidate, Data =/= undefined ->
             ecoinpool_util:bin_to_hexbin(Data);
         true ->
             undefined
@@ -244,7 +244,7 @@ handle_main_share(Share, State=#state{always_log_data=AlwaysLogData, main_q=Main
         source = PoolName,
         solution = Solution,
         block_num = BlockNum,
-        prev_block_hash = ecoinpool_util:bin_to_hexbin(PrevBlock),
+        prev_block_hash = if is_binary(PrevBlock) -> ecoinpool_util:bin_to_hexbin(PrevBlock); true -> undefined end,
         useragent = UserAgent
     },
     {NewMainQ, NewAuxQ, NewMyShares} = if
@@ -259,7 +259,7 @@ handle_aux_share(#share{worker_id=WorkerId, state=ShareState, parent_hash=Parent
     {NewMainQ, NewAuxQ, NewMyShares} = if
         is_binary(ParentHash), is_list(MainQ), is_list(AuxQ) ->
             Solution = case ShareState of
-                candidate -> ecoinpool_util:bin_to_hexbin(Data);
+                candidate when Data =/= undefined -> ecoinpool_util:bin_to_hexbin(Data);
                 _ -> undefined
             end,
             check_share_queues(MainQ, AuxQ ++ [{WorkerId, ParentHash, ShareState, Solution}], MyShares);
