@@ -59,23 +59,31 @@
 
 -record(share, {
     timestamp :: erlang:timestamp(),
+    server_id = local :: binary() | local,
+    
     subpool_id :: binary(),
-    is_aux = false :: boolean(),
-    pool_name :: binary(),
+    subpool_name :: binary(),
     worker_id :: binary(),
     worker_name :: binary(),
     user_id :: term(),
     ip :: string(),
     user_agent :: string(),
+    
     state :: invalid | valid | candidate,
     reject_reason :: reject_reason() | undefined,
     hash :: binary() | undefined,
-    parent_hash :: binary() | undefined,
     target :: binary() | undefined,
     block_num :: integer() | undefined,
     prev_block :: binary() | undefined,
     round :: integer() | undefined,
     data :: binary() | undefined,
-    is_local = true :: boolean()
+    
+    auxpool_name :: binary() | undefined,
+    aux_state :: invalid | valid | candidate | undefined,
+    aux_hash :: binary() | undefined,
+    aux_target :: binary() | undefined,
+    aux_block_num :: integer() | undefined,
+    aux_prev_block :: binary() | undefined,
+    aux_round :: integer() | undefined
 }).
 -type share() :: #share{}.

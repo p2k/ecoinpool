@@ -19,10 +19,12 @@
 %%
 
 -module(longpolling_sharelogger).
--behaviour(gen_event).
+-behaviour(gen_sharelogger).
+-behaviour(gen_server).
 
--include("ecoinpool_misc_types.hrl").
--include("ecoinpool_db_records.hrl").
+-include("gen_sharelogger_spec.hrl").
+
+-export([start_link/2, log_share/2]).
 
 -export([
     new_polling_monitor/1,
@@ -32,8 +34,7 @@
     poll_for_changes/2
 ]).
 
-% Callbacks from gen_event
--export([init/1, handle_event/2, handle_call/2, handle_info/2, terminate/2, code_change/3]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(POLLING_MONITOR_TIMEOUT, 60 * 1000000).
 -define(POLLING_MONITOR_TIMEOUT_CHECK, 10 * 1000).
@@ -50,28 +51,33 @@
 
 -record(state, {
     pmon_tbl :: ets:tid(),
-    pmons :: dict(),
-    check_timer :: timer:tref()
+    pmons :: dict()
 }).
 
 %% ===================================================================
 %% API functions
 %% ===================================================================
 
+start_link(_, Config) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
+
+log_share(LoggerId, Share) ->
+    gen_server:cast(LoggerId, Share).
+
 % Returns a token (hex binary)
 new_polling_monitor(SubpoolId) ->
     new_polling_monitor(SubpoolId, false).
 
 new_polling_monitor(SubpoolId, Aux) ->
-    gen_event:call(ecoinpool_share_broker, ?MODULE, {new_polling_monitor, subpool, Aux, SubpoolId, undefined}).
+    gen_server:call(?MODULE, {new_polling_monitor, subpool, Aux, SubpoolId, undefined}).
 
 new_polling_monitor(SubpoolId, Type, UserId) ->
     new_polling_monitor(SubpoolId, false, Type, UserId).
    
 new_polling_monitor(SubpoolId, Aux, user, UserId) ->
-    gen_event:call(ecoinpool_share_broker, ?MODULE, {new_polling_monitor, user, Aux, SubpoolId, UserId});
+    gen_server:call(?MODULE, {new_polling_monitor, user, Aux, SubpoolId, UserId});
 new_polling_monitor(SubpoolId, Aux, worker, WorkerId) ->
-    gen_event:call(ecoinpool_share_broker, ?MODULE, {new_polling_monitor, worker, Aux, SubpoolId, WorkerId}).
+    gen_server:call(?MODULE, {new_polling_monitor, worker, Aux, SubpoolId, WorkerId}).
 
 % Will reply by sending {share_changes_result, Result} to the given process
 % where Result can be {error, kicked | invalid_token} or {ok, Data} where Data
@@ -79,22 +85,56 @@ new_polling_monitor(SubpoolId, Aux, worker, WorkerId) ->
 % and a list [{WorkerId, Invalid, Valid, Candidate}] for user monitoring.
 -spec poll_for_changes(To :: pid() | atom(), Token :: binary()) -> ok.
 poll_for_changes(To, Token) ->
-    gen_event:call(ecoinpool_share_broker, ?MODULE, {poll_for_changes, To, Token}).
+    gen_server:call(?MODULE, {poll_for_changes, To, Token}).
 
 %% ===================================================================
-%% Gen_Event callbacks
+%% Gen_Server callbacks
 %% ===================================================================
 
 init([]) ->
     PMonTbl = ets:new(pmon_tbl, [set, protected]),
-    {ok, CheckTimer} = timer:apply_interval(?POLLING_MONITOR_TIMEOUT_CHECK, gen_event, call, [ecoinpool_share_broker, ?MODULE, timeout_check]),
-    {ok, #state{pmon_tbl=PMonTbl, pmons=dict:new(), check_timer=CheckTimer}}.
+    {ok, _} = timer:send_interval(?POLLING_MONITOR_TIMEOUT_CHECK, timeout_check),
+    {ok, #state{pmon_tbl=PMonTbl, pmons=dict:new()}}.
 
-handle_event(#share{subpool_id=SubpoolId, is_aux=IsAux, worker_id=WorkerId, user_id=UserId, state=ShareState}, State=#state{pmon_tbl=PMonTbl, pmons=PMons}) ->
-    Pos = case ShareState of invalid -> 2; valid -> 3; candidate -> 4 end,
+handle_call({new_polling_monitor, Type, Aux, SubpoolId, UserOrWorkerId}, _From, State=#state{pmons=PMons}) ->
+    Token = ecoinpool_util:new_random_uuid(),
+    PMon = #polling_monitor{
+        type=Type,
+        subpool_id=SubpoolId,
+        is_aux=Aux,
+        user_worker_id=UserOrWorkerId,
+        last_return=erlang:now()
+    },
+    {reply, Token, State#state{pmons=dict:store(Token, PMon, PMons)}};
+
+handle_call({poll_for_changes, To, Token}, _From, State=#state{pmon_tbl=PMonTbl, pmons=PMons}) ->
+    NewPMons = case dict:find(Token, PMons) of
+        {ok, PM=#polling_monitor{type=Type, waiting=Waiting, has_changes=HasChanges}} ->
+            if
+                HasChanges ->
+                    send_reply_and_flush(Token, Type, To, PMonTbl),
+                    dict:store(Token, PM#polling_monitor{last_return=erlang:now(), has_changes=false}, PMons);
+                true -> % Set to wait
+                    case Waiting of
+                        undefined ->
+                            ok;
+                        {OldTo, MRef} ->
+                            OldTo ! {share_changes_result, {error, kicked}}, % Kick out already waiting
+                            erlang:demonitor(MRef, [flush])
+                    end,
+                    dict:store(Token, PM#polling_monitor{waiting={To, erlang:monitor(process, To)}}, PMons)
+            end;
+        error ->
+            To ! {share_changes_result, {error, invalid_token}}, % Reply invalid token
+            PMons
+    end,
+    {noreply, ok, State#state{pmons=NewPMons}}.
+
+handle_cast(#share{subpool_id=SubpoolId, worker_id=WorkerId, user_id=UserId, state=ShareState, auxpool_name=AuxpoolName, aux_state=AuxShareState}, State=#state{pmon_tbl=PMonTbl, pmons=PMons}) ->
+    HasAux = AuxpoolName =/= undefined,
     NewPMons = dict:map(
         fun
-            (Token, PM=#polling_monitor{type=Type, subpool_id=ThisSubpoolId, is_aux=ThisAux, user_worker_id=UserOrWorkerId, waiting=Waiting, has_changes=HasChanges}) when ThisSubpoolId =:= SubpoolId, ThisAux =:= IsAux ->
+            (Token, PM=#polling_monitor{type=Type, subpool_id=ThisSubpoolId, is_aux=ThisAux, user_worker_id=UserOrWorkerId, waiting=Waiting, has_changes=HasChanges}) when ThisSubpoolId =:= SubpoolId, (not ThisAux or HasAux) ->
                 Key = case Type of
                     subpool ->
                         Token;
@@ -109,6 +149,12 @@ handle_event(#share{subpool_id=SubpoolId, is_aux=IsAux, worker_id=WorkerId, user
                     undefined ->
                         PM;
                     _ ->
+                        Pos = if
+                            ThisAux ->
+                                case AuxShareState of invalid -> 2; valid -> 3; candidate -> 4 end;
+                            true ->
+                                case ShareState of invalid -> 2; valid -> 3; candidate -> 4 end
+                        end,
                         case ets:member(PMonTbl, Key) of
                             true ->
                                 ets:update_counter(PMonTbl, Key, {Pos, 1});
@@ -134,46 +180,9 @@ handle_event(#share{subpool_id=SubpoolId, is_aux=IsAux, worker_id=WorkerId, user
         end,
         PMons
     ),
-    {ok, State#state{pmons=NewPMons}};
+    {noreply, State#state{pmons=NewPMons}}.
 
-handle_event(#subpool{}, State) ->
-    {ok, State}.
-
-handle_call({new_polling_monitor, Type, Aux, SubpoolId, UserOrWorkerId}, State=#state{pmons=PMons}) ->
-    Token = ecoinpool_util:new_random_uuid(),
-    PMon = #polling_monitor{
-        type=Type,
-        subpool_id=SubpoolId,
-        is_aux=Aux,
-        user_worker_id=UserOrWorkerId,
-        last_return=erlang:now()
-    },
-    {ok, Token, State#state{pmons=dict:store(Token, PMon, PMons)}};
-
-handle_call({poll_for_changes, To, Token}, State=#state{pmon_tbl=PMonTbl, pmons=PMons}) ->
-    NewPMons = case dict:find(Token, PMons) of
-        {ok, PM=#polling_monitor{type=Type, waiting=Waiting, has_changes=HasChanges}} ->
-            if
-                HasChanges ->
-                    send_reply_and_flush(Token, Type, To, PMonTbl),
-                    dict:store(Token, PM#polling_monitor{last_return=erlang:now(), has_changes=false}, PMons);
-                true -> % Set to wait
-                    case Waiting of
-                        undefined ->
-                            ok;
-                        {OldTo, MRef} ->
-                            OldTo ! {share_changes_result, {error, kicked}}, % Kick out already waiting
-                            erlang:demonitor(MRef, [flush])
-                    end,
-                    dict:store(Token, PM#polling_monitor{waiting={To, erlang:monitor(process, To)}}, PMons)
-            end;
-        error ->
-            To ! {share_changes_result, {error, invalid_token}}, % Reply invalid token
-            PMons
-    end,
-    {ok, ok, State#state{pmons=NewPMons}};
-
-handle_call(timeout_check, State=#state{pmons=PMons}) ->
+handle_info(timeout_check, State=#state{pmons=PMons}) ->
     Now = erlang:now(),
     NewPMons = dict:filter(
         fun
@@ -189,7 +198,7 @@ handle_call(timeout_check, State=#state{pmons=PMons}) ->
         end,
         PMons
     ),
-    {ok, ok, State#state{pmons=NewPMons}}.
+    {noreply, State#state{pmons=NewPMons}};
 
 handle_info({'DOWN', _, _, To, _}, State=#state{pmons=PMons}) ->
     NewPMons = dict:map(
@@ -199,13 +208,12 @@ handle_info({'DOWN', _, _, To, _}, State=#state{pmons=PMons}) ->
         end,
         PMons
     ),
-    {ok, State#state{pmons=NewPMons}};
+    {noreply, State#state{pmons=NewPMons}};
 
 handle_info(_, State) ->
-    {ok, State}.
+    {noreply, State}.
 
-terminate(_Reason, #state{check_timer=CheckTimer}) ->
-    timer:cancel(CheckTimer),
+terminate(_Reason, #state{}) ->
     ok.
 
 code_change(_OldVersion, State, _Extra) ->

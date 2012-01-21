@@ -29,5 +29,7 @@ start() ->
     ok = application:start(log4erl),
     ok = application:start(ibrowse),
     ok = application:start(couchbeam),
+    ok = application:start(mysql),
+    ok = application:start(epgsql),
     ok = application:start(ebitcoin),
     ok = application:start(ecoinpool).

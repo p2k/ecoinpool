@@ -18,18 +18,11 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
-{lib_dirs, ["deps"]}.
+-include("ecoinpool_misc_types.hrl").
+-include("ecoinpool_db_records.hrl").
 
-{sub_dirs, ["apps/ecoinpool", "apps/ebitcoin", "rel"]}.
+-spec start_link(LoggerId :: atom(), Config :: [conf_property()]) ->
+    {ok, pid()} | ignore | {error, {already_started, pid()} | term()}.
 
-{deps, [
-    {protobuffs, ".*", {git, "git://github.com/basho/erlang_protobuffs.git", "master"}},
-    {couchbeam, ".*", {git, "git://github.com/benoitc/couchbeam.git", "master"}},
-    {log4erl, ".*", {git, "git://github.com/SemanticSugar/log4erl.git", "master"}},
-    {mysql, ".*", {git, "git://github.com/elbrujohalcon/erlang-mysql-driver.git", "master"}},
-    {epgsql, ".*", {git, "git://github.com/wg/epgsql.git", "master"}}
-]}.
-
-{erl_opts, [fail_on_warning, debug_info, warn_unused_vars, warn_unused_import, warn_exported_vars]}.
-
-{xref_checks, [undefined_function_calls]}.
+-spec log_share(LoggerId :: atom(), Share :: share()) ->
+    ok.

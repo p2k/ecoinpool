@@ -279,15 +279,13 @@ parse_configuration_document({DocProps}) ->
         {Props} ->
             lists:foldr(
                 fun
-                    ({LoggerId, <<"couchdb">>}, Acc) ->
-                        [{LoggerId, couchdb, []} | Acc];
-                    ({LoggerId, <<"logfile">>}, Acc) ->
-                        [{LoggerId, logfile, []} | Acc];
-                    ({LoggerId, {LoggerProps}}, Acc) ->
+                    ({Id, Type}, Acc) when is_binary(Type) ->
+                        [{Id, Type, []} | Acc];
+                    ({Id, {LoggerProps}}, Acc) ->
                         case proplists:get_value(<<"type">>, LoggerProps) of
                             Type when is_binary(Type) ->
-                                Options = [{binary_to_atom(BinName, utf8), Value} || {BinName, Value} <- proplists:delete(<<"type">>, LoggerProps)],
-                                [{LoggerId, binary_to_atom(Type, utf8), Options} | Acc];
+                                Config = [{binary_to_atom(BinName, utf8), Value} || {BinName, Value} <- proplists:delete(<<"type">>, LoggerProps)],
+                                [{Id, Type, Config} | Acc];
                             _ ->
                                 Acc
                         end;

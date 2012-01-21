@@ -19,26 +19,38 @@
 %%
 
 -module(logfile_sharelogger).
--behaviour(gen_event).
+-behaviour(gen_sharelogger).
+-behaviour(gen_server).
 
--include("ecoinpool_misc_types.hrl").
--include("ecoinpool_db_records.hrl").
+-include("gen_sharelogger_spec.hrl").
 
--export([init/1, handle_event/2, handle_call/2, handle_info/2, terminate/2, code_change/3]).
+-export([start_link/2, log_share/2]).
+
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% ===================================================================
-%% Gen_Event callbacks
+%% API functions
 %% ===================================================================
 
-init(Options) ->
+start_link(LoggerId, Config) ->
+    gen_server:start_link({local, LoggerId}, ?MODULE, Config, []).
+
+log_share(LoggerId, Share) ->
+    gen_server:cast(LoggerId, Share).
+
+%% ===================================================================
+%% Gen_Server callbacks
+%% ===================================================================
+
+init(Config) ->
     FieldInfo = lists:zip(record_info(fields, share), lists:seq(2, record_info(size, share))),
-    LogRemote = proplists:get_value(log_remote, Options, false),
-    AlwaysLogData = proplists:get_value(always_log_data, Options, false),
-    FieldIds = case proplists:get_value(fields, Options) of
+    LogRemote = proplists:get_value(log_remote, Config, false),
+    AlwaysLogData = proplists:get_value(always_log_data, Config, false),
+    FieldIds = case proplists:get_value(fields, Config) of
         undefined when LogRemote ->
             lists:seq(2, record_info(size, share));
         undefined ->
-            lists:seq(2, record_info(size, share)-1);
+            lists:seq(2, record_info(size, share)) -- [#share.server_id];
         L when is_list(L) ->
             lists:foldr(
                 fun
@@ -58,27 +70,21 @@ init(Options) ->
     end,
     {ok, {LogRemote, AlwaysLogData, FieldIds}}.
 
-handle_event(#subpool{}, State) ->
-    {ok, State};
+handle_call(_, _From, State) ->
+    {reply, error, State}.
 
-handle_event(Share=#share{state=State, is_local=IsLocal}, {LogRemote, AlwaysLogData, FieldIds}) when IsLocal; LogRemote ->
+handle_cast(Share=#share{server_id=ServerId, state=State, aux_state=AuxState}, {LogRemote, AlwaysLogData, FieldIds}) when ServerId =:= local; LogRemote ->
     ShareNow = if
-        AlwaysLogData; State =:= candidate ->
+        AlwaysLogData; State =:= candidate; AuxState =:= candidate ->
             Share;
         true ->
             Share#share{data=undefined}
     end,
     log_data([{I, element(I, ShareNow)} || I <- FieldIds]),
-    {ok, {LogRemote, AlwaysLogData, FieldIds}};
-
-handle_event(_, State) ->
-    {ok, State}.
-
-handle_call(_, State) ->
-    {ok, error, State}.
+    {noreply, {LogRemote, AlwaysLogData, FieldIds}}.
 
 handle_info(_, State) ->
-    {ok, State}.
+    {noreply, State}.
 
 terminate(_, _) ->
     ok.
@@ -95,7 +101,7 @@ log_data(L) ->
 
 write_data({_, undefined}) ->
     [];
-write_data({#share.state, State}) ->
+write_data({I, State}) when I =:= #share.state; I =:= #share.aux_state ->
     case State of
         invalid -> "0";
         valid -> "1";
@@ -105,7 +111,7 @@ write_data({#share.timestamp, TS={_, _, MicroSecs}}) ->
     {{YR,MH,DY}, {HR,ME,SD}} = calendar:now_to_datetime(TS),
     MS = MicroSecs div 1000,
     io_lib:format("\"~4..0b-~2..0b-~2..0b ~2..0b:~2..0b:~2..0b.~3..0b\"", [YR,MH,DY,HR,ME,SD,MS]);
-write_data({I, Hash}) when I =:= #share.hash; I =:= #share.parent_hash; I =:= #share.target; I =:= #share.prev_block ->
+write_data({I, Hash}) when I =:= #share.hash; I =:= #share.aux_hash; I =:= #share.target;  I =:= #share.aux_target; I =:= #share.prev_block; I =:= #share.aux_prev_block ->
     [$", ecoinpool_util:bin_to_hexbin(Hash), $"];
 write_data({#share.data, Data}) ->
     [$", base64:encode(Data), $"];

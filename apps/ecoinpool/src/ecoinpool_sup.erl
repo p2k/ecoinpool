@@ -32,8 +32,6 @@
     start_subpool/1,
     reload_subpool/1,
     stop_subpool/1,
-    start_mysql/5,
-    stop_mysql/1,
     crash_store/2,
     crash_fetch/1,
     crash_repo_pid/0,
@@ -43,9 +41,6 @@
 %% Supervisor callbacks
 -export([init/1]).
 
-%% Helper macro for declaring children of supervisor
--define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
-
 %% ===================================================================
 %% API functions
 %% ===================================================================
@@ -54,16 +49,7 @@ start_link(ServerId, DBConfig) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, [ServerId, DBConfig]).
 
 running_subpools() ->
-    lists:foldl(
-        fun (Spec, SubpoolIdAcc) ->
-            case Spec of
-                {{subpool, SubpoolId}, _, _, _} -> [SubpoolId | SubpoolIdAcc];
-                _ -> SubpoolIdAcc
-            end
-        end,
-        [],
-        supervisor:which_children(?MODULE)
-    ).
+    [SubpoolId || {{subpool, SubpoolId}, _, _, _} <- supervisor:which_children(?MODULE)].
 
 start_subpool(SubpoolId) ->
     case supervisor:start_child(?MODULE, {{subpool, SubpoolId}, {ecoinpool_server_sup, start_link, [SubpoolId]}, transient, 5000, supervisor, [ecoinpool_server_sup]}) of
@@ -79,31 +65,6 @@ reload_subpool(Subpool) ->
 stop_subpool(SubpoolId) ->
     case supervisor:terminate_child(?MODULE, {subpool, SubpoolId}) of
         ok -> supervisor:delete_child(?MODULE, {subpool, SubpoolId});
-        Error -> Error
-    end.
-
-start_mysql(MySQLHost, MySQLPort, MySQLUser, MySQLPassword, MySQLDatabase) ->
-    PoolId = list_to_atom(lists:concat([MySQLHost, "_", MySQLDatabase, "_", MySQLUser])),
-    LogFun = fun (_Module, _Line, Level, MsgFun) ->
-        {Msg, Params} = MsgFun(),
-        case Level of
-            debug -> log4erl:debug(db, "~p:~n  " ++ Msg, [PoolId] ++ Params);
-            normal -> log4erl:info(db, "~p:~n  " ++ Msg, [PoolId] ++ Params);
-            warning -> log4erl:warn(db, "~p:~n  " ++ Msg, [PoolId] ++ Params);
-            error -> log4erl:error(db, "~p:~n  " ++ Msg, [PoolId] ++ Params);
-            _ -> ok
-        end
-    end,
-    case supervisor:start_child(?MODULE, {{mysql, PoolId}, {mysql, start_link, [PoolId, MySQLHost, MySQLPort, MySQLUser, MySQLPassword, MySQLDatabase, LogFun]}, transient, 5000, worker, [mysql]}) of
-        {ok, _} -> {ok, PoolId};
-        {ok, _, _} -> {ok, PoolId};
-        {error, {already_started, _}} -> {ok, PoolId};
-        Error -> Error
-    end.
-
-stop_mysql(PoolId) ->
-    case supervisor:terminate_child(?MODULE, {mysql, PoolId}) of
-        ok -> supervisor:delete_child(?MODULE, {mysql, PoolId});
         Error -> Error
     end.
 
@@ -127,6 +88,6 @@ init([_ServerId, DBConfig]) ->
     {ok, { {one_for_one, 5, 10}, [
         {ecoinpool_crash_repo, {ebitcoin_crash_repo, start_link, [{local, ecoinpool_crash_repo}]}, permanent, 5000, worker, [ebitcoin_crash_repo]},
         {ecoinpool_rpc, {ecoinpool_rpc, start_link, []}, permanent, 5000, worker, [ecoinpool_rpc]},
-        {ecoinpool_share_broker, {ecoinpool_share_broker, start_link, []}, permanent, 5000, worker, [ecoinpool_share_broker]},
+        {ecoinpool_sharelogger, {ecoinpool_sharelogger_sup, start_link, []}, permanent, 5000, supervisor, [ecoinpool_sharelogger_sup]},
         {ecoinpool_db, {ecoinpool_db_sup, start_link, [DBConfig]}, permanent, 5000, supervisor, [ecoinpool_db_sup]}
     ]} }.

@@ -18,7 +18,7 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(mysql_sharelogger).
+-module(pgsql_sharelogger).
 -behaviour(gen_sharelogger).
 
 -include("gen_sharelogger_spec.hrl").
@@ -42,36 +42,38 @@ log_share(LoggerId, Share) ->
 %% ===================================================================
 
 defaults() ->
-    {3306, <<"root">>}.
+    {5432, <<"postgres">>}.
 
-connect(LoggerId, Host, Port, User, Password, Database) ->
-    LogFun = fun (_Module, _Line, Level, MsgFun) ->
-        {Msg, Params} = MsgFun(),
-        case Level of
-            debug -> log4erl:debug(db, "~p:~n  " ++ Msg, [LoggerId] ++ Params);
-            normal -> log4erl:info(db, "~p:~n  " ++ Msg, [LoggerId] ++ Params);
-            warning -> log4erl:warn(db, "~p:~n  " ++ Msg, [LoggerId] ++ Params);
-            error -> log4erl:error(db, "~p:~n  " ++ Msg, [LoggerId] ++ Params);
-            _ -> ok
-        end
-    end,
-    mysql_conn:start_link(Host, Port, User, Password, Database, LogFun, undefined, undefined).
+connect(_, Host, Port, User, Password, Database) ->
+    pgsql:connect(Host, User, Password, [{port, Port}, {database, Database}]).
 
 fetch_result(Conn, Query) ->
-    case mysql_conn:fetch(Conn, iolist_to_binary(Query), self()) of
-        {data, MyFieldsResult} -> {ok, mysql:get_result_rows(MyFieldsResult)};
-        {updated, MyUpdateResult} -> {ok, mysql:get_result_affected_rows(MyUpdateResult)};
-        {error, MyErrorResult} -> {error, mysql:get_result_reason(MyErrorResult)}
+    case pgsql:equery(Conn, Query) of
+        {ok, _Columns, Rows} -> {ok, Rows};
+        {ok, Count} -> {ok, Count};
+        {ok, _Count, _Columns, Rows} -> {ok, Rows};
+        {error, Error} -> {error, Error}
     end.
 
 get_field_names(Conn, Table) ->
-    {ok, Rows} = fetch_result(Conn, ["SHOW COLUMNS FROM `", Table, "`;"]),
-    [FName || {FName, _, _, _, _, _} <- Rows].
+    {ok, Rows} = fetch_result(Conn, ["SELECT column_name FROM information_schema.columns WHERE table_name = '", Table, "';"]),
+    [FName || {FName} <- Rows].
 
 get_timediff(Conn) ->
-    {data, TimeDiffResult} = mysql_conn:fetch(Conn, <<"SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP());">>, self()),
-    [{TimeDiff}] = mysql:get_result_rows(TimeDiffResult),
-    TimeDiff.
+    {ok, [{{TimeDiff, _, _}}]} = fetch_result(Conn, <<"SELECT AGE(CURRENT_TIMESTAMP, CURRENT_TIMESTAMP AT TIME ZONE 'UTC');">>),
+    case TimeDiff of
+        {H, M, S} when is_float(S) ->
+            {H, M, round(S)};
+        _ ->
+            TimeDiff
+    end.
 
 encode_elements(Elements) ->
-    [mysql:encode(Element) || Element <- Elements].
+    [encode_element(Element) || Element <- Elements].
+
+encode_element(undefined) ->
+    "null";
+encode_element({{Year, Month, Day}, {Hour, Minute, Second}}) ->
+    io_lib:format("'~4..0b-~2..0b-~2..0b ~2..0b:~2..0b:~2..0b'", [Year, Month, Day, Hour, Minute, Second]);
+encode_element(E) ->
+    mysql:encode(E).

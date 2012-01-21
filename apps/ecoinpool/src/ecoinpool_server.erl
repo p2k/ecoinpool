@@ -152,9 +152,6 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
             list_to_atom(lists:concat([PoolType, "_coindaemon"]))
     end,
     
-    % Send a notification so potential database systems can setup the shares database
-    ecoinpool_share_broker:notify_subpool(Subpool),
-    
     % Schedule workers reload if worker_share_subpools changed
     % Note: this includes an initial load, because even if no share subpools
     %   are specified, this will at least be an empty list =/= undefined.

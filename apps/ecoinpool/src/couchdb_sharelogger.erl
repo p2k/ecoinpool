@@ -19,72 +19,103 @@
 %%
 
 -module(couchdb_sharelogger).
--behaviour(gen_event).
+-behaviour(gen_sharelogger).
+-behaviour(gen_server).
 
--include("ecoinpool_misc_types.hrl").
--include("ecoinpool_db_records.hrl").
+-include("gen_sharelogger_spec.hrl").
 
--export([init/1, handle_event/2, handle_call/2, handle_info/2, terminate/2, code_change/3]).
+-export([start_link/2, log_share/2]).
+
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% ===================================================================
-%% Gen_Event callbacks
+%% API functions
+%% ===================================================================
+
+start_link(LoggerId, Config) ->
+    gen_server:start_link({local, LoggerId}, ?MODULE, Config, []).
+
+log_share(LoggerId, Share) ->
+    gen_server:cast(LoggerId, Share).
+
+%% ===================================================================
+%% Gen_Server callbacks
 %% ===================================================================
 
 init(_) ->
     S = ecoinpool_db:get_couchdb_connection(),
-    {ok, S}.
+    {ok, {S, sets:new()}}.
 
-handle_event(#subpool{name=SubpoolName, aux_pool=AuxPool}, S) ->
-    setup_shares_db(S, SubpoolName),
-    case AuxPool of
-        #auxpool{name=AuxpoolName} ->
-            setup_shares_db(S, AuxpoolName);
-        _ ->
-            ok
-    end,
-    {ok, S};
+handle_call(_, _From, State) ->
+    {reply, error, State}.
 
-handle_event(#share{
+handle_cast(#share{
         timestamp=Timestamp,
-        pool_name=PoolName,
+        server_id=local,
+        
+        subpool_name=SubpoolName,
         worker_id=WorkerId,
         user_id=UserId,
         ip=IP,
         user_agent=UserAgent,
+        
         state=State,
         reject_reason=RejectReason,
         hash=Hash,
-        parent_hash=ParentHash,
         target=Target,
         block_num=BlockNum,
         prev_block=PrevBlock,
         round=Round,
         data=Data,
-        is_local=true}, S) ->
+        
+        auxpool_name=AuxpoolName,
+        aux_state=AuxState,
+        aux_hash=AuxHash,
+        aux_target=AuxTarget,
+        aux_block_num=AuxBlockNum,
+        aux_prev_block=AuxPrevBlock,
+        aux_round=AuxRound}, {S, KnownDBs}) ->
     
-    {ok, DB} = couchbeam:open_db(S, PoolName),
+    KnownDBs1 = case sets:is_element(SubpoolName, KnownDBs) of
+        true -> KnownDBs;
+        false -> setup_shares_db(S, SubpoolName), sets:add_element(SubpoolName, KnownDBs)
+    end,
+    {ok, DB} = couchbeam:open_db(S, SubpoolName),
     case State of
         invalid ->
-            store_invalid_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, RejectReason, Hash, ParentHash, Target, BlockNum, PrevBlock, Round, DB);
+            store_invalid_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, RejectReason, Hash, undefined, Target, BlockNum, PrevBlock, Round, DB);
         _ ->
-            store_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, State, Hash, ParentHash, Target, BlockNum, PrevBlock, Data, Round, DB)
+            store_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, State, Hash, undefined, Target, BlockNum, PrevBlock, Data, Round, DB)
     end,
-    {ok, S};
+    case AuxpoolName of
+        undefined ->
+            {noreply, {S, KnownDBs1}};
+        _ ->
+            KnownDBs2 = case sets:is_element(AuxpoolName, KnownDBs) of
+                true -> KnownDBs1;
+                false -> setup_shares_db(S, AuxpoolName), sets:add_element(SubpoolName, KnownDBs1)
+            end,
+            {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
+            case AuxState of
+                invalid ->
+                    store_invalid_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, RejectReason, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, AuxRound, AuxDB);
+                _ ->
+                    store_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, Data, AuxRound, AuxDB)
+            end,
+            {noreply, {S, KnownDBs2}}
+    end;
 
-handle_event(#share{}, S) -> % Ignore other shares (currently these are remote shares)
-    {ok, S}.
+handle_cast(#share{}, State) -> % Ignore other shares (currently these are remote shares)
+    {noreply, State}.
 
-handle_call(_, S) ->
-    {ok, error, S}.
-
-handle_info(_, S) ->
-    {ok, S}.
+handle_info(_, State) ->
+    {noreply, State}.
 
 terminate(_, _) ->
     ok.
 
-code_change(_OldVsn, S, _Extra) ->
-    {ok, S}.
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% ===================================================================
 %% Other functions

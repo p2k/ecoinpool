@@ -84,18 +84,18 @@ terminate(_Reason, _State) ->
 -spec reload_root_config(Doc :: {[]}, State :: #state{}) -> #state{}.
 reload_root_config(Doc, State=#state{active_subpools=ActiveSubpools, subpool_records=SubpoolRecords, share_loggers=ActiveShareLoggers}) ->
     {ok, #configuration{active_subpools=CurrentSubpoolIds, share_loggers=ShareLoggers}} = ecoinpool_db:parse_configuration_document(Doc),
-
+    
     % Remove deleted/changed share loggers
     lists:foreach(
-        fun ({ShareLoggerId, ShareLoggerType, _}) ->
-            ecoinpool_share_broker:remove_share_logger(ShareLoggerId, ShareLoggerType)
+        fun ({ShareLoggerId, _, _}) ->
+            ecoinpool_share_broker:remove_sharelogger(ShareLoggerId)
         end,
         ActiveShareLoggers -- ShareLoggers
     ),
     % Add new/changed share loggers
     lists:foreach(
-        fun ({ShareLoggerId, ShareLoggerType, ShareLoggerOptions}) ->
-            ecoinpool_share_broker:add_share_logger(ShareLoggerId, ShareLoggerType, ShareLoggerOptions)
+        fun ({ShareLoggerId, ShareLoggerType, ShareLoggerConfig}) ->
+            ecoinpool_share_broker:add_sharelogger(ShareLoggerId, ShareLoggerType, ShareLoggerConfig)
         end,
         ShareLoggers -- ActiveShareLoggers
     ),
