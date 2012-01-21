@@ -45,18 +45,23 @@
 
 % Internal state record
 -record(state, {
+    logger_id :: atom(),
+    sql_config :: {Host :: string(), Port :: integer(), User :: string(), Pass :: string(), Database :: string()},
     sql_module :: module(),
-    sql_conn :: pid(),
+    
     log_remote :: boolean(),
     subpool_id :: binary() | any,
     log_type :: main | aux | both,
-    commit_timer :: timer:tref() | undefined,
+    commit_interval :: integer(),
     always_log_data :: boolean(),
-    
-    sql_shares = [] :: [sql_share()],
     conv_ts :: fun((erlang:timestamp()) -> calendar:datetime()),
     insert_stmt_head :: binary(),
-    insert_field_ids :: [integer()]
+    insert_field_ids :: [integer()],
+    
+    sql_conn :: pid(),
+    commit_timer :: timer:tref() | undefined,
+    
+    sql_shares = [] :: [sql_share()]
 }).
 
 %% ===================================================================
@@ -64,6 +69,8 @@
 %% ===================================================================
 
 init({LoggerId, SQLModule, Config}) ->
+    % Trap exit
+    process_flag(trap_exit, true),
     % Load settings
     {DefaultPort, DefaultUser} = SQLModule:defaults(),
     Host = binary_to_list(proplists:get_value(host, Config, <<"localhost">>)),
@@ -108,16 +115,21 @@ init({LoggerId, SQLModule, Config}) ->
             T
     end,
     {ok, #state{
+        logger_id = LoggerId,
+        sql_config = {Host, Port, User, Pass, Database},
         sql_module = SQLModule,
-        sql_conn = SQLConn,
+        
         log_remote = LogRemote,
         subpool_id = SubpoolId,
         log_type = LogType,
-        commit_timer = CommitTimer,
+        commit_interval = case CommitTimer of undefined -> 0; _ -> CommitInterval end,
         always_log_data = AlwaysLogData,
         conv_ts = ConvTS,
         insert_stmt_head = InsertStmtHead,
-        insert_field_ids = InsertFieldIds
+        insert_field_ids = InsertFieldIds,
+        
+        sql_conn = SQLConn,
+        commit_timer = CommitTimer
     }}.
 
 handle_call(_, _From, State) ->
@@ -150,13 +162,14 @@ handle_cast(#share{
         aux_prev_block=AuxPrevBlock
     },
     State=#state{
+        logger_id=LoggerId,
         log_remote=LogRemote,
         subpool_id=FilterSubpoolId,
         log_type=LogType,
-        commit_timer=CommitTimer,
         always_log_data = AlwaysLogData,
-        sql_shares=SQLShares,
-        conv_ts=ConvTS
+        conv_ts=ConvTS,
+        commit_timer=CommitTimer,
+        sql_shares=SQLShares
     }) when
         (ServerId =:= local) or LogRemote,
         (SubpoolId =:= FilterSubpoolId) or (FilterSubpoolId =:= any) ->
@@ -219,8 +232,13 @@ handle_cast(#share{
     case CommitTimer of
         undefined ->
             #state{sql_module=SQLModule, sql_conn=SQLConn, insert_stmt_head=InsertStmtHead, insert_field_ids=InsertFieldIds} = State,
-            insert_sql_shares(SQLModule, SQLConn, [SQLShare1], InsertStmtHead, InsertFieldIds),
-            {noreply, State};
+            case insert_sql_shares(LoggerId, SQLModule, SQLConn, [SQLShare1], InsertStmtHead, InsertFieldIds) of
+                ok ->
+                    {noreply, State};
+                {error, _} -> % Error handling: start a default commit timer
+                    {ok, T} = timer:send_interval(15000, insert_sql_shares),
+                    {noreply, State#state{sql_shares=[SQLShare1 | SQLShares], commit_timer=T}}
+            end;
         _ ->
             {noreply, State#state{sql_shares=[SQLShare1 | SQLShares]}}
     end;
@@ -230,9 +248,53 @@ handle_cast(#share{}, State) -> % Ignore filtered shares
 
 handle_info(insert_sql_shares, State=#state{sql_shares=[]}) ->
     {noreply, State};
-handle_info(insert_sql_shares, State=#state{sql_module=SQLModule, sql_conn=SQLConn, sql_shares=SQLShares, insert_stmt_head=InsertStmtHead, insert_field_ids=InsertFieldIds}) ->
-    insert_sql_shares(SQLModule, SQLConn, lists:reverse(SQLShares), InsertStmtHead, InsertFieldIds),
-    {noreply, State#state{sql_shares=[]}};
+handle_info(insert_sql_shares, State=#state{
+        logger_id=LoggerId,
+        sql_config=SQLConfig,
+        sql_module=SQLModule,
+        commit_interval=CommitInterval,
+        insert_stmt_head=InsertStmtHead,
+        insert_field_ids=InsertFieldIds,
+        sql_conn=OldSQLConn,
+        commit_timer=CommitTimer,
+        sql_shares=SQLShares}) ->
+    
+    SQLConn = case OldSQLConn of
+        undefined -> % Try to reconnect
+            {Host, Port, User, Pass, Database} = SQLConfig,
+            case SQLModule:connect(LoggerId, Host, Port, User, Pass, Database) of
+                {ok, NewSQLConn} ->
+                    NewSQLConn;
+                {error, _} ->
+                    log4erl:warn("Reconnecting failed, trying again later (~p).", [LoggerId]),
+                    undefined
+            end;
+        _ ->
+            OldSQLConn
+    end,
+    
+    case insert_sql_shares(LoggerId, SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds) of
+        ok ->
+            if
+                OldSQLConn =/= SQLConn ->
+                    log4erl:warn("Successfully recovered the connection (~p).", [LoggerId]);
+                true ->
+                    ok
+            end,
+            case CommitInterval of
+                0 -> % Stop default commit timer (started due to error handling)
+                    timer:cancel(CommitTimer),
+                    {noreply, State#state{sql_conn=SQLConn, commit_timer=undefined, sql_shares=[]}};
+                _ ->
+                    {noreply, State#state{sql_conn=SQLConn, sql_shares=[]}}
+            end;
+        {error, _} ->
+            log4erl:warn("Cached shares (~p): ~b", [LoggerId, length(SQLShares)]),
+            {noreply, State#state{sql_conn=SQLConn}}
+    end;
+
+handle_info({'EXIT', SQLConn, _Reason}, State=#state{sql_conn=SQLConn}) ->
+    {noreply, State#state{sql_conn=undefined}};
 
 handle_info(_, State) ->
     {noreply, State}.
@@ -274,12 +336,15 @@ make_timestamp_converter(TimeDiff) ->
         calendar:gregorian_seconds_to_datetime(S + TimeDiffSeconds)
     end.
 
--spec insert_sql_shares(SQLModule :: module(), SQLConn :: pid(), SQLShares :: [sql_share()], InsertStmtHead :: binary(), InsertFieldIds :: [integer()]) -> ok | {error, term()}.
-insert_sql_shares(SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds) ->
-    FullStmt = [InsertStmtHead, string:join([make_sql_share_row(SQLModule, SQLShare, InsertFieldIds) || SQLShare <- SQLShares], ",\n"), $;],
+-spec insert_sql_shares(LoggerId :: atom(), SQLModule :: module(), SQLConn :: pid(), SQLShares :: [sql_share()], InsertStmtHead :: binary(), InsertFieldIds :: [integer()]) -> ok | {error, term()}.
+insert_sql_shares(_, _, undefined, _, _, _) ->
+    {error, no_connection};
+insert_sql_shares(LoggerId, SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds) ->
+    Rows = [make_sql_share_row(SQLModule, SQLShare, InsertFieldIds) || SQLShare <- lists:reverse(SQLShares)],
+    FullStmt = [InsertStmtHead, string:join(Rows, ",\n"), $;],
     case SQLModule:fetch_result(SQLConn, FullStmt) of
         {ok, _} -> ok;
-        {error, Error} -> log4erl:warn("Error while inserting shares: ~p", [Error]), {error, Error}
+        {error, Error} -> log4erl:warn("Error while inserting shares (~p): ~p", [LoggerId, Error]), {error, Error}
     end.
 
 -spec make_sql_share_row(SQLModule :: module(), SQLShare :: sql_share(), InsertFieldIds :: [integer()]) -> iolist().

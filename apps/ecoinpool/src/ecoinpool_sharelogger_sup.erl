@@ -43,6 +43,7 @@ start_link() ->
 
 -spec start_sharelogger(LoggerId :: atom(), Module :: module(), Config :: [conf_property()]) -> ok | {error, term()}.
 start_sharelogger(LoggerId, Module, Config) ->
+    log4erl:info("Starting share logger ~p (~p).", [LoggerId, Module]),
     case supervisor:start_child(?MODULE, {{sharelogger, LoggerId}, {Module, start_link, [LoggerId, Config]}, permanent, 15000, worker, [Module]}) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
@@ -55,6 +56,7 @@ running_shareloggers() ->
 
 -spec stop_sharelogger(LoggerId :: atom()) -> ok | {error, term()}.
 stop_sharelogger(LoggerId) ->
+    log4erl:info("Stopping share logger ~p.", [LoggerId]),
     case supervisor:terminate_child(?MODULE, {sharelogger, LoggerId}) of
         ok -> supervisor:delete_child(?MODULE, {sharelogger, LoggerId});
         Error -> Error

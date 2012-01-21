@@ -22,6 +22,7 @@
 -behaviour(gen_sharelogger).
 
 -include("gen_sharelogger_spec.hrl").
+-include_lib("mysql/include/mysql.hrl").
 
 -export([start_link/2, log_share/2]).
 
@@ -61,7 +62,8 @@ fetch_result(Conn, Query) ->
     case mysql_conn:fetch(Conn, iolist_to_binary(Query), self()) of
         {data, MyFieldsResult} -> {ok, mysql:get_result_rows(MyFieldsResult)};
         {updated, MyUpdateResult} -> {ok, mysql:get_result_affected_rows(MyUpdateResult)};
-        {error, MyErrorResult} -> {error, mysql:get_result_reason(MyErrorResult)}
+        {error, #mysql_result{error=Reason}} -> {error, Reason};
+        Other -> Other
     end.
 
 get_field_names(Conn, Table) ->
