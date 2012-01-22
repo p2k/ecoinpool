@@ -280,25 +280,28 @@ handle_request(SubpoolPID, Req) ->
         _ ->
             unauthorized
     end,
-    ReqId = case Req:accepts_content_type("application/json") of
+    case Req:accepts_content_type("application/json") of
         true ->
-            case parse_path(Req:get(path)) of
-                {ok, LP} ->
-                    case Req:get(method) of
-                        'GET' ->
-                            handle_get(SubpoolPID, Req, Auth, LP);
-                        'POST' ->
-                            handle_post(SubpoolPID, Req, Auth, LP);
-                        _ ->
-                            Req:respond({501, [{"Content-Type", "text/plain"}], "Unknown method"}),
-                            self() ! cancel
-                    end;
+            ok; % Fine
+        _ ->
+            log4erl:info("ecoinpool_rpc: Crappy mining software detected from ~s: ~s", [
+                Req:get(peer),
+                case Req:get_header_value("User-Agent") of UA when is_list(UA) -> UA; _ -> "unknown" end
+            ])
+    end,
+    ReqId = case parse_path(Req:get(path)) of
+        {ok, LP} ->
+            case Req:get(method) of
+                'GET' ->
+                    handle_get(SubpoolPID, Req, Auth, LP);
+                'POST' ->
+                    handle_post(SubpoolPID, Req, Auth, LP);
                 _ ->
-                    self() ! {error, method_not_found}, 1
+                    Req:respond({501, [{"Content-Type", "text/plain"}], "Unknown method"}),
+                    self() ! cancel
             end;
         _ ->
-            Req:respond({406, [{"Content-Type", "text/plain"}], "For this service you must accept application/json."}),
-            self() ! cancel
+            self() ! {error, method_not_found}, 1
     end,
     % Block here, waiting for the result
     receive
