@@ -84,6 +84,18 @@ along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
   </form>
 </script>
 
+<script id="messageDialog-template" type="text/x-handlebars-template">
+  <form action="" method="post">
+    <h2>{{title}}</h2>
+    <fieldset>
+      <p class="msg">{{{text}}}</p>
+    </fieldset>
+    <div class="buttons">
+      <button type="submit">OK</button>
+    </div>
+  </form>
+</script>
+
 <script id="subpoolsTable-template" type="text/x-handlebars-template">
   <table id="{{id}}" class="listing" cellpadding="0">
     <caption>Sub-Pools</caption>

@@ -112,6 +112,13 @@ default_headers() ->
         _ -> [S, {"Content-Type", "text/javascript"}, {"Access-Control-Allow-Origin", "*"}]
     end.
 
+send_greeting() ->
+    {ok, VSN} = application:get_key(ecoinpool, vsn),
+    BinVSN = list_to_binary(VSN),
+    self() ! {ok, <<"Welcome! This server is running ecoinpool v", BinVSN/binary, " by p2k. ",
+        "You have reached one of the coin mining ports meant to be used with coin ",
+        "mining software; consult the mining pool's homepage on how to setup a miner.">>, []}.
+
 compose_success(ReqId, Result) ->
     Body = ejson:encode(
         {[
@@ -179,6 +186,7 @@ parse_method(<<"sc_getwork">>) -> sc_getwork;
 parse_method(<<"sc_testwork">>) -> sc_testwork;
 parse_method(<<"setup_user">>) -> setup_user;
 
+parse_method(<<"">>) -> none;
 parse_method(Other) when is_binary(Other) -> unknown;
 parse_method(_) -> invalid.
 
@@ -200,6 +208,8 @@ handle_form_request(SubpoolPID, Req, Auth, Properties, LP) ->
             ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, default, [], Auth, true));
         true ->
             case parse_method(list_to_binary(proplists:get_value("method", Properties, ""))) of
+                none ->
+                    send_greeting();
                 unknown ->
                     self() ! {error, method_not_found};
                 invalid ->
@@ -226,6 +236,8 @@ handle_post(SubpoolPID, Req, Auth, LP) ->
                 case ejson:decode(Req:recv_body()) of % Decode JSON
                     {Properties} ->
                         case parse_method(proplists:get_value(<<"method">>, Properties)) of
+                            none ->
+                                send_greeting();
                             unknown ->
                                 self() ! {error, method_not_found};
                             invalid ->

@@ -277,12 +277,34 @@ function UserContext (data, callbacks) {
         options = options || {};
         var url = 'http://' + location.hostname + ':' + subPoolDoc.port + '/';
         var data = {method: "setup_user", id: 1, params: [this.name]};
+        var requestTimeout = window.setTimeout(function () {
+            var lines =   ["While requesting a new user ID, the pool server did not",
+                           "respond in time. This usually means that the pool server",
+                           "is down or currently unreachable."];
+            if (!self.isAdmin())
+                lines.push("",
+                           "As you are an admin user, you are advised to check your",
+                           "firewall settings so that this URL can be reached:",
+                           '<a href="'+url+'" target="_blank">'+url+'</a>');
+            $.showDialog(templates.messageDialog,
+                {
+                    context: {
+                        title: "User ID Request Failed",
+                        text: lines.join("<br/>")
+                    },
+                    submit: function (data, callback) {
+                        callback();
+                    }
+                }
+            );
+        }, 2500);
         $.ajax({
             type: "GET", url: url, dataType: "jsonp", data: data,
             beforeSend: function (xhr) {
                 xhr.setRequestHeader('Accept', 'application/json');
             },
             success: function (resp) {
+                window.clearTimeout(requestTimeout);
                 if (resp.error) {
                     if (options.error)
                         options.error(status, resp.error);
@@ -296,6 +318,7 @@ function UserContext (data, callbacks) {
                 }
             },
             error: function (xhr) {
+                window.clearTimeout(requestTimeout);
                 if (xhr.getResponseHeader("content-type") == "text/javascript" && xhr.responseText != "")
                     jQuery.httpData(xhr, this.dataType, this);
                 else {
