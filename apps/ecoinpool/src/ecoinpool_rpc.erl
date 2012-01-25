@@ -194,6 +194,8 @@ parse_path("/") ->
     {ok, false};
 parse_path("/LP") ->
     {ok, true};
+parse_path("/LP/") ->
+    {ok, true};
 parse_path(_) ->
     undefined.
 
