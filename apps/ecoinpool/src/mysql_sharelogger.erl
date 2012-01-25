@@ -56,7 +56,7 @@ connect(LoggerId, Host, Port, User, Password, Database) ->
             _ -> ok
         end
     end,
-    mysql_conn:start_link(Host, Port, User, Password, Database, LogFun, undefined, undefined).
+    safe_connect(Host, Port, User, Password, Database, LogFun).
 
 fetch_result(Conn, Query) ->
     case mysql_conn:fetch(Conn, iolist_to_binary(Query), self()) of
@@ -77,3 +77,20 @@ get_timediff(Conn) ->
 
 encode_elements(Elements) ->
     [mysql:encode(Element) || Element <- Elements].
+
+%% ===================================================================
+%% Other functions
+%% ===================================================================
+
+safe_connect(Host, Port, User, Password, Database, LogFun) ->
+    ParentPid = self(),
+    ConnectorPid = spawn(fun () ->
+        ParentPid ! {safe_connect, self(), mysql_conn:start(Host, Port, User, Password, Database, LogFun, undefined, undefined)}
+    end),
+    receive % This allows to queue more shares and other events while waiting
+        {safe_connect, ConnectorPid, {ok, ConnPid}} ->
+            link(ConnPid),
+            {ok, ConnPid};
+        {safe_connect, ConnectorPid, Other} ->
+            Other
+    end.
