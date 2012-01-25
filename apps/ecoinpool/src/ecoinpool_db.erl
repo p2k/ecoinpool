@@ -275,7 +275,7 @@ parse_configuration_document({DocProps}) ->
     ActiveSubpoolIdsCheck = if is_list(ActiveSubpoolIds) -> lists:all(fun is_binary/1, ActiveSubpoolIds); true -> false end,
     ShareLoggers = case proplists:get_value(<<"share_loggers">>, DocProps) of
         undefined ->
-            [{<<"default_couchdb">>, couchdb, []}, {<<"default_logfile">>, logfile, []}];
+            [{<<"default_couchdb">>, <<"couchdb">>, []}, {<<"default_logfile">>, <<"logfile">>, []}];
         {Props} ->
             lists:foldr(
                 fun
