@@ -25,7 +25,7 @@
 
 -export([start_link/2, log_share/2]).
 
--export([defaults/0, connect/6, fetch_result/2, get_field_names/2, get_timediff/1, encode_elements/1]).
+-export([defaults/0, connect/6, fetch_result/2, get_field_names/2, get_timediff/1, get_query_size_limit/1, encode_elements/1]).
 
 %% ===================================================================
 %% API functions
@@ -67,6 +67,9 @@ get_timediff(Conn) ->
         _ ->
             TimeDiff
     end.
+
+get_query_size_limit(_) ->
+    unlimited. % PostgreSQL ftw!
 
 encode_elements(Elements) ->
     [encode_element(Element) || Element <- Elements].

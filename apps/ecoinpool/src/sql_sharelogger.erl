@@ -57,6 +57,7 @@
     conv_ts :: fun((erlang:timestamp()) -> calendar:datetime()),
     insert_stmt_head :: binary(),
     insert_field_ids :: [integer()],
+    query_size_limit :: integer() | unlimited,
     
     sql_conn :: pid(),
     commit_timer :: timer:tref() | undefined,
@@ -232,8 +233,8 @@ handle_cast(#share{
     case CommitTimer of
         undefined ->
             #state{sql_module=SQLModule, sql_conn=SQLConn, insert_stmt_head=InsertStmtHead, insert_field_ids=InsertFieldIds} = State,
-            case insert_sql_shares(LoggerId, SQLModule, SQLConn, [SQLShare1], InsertStmtHead, InsertFieldIds) of
-                ok ->
+            case insert_sql_shares(LoggerId, SQLModule, SQLConn, [SQLShare1], InsertStmtHead, InsertFieldIds, unlimited) of
+                {ok, []} ->
                     {noreply, State};
                 {error, _} -> % Error handling: start a default commit timer
                     {ok, T} = timer:send_interval(15000, insert_sql_shares),
@@ -255,39 +256,37 @@ handle_info(insert_sql_shares, State=#state{
         commit_interval=CommitInterval,
         insert_stmt_head=InsertStmtHead,
         insert_field_ids=InsertFieldIds,
+        query_size_limit=QuerySizeLimit,
         sql_conn=OldSQLConn,
         commit_timer=CommitTimer,
         sql_shares=SQLShares}) ->
     
-    SQLConn = case OldSQLConn of
-        undefined -> % Try to reconnect
-            {Host, Port, User, Pass, Database} = SQLConfig,
-            case SQLModule:connect(LoggerId, Host, Port, User, Pass, Database) of
-                {ok, NewSQLConn} ->
-                    NewSQLConn;
-                {error, _} ->
-                    log4erl:warn("Reconnecting failed, trying again later (~p).", [LoggerId]),
-                    undefined
-            end;
-        _ ->
-            OldSQLConn
-    end,
+    flush_inserts(), % Reduce the amount of stress
     
-    case insert_sql_shares(LoggerId, SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds) of
-        ok ->
+    SQLConn = check_reconnect(OldSQLConn, LoggerId, SQLModule, SQLConfig),
+    
+    case insert_sql_shares(LoggerId, SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds, QuerySizeLimit) of
+        {ok, RestSQLShares} ->
             if
                 OldSQLConn =/= SQLConn ->
                     log4erl:warn("Successfully recovered the connection (~p).", [LoggerId]);
                 true ->
                     ok
             end,
-            case CommitInterval of
-                0 -> % Stop default commit timer (started due to error handling)
-                    timer:cancel(CommitTimer),
-                    {noreply, State#state{sql_conn=SQLConn, commit_timer=undefined, sql_shares=[]}};
+            NewCommitTimer = case RestSQLShares of
+                [] ->
+                    case CommitInterval of
+                        0 -> % Stop default commit timer (started due to error handling)
+                            timer:cancel(CommitTimer),
+                            undefined;
+                        _ ->
+                            CommitTimer
+                    end;
                 _ ->
-                    {noreply, State#state{sql_conn=SQLConn, sql_shares=[]}}
-            end;
+                    log4erl:warn("Could not send all shares at once due to size limit, continuing later (~p).", [LoggerId]),
+                    CommitTimer
+            end,
+            {noreply, State#state{sql_conn=SQLConn, commit_timer=NewCommitTimer, sql_shares=RestSQLShares}};
         {error, _} ->
             log4erl:warn("Cached shares (~p): ~b", [LoggerId, length(SQLShares)]),
             {noreply, State#state{sql_conn=SQLConn}}
@@ -309,8 +308,23 @@ terminate(_Reason, State=#state{commit_timer=CommitTimer}) ->
     end,
     ok.
 
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+code_change(_OldVsn, {state, LoggerId, SQLConfig, SQLModule, LogRemote, SubpoolId,
+        LogType, CommitInterval, AlwaysLogData, _OldConvTS, InsertStmtHead,
+        InsertFieldIds, OldSQLConn, CommitTimer, SQLShares}, _Extra) ->
+    SQLConn = check_reconnect(OldSQLConn, LoggerId, SQLModule, SQLConfig),
+    QuerySizeLimit = SQLModule:get_query_size_limit(SQLConn),
+    ConvTS = make_timestamp_converter(SQLModule:get_timediff(SQLConn)),
+    {ok, #state{
+        logger_id=LoggerId, sql_config=SQLConfig, sql_module=SQLModule,
+        log_remote=LogRemote, subpool_id=SubpoolId, log_type=LogType,
+        commit_interval=CommitInterval, always_log_data=AlwaysLogData,
+        conv_ts=ConvTS, insert_stmt_head=InsertStmtHead,
+        insert_field_ids=InsertFieldIds, query_size_limit=QuerySizeLimit,
+        sql_conn=SQLConn, commit_timer=CommitTimer, sql_shares=SQLShares
+    }};
+code_change(_OldVsn, State=#state{sql_module=SQLModule, sql_conn=SQLConn}, _Extra) ->
+    ConvTS = make_timestamp_converter(SQLModule:get_timediff(SQLConn)),
+    {ok, State#state{conv_ts=ConvTS}}.
 
 %% ===================================================================
 %% Other functions
@@ -336,18 +350,51 @@ make_timestamp_converter(TimeDiff) ->
         calendar:gregorian_seconds_to_datetime(S + TimeDiffSeconds)
     end.
 
--spec insert_sql_shares(LoggerId :: atom(), SQLModule :: module(), SQLConn :: pid(), SQLShares :: [sql_share()], InsertStmtHead :: binary(), InsertFieldIds :: [integer()]) -> ok | {error, term()}.
-insert_sql_shares(_, _, undefined, _, _, _) ->
+-spec insert_sql_shares(LoggerId :: atom(), SQLModule :: module(), SQLConn :: pid(), SQLShares :: [sql_share()], InsertStmtHead :: binary(), InsertFieldIds :: [integer()], QuerySizeLimit :: integer() | unlimited) -> {ok, [sql_share()]} | {error, term()}.
+insert_sql_shares(_, _, undefined, _, _, _, _) ->
     {error, no_connection};
-insert_sql_shares(LoggerId, SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds) ->
-    Rows = [make_sql_share_row(SQLModule, SQLShare, InsertFieldIds) || SQLShare <- lists:reverse(SQLShares)],
-    FullStmt = [InsertStmtHead, string:join(Rows, ",\n"), $;],
-    case SQLModule:fetch_result(SQLConn, FullStmt) of
-        {ok, _} -> ok;
+insert_sql_shares(LoggerId, SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds, QuerySizeLimit) ->
+    [FirstSQLShare | OtherSQLShares] = lists:reverse(SQLShares),
+    InsertStmtFirstRow = iolist_to_binary(make_sql_share_row(SQLModule, FirstSQLShare, InsertFieldIds)),
+    {InsertStmt, RestSQLShares} = make_sql_share_rows(SQLModule, OtherSQLShares, InsertFieldIds, QuerySizeLimit, <<InsertStmtHead/binary, InsertStmtFirstRow/binary>>),
+    case SQLModule:fetch_result(SQLConn, InsertStmt) of
+        {ok, _} -> {ok, RestSQLShares};
         {error, Error} -> log4erl:warn("Error while inserting shares (~p): ~p", [LoggerId, Error]), {error, Error}
+    end.
+
+-spec make_sql_share_rows(SQLModule :: module(), SQLShares :: [sql_share()], InsertFieldIds :: [integer()], QuerySizeLimit :: integer() | unlimited, AccStmt :: binary()) -> {binary(), [sql_share()]}.
+make_sql_share_rows(_, [], _, _, AccStmt) ->
+    {<<AccStmt/binary, ";">>, []};
+make_sql_share_rows(SQLModule, [SQLShare | T], InsertFieldIds, QuerySizeLimit, AccStmt) ->
+    Row = iolist_to_binary(make_sql_share_row(SQLModule, SQLShare, InsertFieldIds)),
+    if
+        QuerySizeLimit =:= unlimited;
+        byte_size(AccStmt) + byte_size(Row) + 3 =< QuerySizeLimit ->
+            make_sql_share_rows(SQLModule, T, InsertFieldIds, QuerySizeLimit, <<AccStmt/binary, ",\n", Row/binary>>);
+        true ->
+            {<<AccStmt/binary, ";">>, T}
     end.
 
 -spec make_sql_share_row(SQLModule :: module(), SQLShare :: sql_share(), InsertFieldIds :: [integer()]) -> iolist().
 make_sql_share_row(SQLModule, SQLShare, InsertFieldIds) ->
     EncodedElements = SQLModule:encode_elements([element(FieldId, SQLShare) || FieldId <- InsertFieldIds]),
     [$(, string:join(EncodedElements, ", "), $)].
+
+check_reconnect(undefined, LoggerId, SQLModule, SQLConfig) ->
+    {Host, Port, User, Pass, Database} = SQLConfig,
+    case SQLModule:connect(LoggerId, Host, Port, User, Pass, Database) of
+        {ok, SQLConn} ->
+            SQLConn;
+        {error, _} ->
+            log4erl:warn("Reconnecting failed, trying again later (~p).", [LoggerId]),
+            undefined
+    end;
+check_reconnect(SQLConn, _, _, _) ->
+    SQLConn.
+
+flush_inserts() ->
+    receive
+        insert_sql_shares -> flush_inserts()
+    after
+        0 -> ok
+    end.
