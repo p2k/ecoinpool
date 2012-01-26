@@ -330,7 +330,7 @@ handle_cast({new_block_detected, Chain}, State) ->
         aux ->
             mark_aux_work_stale(WorkTbl, ets:first(WorkTbl)) % Mark all aux work as stale
     end,
-    % Check if LP are still valid, then push onto the work queue
+    % Check if LP are still valid
     CheckedLPQueue = queue:filter(
         fun ({#worker{name=WorkerName}, Req}) ->
             case Req:check() of
@@ -343,15 +343,25 @@ handle_cast({new_block_detected, Chain}, State) ->
         end,
         LPQueue
     ),
-    {NewWorkQueue, NewWorkQueueSize} = case queue:is_empty(CheckedLPQueue) of
+    % On an aux block, filter for users which care about it
+    {FilteredLPQueue, NewLPQueue} = case Chain of
+        main ->
+            {CheckedLPQueue, queue:new()};
+        aux ->
+            {
+                queue:filter(fun ({#worker{aux_lp=AuxLP}, _}) -> AuxLP end, CheckedLPQueue),
+                queue:filter(fun ({#worker{aux_lp=AuxLP}, _}) -> not AuxLP end, CheckedLPQueue)
+            }
+    end,
+    {NewWorkQueue, NewWorkQueueSize} = case queue:is_empty(FilteredLPQueue) of
         true when WorkQueueSize < 0 ->
             {WorkQueue, WorkQueueSize};
         true -> % And WorkQueueSize >= 0
             {queue:new(), 0};
         false when WorkQueueSize < 0 -> % Join with existing requests (LP has priority)
-            {queue:join(CheckedLPQueue, WorkQueue), WorkQueueSize - queue:len(CheckedLPQueue)};
+            {queue:join(FilteredLPQueue, WorkQueue), WorkQueueSize - queue:len(FilteredLPQueue)};
         false ->
-            {CheckedLPQueue, -queue:len(CheckedLPQueue)}
+            {FilteredLPQueue, -queue:len(FilteredLPQueue)}
     end,
     if
         WorkQueueSize =:= MaxCacheSize, % Cache was max size
@@ -360,7 +370,7 @@ handle_cast({new_block_detected, Chain}, State) ->
         true ->
             ok
     end,
-    {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize, lp_queue=queue:new()}};
+    {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize, lp_queue=NewLPQueue}};
 
 handle_cast({store_workunit, Workunit}, State) ->
     % Extract state variables

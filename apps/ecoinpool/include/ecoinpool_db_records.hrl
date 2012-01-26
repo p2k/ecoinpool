@@ -55,7 +55,8 @@
     name :: binary(),
     pass :: binary() | atom(),
     lp = true :: boolean(),
-    lp_heartbeat = true :: boolean()
+    lp_heartbeat = true :: boolean(),
+    aux_lp = true :: boolean()
 }).
 -type worker() :: #worker{}.
 

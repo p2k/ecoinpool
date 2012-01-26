@@ -433,6 +433,7 @@ parse_worker_document({DocProps}) ->
     Pass = ecoinpool_util:parse_json_password(proplists:get_value(<<"pass">>, DocProps)),
     LP = proplists:get_value(<<"lp">>, DocProps, true),
     LPHeartbeat = proplists:get_value(<<"lp_heartbeat">>, DocProps, true),
+    AuxLP = proplists:get_value(<<"aux_lp">>, DocProps, true),
     
     if
         DocType =:= <<"worker">>,
@@ -442,7 +443,8 @@ parse_worker_document({DocProps}) ->
         Name =/= <<>>,
         is_binary(Pass) or (Pass =:= undefined),
         is_boolean(LP),
-        is_boolean(LPHeartbeat) ->
+        is_boolean(LPHeartbeat),
+        is_boolean(AuxLP) ->
             
             % Create record
             Worker = #worker{
@@ -452,7 +454,8 @@ parse_worker_document({DocProps}) ->
                 name=Name,
                 pass=Pass,
                 lp=LP,
-                lp_heartbeat=LPHeartbeat
+                lp_heartbeat=LPHeartbeat,
+                aux_lp=AuxLP
             },
             {ok, Worker};
         
