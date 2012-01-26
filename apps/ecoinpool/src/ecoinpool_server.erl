@@ -271,9 +271,9 @@ handle_cast({rpc_request, Req}, State) ->
         workertbl=WorkerTbl,
         lp_queue=LPQueue
     } = State,
-    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge} = Subpool,
+    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge, accept_workers=AcceptWorkers} = Subpool,
     % Check the method and authentication
-    case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod) of
+    case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers) of
         {ok, Worker=#worker{name=WorkerName, lp_heartbeat=WithHeartbeat}, Action} ->
             LP = Req:get(lp),
             case Action of % Now match for the action
@@ -489,7 +489,7 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod) ->
+parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers) ->
     Action = case Req:get(method) of
         GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
             case Req:has_params() of
@@ -525,11 +525,32 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
                     {error, authorization_required};
                 {User, Password} ->
                     case ets:lookup(WorkerTbl, User) of
-                        [Worker=#worker{pass=Pass}] when Pass =:= undefined; Pass =:= Password ->
-                            {ok, Worker, Action};
+                        [Worker=#worker{pass=Pass}] ->
+                            if
+                                Pass =:= undefined; Pass =:= Password ->
+                                    {ok, Worker, Action};
+                                true ->
+                                    log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Req:get(ip), User]),
+                                    {error, authorization_required}
+                            end;
                         _ ->
-                            log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Req:get(ip), User]),
-                            {error, authorization_required}
+                            ImplicitWorker = #worker{id=User, name=User},
+                            case AcceptWorkers of
+                                any ->
+                                    {ok, ImplicitWorker, Action};
+                                valid_address ->
+                                    try
+                                        btc_protocol:hash160_from_address(User),
+                                        {ok, ImplicitWorker, Action}
+                                    catch
+                                        error:invalid_bitcoin_address ->
+                                            log4erl:warn(server, "~s: rpc_request: ~s: Invalid address ~s!", [SubpoolName, Req:get(ip), User]),
+                                            {error, authorization_required}
+                                    end;
+                                _ ->
+                                    log4erl:warn(server, "~s: rpc_request: ~s: Username ~s not found!", [SubpoolName, Req:get(ip), User]),
+                                    {error, authorization_required}
+                            end
                     end
             end
     end.

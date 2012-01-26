@@ -39,6 +39,7 @@
     pool_type :: atom(),
     max_cache_size = 0 :: integer(),
     max_work_age :: integer(),
+    accept_workers :: registered | valid_address | any,
     round :: integer() | undefined,
     worker_share_subpools :: [binary()],
     coin_daemon_config :: [conf_property()],
@@ -48,12 +49,12 @@
 
 -record(worker, {
     id :: binary(),
-    user_id :: term(),
+    user_id = -1 :: term(),
     sub_pool_id :: binary(),
     name :: binary(),
     pass :: binary() | atom(),
-    lp :: boolean(),
-    lp_heartbeat :: boolean()
+    lp = true :: boolean(),
+    lp_heartbeat = true :: boolean()
 }).
 -type worker() :: #worker{}.
 

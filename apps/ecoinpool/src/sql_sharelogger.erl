@@ -107,6 +107,8 @@ init({LoggerId, SQLModule, Config}) ->
     InsertStmtHead = iolist_to_binary(["INSERT INTO ", Table, " (", string:join(InsertFieldNames, ", "), ") VALUES\n"]),
     % Get the server's time difference to UTC and setup the timestamp converter
     ConvTS = make_timestamp_converter(SQLModule:get_timediff(SQLConn)),
+    % Get the query size limit
+    QuerySizeLimit = SQLModule:get_query_size_limit(SQLConn),
     % Setup commit timer
     CommitTimer = if
         not is_integer(CommitInterval); CommitInterval =< 0 ->
@@ -128,6 +130,7 @@ init({LoggerId, SQLModule, Config}) ->
         conv_ts = ConvTS,
         insert_stmt_head = InsertStmtHead,
         insert_field_ids = InsertFieldIds,
+        query_size_limit=QuerySizeLimit,
         
         sql_conn = SQLConn,
         commit_timer = CommitTimer
@@ -256,14 +259,14 @@ handle_info(insert_sql_shares, State=#state{
         commit_interval=CommitInterval,
         insert_stmt_head=InsertStmtHead,
         insert_field_ids=InsertFieldIds,
-        query_size_limit=QuerySizeLimit,
+        query_size_limit=OldQuerySizeLimit,
         sql_conn=OldSQLConn,
         commit_timer=CommitTimer,
         sql_shares=SQLShares}) ->
     
     flush_inserts(), % Reduce the amount of stress
     
-    SQLConn = check_reconnect(OldSQLConn, LoggerId, SQLModule, SQLConfig),
+    {SQLConn, QuerySizeLimit} = check_reconnect(OldSQLConn, OldQuerySizeLimit, LoggerId, SQLModule, SQLConfig),
     
     case insert_sql_shares(LoggerId, SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds, QuerySizeLimit) of
         {ok, RestSQLShares} ->
@@ -286,10 +289,10 @@ handle_info(insert_sql_shares, State=#state{
                     log4erl:warn("Could not send all shares at once due to size limit, continuing later (~p).", [LoggerId]),
                     CommitTimer
             end,
-            {noreply, State#state{sql_conn=SQLConn, commit_timer=NewCommitTimer, sql_shares=RestSQLShares}};
+            {noreply, State#state{query_size_limit=QuerySizeLimit, sql_conn=SQLConn, commit_timer=NewCommitTimer, sql_shares=RestSQLShares}};
         {error, _} ->
             log4erl:warn("Cached shares (~p): ~b", [LoggerId, length(SQLShares)]),
-            {noreply, State#state{sql_conn=SQLConn}}
+            {noreply, State#state{query_size_limit=QuerySizeLimit, sql_conn=SQLConn}}
     end;
 
 handle_info({'EXIT', SQLConn, _Reason}, State=#state{sql_conn=SQLConn}) ->
@@ -308,23 +311,10 @@ terminate(_Reason, State=#state{commit_timer=CommitTimer}) ->
     end,
     ok.
 
-code_change(_OldVsn, {state, LoggerId, SQLConfig, SQLModule, LogRemote, SubpoolId,
-        LogType, CommitInterval, AlwaysLogData, _OldConvTS, InsertStmtHead,
-        InsertFieldIds, OldSQLConn, CommitTimer, SQLShares}, _Extra) ->
-    SQLConn = check_reconnect(OldSQLConn, LoggerId, SQLModule, SQLConfig),
-    QuerySizeLimit = SQLModule:get_query_size_limit(SQLConn),
+code_change(_OldVsn, State=#state{logger_id=LoggerId, sql_config=SQLConfig, sql_module=SQLModule, query_size_limit=OldQuerySizeLimit, sql_conn=OldSQLConn}, _Extra) ->
+    {SQLConn, QuerySizeLimit} = check_reconnect(OldSQLConn, OldQuerySizeLimit, LoggerId, SQLModule, SQLConfig),
     ConvTS = make_timestamp_converter(SQLModule:get_timediff(SQLConn)),
-    {ok, #state{
-        logger_id=LoggerId, sql_config=SQLConfig, sql_module=SQLModule,
-        log_remote=LogRemote, subpool_id=SubpoolId, log_type=LogType,
-        commit_interval=CommitInterval, always_log_data=AlwaysLogData,
-        conv_ts=ConvTS, insert_stmt_head=InsertStmtHead,
-        insert_field_ids=InsertFieldIds, query_size_limit=QuerySizeLimit,
-        sql_conn=SQLConn, commit_timer=CommitTimer, sql_shares=SQLShares
-    }};
-code_change(_OldVsn, State=#state{sql_module=SQLModule, sql_conn=SQLConn}, _Extra) ->
-    ConvTS = make_timestamp_converter(SQLModule:get_timediff(SQLConn)),
-    {ok, State#state{conv_ts=ConvTS}}.
+    {ok, State#state{query_size_limit=QuerySizeLimit, sql_conn=SQLConn, conv_ts=ConvTS}}.
 
 %% ===================================================================
 %% Other functions
@@ -380,17 +370,18 @@ make_sql_share_row(SQLModule, SQLShare, InsertFieldIds) ->
     EncodedElements = SQLModule:encode_elements([element(FieldId, SQLShare) || FieldId <- InsertFieldIds]),
     [$(, string:join(EncodedElements, ", "), $)].
 
-check_reconnect(undefined, LoggerId, SQLModule, SQLConfig) ->
+check_reconnect(undefined, _, LoggerId, SQLModule, SQLConfig) ->
     {Host, Port, User, Pass, Database} = SQLConfig,
     case SQLModule:connect(LoggerId, Host, Port, User, Pass, Database) of
         {ok, SQLConn} ->
-            SQLConn;
+            QuerySizeLimit = SQLModule:get_query_size_limit(SQLConn),
+            {SQLConn, QuerySizeLimit};
         {error, _} ->
             log4erl:warn("Reconnecting failed, trying again later (~p).", [LoggerId]),
-            undefined
+            {undefined, undefined}
     end;
-check_reconnect(SQLConn, _, _, _) ->
-    SQLConn.
+check_reconnect(SQLConn, QuerySizeLimit, _, _, _) ->
+    {SQLConn, QuerySizeLimit}.
 
 flush_inserts() ->
     receive

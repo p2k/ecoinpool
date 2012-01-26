@@ -327,6 +327,18 @@ parse_subpool_document({DocProps}) ->
     end,
     MaxCacheSize = proplists:get_value(<<"max_cache_size">>, DocProps, 20),
     MaxWorkAge = proplists:get_value(<<"max_work_age">>, DocProps, 20),
+    AcceptWorkers = case proplists:get_value(<<"accept_workers">>, DocProps) of
+        <<"registered">> ->
+            registered;
+        <<"valid_address">> ->
+            valid_address;
+        <<"any">> ->
+            any;
+        undefined ->
+            registered;
+        _ ->
+            invalid
+    end,
     Round = proplists:get_value(<<"round">>, DocProps),
     WorkerShareSubpools = proplists:get_value(<<"worker_share_subpools">>, DocProps, []),
     WorkerShareSubpoolsOk = is_binary_list(WorkerShareSubpools),
@@ -352,6 +364,7 @@ parse_subpool_document({DocProps}) ->
         PoolType =/= undefined,
         is_integer(MaxCacheSize),
         is_integer(MaxWorkAge),
+        AcceptWorkers =/= invalid,
         WorkerShareSubpoolsOk,
         AuxPoolOk ->
             
@@ -363,6 +376,7 @@ parse_subpool_document({DocProps}) ->
                 pool_type=PoolType,
                 max_cache_size=if MaxCacheSize > 0 -> MaxCacheSize; true -> 0 end,
                 max_work_age=if MaxWorkAge > 1 -> MaxWorkAge; true -> 1 end,
+                accept_workers=AcceptWorkers,
                 round=if is_integer(Round) -> Round; true -> undefined end,
                 worker_share_subpools=WorkerShareSubpools,
                 coin_daemon_config=CoinDaemonConfig,
