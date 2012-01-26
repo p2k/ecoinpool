@@ -41,6 +41,7 @@
     max_work_age :: integer(),
     accept_workers :: registered | valid_address | any,
     lowercase_workers :: boolean(),
+    ignore_passwords :: boolean(),
     round :: integer() | undefined,
     worker_share_subpools :: [binary()],
     coin_daemon_config :: [conf_property()],

@@ -276,9 +276,9 @@ handle_cast({rpc_request, Req}, State) ->
         workertbl=WorkerTbl,
         lp_queue=LPQueue
     } = State,
-    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge, accept_workers=AcceptWorkers, lowercase_workers=LowercaseWorkers} = Subpool,
+    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge, accept_workers=AcceptWorkers, lowercase_workers=LowercaseWorkers, ignore_passwords=IgnorePasswords} = Subpool,
     % Check the method and authentication
-    case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers, LowercaseWorkers) of
+    case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers, LowercaseWorkers, IgnorePasswords) of
         {ok, Worker=#worker{name=WorkerName, lp_heartbeat=WithHeartbeat}, Action} ->
             LP = Req:get(lp),
             case Action of % Now match for the action
@@ -508,7 +508,7 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers, LowercaseWorkers) ->
+parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers, LowercaseWorkers, IgnorePasswords) ->
     Action = case Req:get(method) of
         GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
             case Req:has_params() of
@@ -550,7 +550,7 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] ->
                             if
-                                Pass =:= undefined; Pass =:= Password ->
+                                IgnorePasswords; Pass =:= undefined; Pass =:= Password ->
                                     {ok, Worker, Action};
                                 true ->
                                     log4erl:warn(server, "~s: rpc_request: ~s: Wrong password for username ~s!", [SubpoolName, Req:get(ip), User]),

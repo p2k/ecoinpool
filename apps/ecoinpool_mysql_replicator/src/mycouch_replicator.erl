@@ -145,7 +145,7 @@ init([CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCo
                         undefined ->
                             "";
                         _ ->
-                            ["BEGIN\n  IF NOT (", string:join([["OLD.`", F, "` <=> NEW.`", F, "`"] || F <- MyTriggerFields], " AND "), ") THEN\n    "]
+                            ["BEGIN\n  IF NOT (", string:join([["OLD.`", F, "` <=> BINARY NEW.`", F, "`"] || F <- MyTriggerFields], " AND "), ") THEN\n    "]
                     end,
                     "UPDATE `", MyTable, "_rev` SET `changed` = 1 WHERE `my_id` = NEW.`", MyIdField, "`;",
                     case MyTriggerFields of
