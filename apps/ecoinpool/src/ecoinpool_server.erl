@@ -141,8 +141,8 @@ handle_call(_Message, _From, State) ->
 
 handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_size=WorkQueueSize, cdaemon=OldCoinDaemon, mmm=OldMMM}) ->
     % Extract config
-    #subpool{id=SubpoolId, name=SubpoolName, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig, aux_pool=Auxpool} = Subpool,
-    #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig, aux_pool=OldAuxpool} = OldSubpool,
+    #subpool{id=SubpoolId, name=SubpoolName, port=Port, pool_type=PoolType, max_cache_size=MaxCacheSize, lowercase_workers=LowercaseWorkers, worker_share_subpools=WorkerShareSubpools, coin_daemon_config=CoinDaemonConfig, aux_pool=Auxpool} = Subpool,
+    #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, lowercase_workers=OldLowercaseWorkers, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig, aux_pool=OldAuxpool} = OldSubpool,
     % Derive the CoinDaemon module name from PoolType + "_coindaemon", except for SCrypt pools which are all handled by scrypt_coindaemon
     CoinDaemonModule = if
         PoolType =:= ltc;
@@ -156,7 +156,8 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     % Note: this includes an initial load, because even if no share subpools
     %   are specified, this will at least be an empty list =/= undefined.
     if
-        WorkerShareSubpools =/= OldWorkerShareSubpools ->
+        WorkerShareSubpools =/= OldWorkerShareSubpools;
+        LowercaseWorkers =/= OldLowercaseWorkers ->
             gen_server:cast(self(), reload_workers);
         true ->
             ok
@@ -233,13 +234,17 @@ handle_cast({auxdaemon_ready, Module, PID}, State=#state{subpool=#subpool{name=S
     end;
 
 handle_cast(reload_workers, State=#state{subpool=Subpool, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
-    #subpool{id=SubpoolId, name=SubpoolName, worker_share_subpools=WorkerShareSubpools} = Subpool,
+    #subpool{id=SubpoolId, name=SubpoolName, lowercase_workers=LowercaseWorkers, worker_share_subpools=WorkerShareSubpools} = Subpool,
     
     ets:delete_all_objects(WorkerLookupTbl),
     ets:delete_all_objects(WorkerTbl),
     
     lists:foreach(
-        fun (Worker=#worker{id=WorkerId, sub_pool_id=WorkerSubpoolId, name=WorkerName}) ->
+        fun (MixedCaseWorker=#worker{id=WorkerId, sub_pool_id=WorkerSubpoolId, name=MixedCaseWorkerName}) ->
+            {Worker, WorkerName} = case LowercaseWorkers of
+                true -> LowercaseWorkerName=binary_to_lower(MixedCaseWorkerName), {MixedCaseWorker#worker{name=LowercaseWorkerName}, LowercaseWorkerName};
+                false -> {MixedCaseWorker, MixedCaseWorkerName}
+            end,
             case ets:insert_new(WorkerTbl, Worker) of
                 true ->
                     ets:insert(WorkerLookupTbl, {WorkerId, WorkerName});
@@ -271,9 +276,9 @@ handle_cast({rpc_request, Req}, State) ->
         workertbl=WorkerTbl,
         lp_queue=LPQueue
     } = State,
-    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge, accept_workers=AcceptWorkers} = Subpool,
+    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge, accept_workers=AcceptWorkers, lowercase_workers=LowercaseWorkers} = Subpool,
     % Check the method and authentication
-    case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers) of
+    case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers, LowercaseWorkers) of
         {ok, Worker=#worker{name=WorkerName, lp_heartbeat=WithHeartbeat}, Action} ->
             LP = Req:get(lp),
             case Action of % Now match for the action
@@ -390,7 +395,11 @@ handle_cast({store_workunit, Workunit}, State) ->
     end,
     {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
 
-handle_cast({update_worker, Worker=#worker{id=WorkerId, name=WorkerName}}, State=#state{subpool=#subpool{name=SubpoolName}, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
+handle_cast({update_worker, MixedCaseWorker=#worker{id=WorkerId, name=MixedCaseWorkerName}}, State=#state{subpool=#subpool{name=SubpoolName, lowercase_workers=LowercaseWorkers}, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl}) ->
+    {Worker, WorkerName} = case LowercaseWorkers of
+        true -> LowercaseWorkerName=binary_to_lower(MixedCaseWorkerName), {MixedCaseWorker#worker{name=LowercaseWorkerName}, LowercaseWorkerName};
+        false -> {MixedCaseWorker, MixedCaseWorkerName}
+    end,
     % Check if existing
     case ets:lookup(WorkerLookupTbl, WorkerId) of
         [] -> % Brand new
@@ -489,7 +498,7 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers) ->
+parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers, LowercaseWorkers) ->
     Action = case Req:get(method) of
         GetworkMethod when GetworkMethod =:= SendworkMethod -> % Distinguish by parameters
             case Req:has_params() of
@@ -523,7 +532,11 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
                 unauthorized ->
                     log4erl:warn(server, "~s: rpc_request: ~s: Unauthorized!", [SubpoolName, Req:get(ip)]),
                     {error, authorization_required};
-                {User, Password} ->
+                {MixedCaseUser, Password} ->
+                    User = case LowercaseWorkers of
+                        true -> binary_to_lower(MixedCaseUser);
+                        false -> MixedCaseUser
+                    end,
                     case ets:lookup(WorkerTbl, User) of
                         [Worker=#worker{pass=Pass}] ->
                             if
@@ -804,3 +817,6 @@ mark_aux_work_stale(_, '$end_of_table') ->
 mark_aux_work_stale(WorkTbl, Key) ->
     ets:update_element(WorkTbl, Key, {#workunit.aux_work_stale, true}),
     mark_aux_work_stale(WorkTbl, ets:next(WorkTbl, Key)).
+
+binary_to_lower(B) ->
+    list_to_binary(string:to_lower(binary_to_list(B))).
