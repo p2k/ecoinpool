@@ -21,7 +21,7 @@
 {application, ecoinpool,
  [
   {description, "A pool mining software for cryptographic currencies"},
-  {vsn, "0.3.13"},
+  {vsn, "0.3.14"},
   {registered, [ecoinpool_app]},
   {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, mysql, epgsql, couchbeam, ebitcoin]},
   {mod, {ecoinpool_app, []}},

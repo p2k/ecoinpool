@@ -341,6 +341,7 @@ parse_subpool_document({DocProps}) ->
     end,
     LowercaseWorkers = proplists:get_value(<<"lowercase_workers">>, DocProps, true),
     IgnorePasswords = proplists:get_value(<<"ignore_passwords">>, DocProps, true),
+    RollNTime = proplists:get_value(<<"rollntime">>, DocProps, true),
     Round = proplists:get_value(<<"round">>, DocProps),
     WorkerShareSubpools = proplists:get_value(<<"worker_share_subpools">>, DocProps, []),
     WorkerShareSubpoolsOk = is_binary_list(WorkerShareSubpools),
@@ -369,6 +370,7 @@ parse_subpool_document({DocProps}) ->
         AcceptWorkers =/= invalid,
         is_boolean(LowercaseWorkers),
         is_boolean(IgnorePasswords),
+        is_boolean(RollNTime),
         WorkerShareSubpoolsOk,
         AuxPoolOk ->
             
@@ -383,6 +385,7 @@ parse_subpool_document({DocProps}) ->
                 accept_workers=AcceptWorkers,
                 lowercase_workers=LowercaseWorkers,
                 ignore_passwords=IgnorePasswords,
+                rollntime=RollNTime,
                 round=if is_integer(Round) -> Round; true -> undefined end,
                 worker_share_subpools=WorkerShareSubpools,
                 coin_daemon_config=CoinDaemonConfig,

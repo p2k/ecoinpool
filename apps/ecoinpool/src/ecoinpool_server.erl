@@ -276,7 +276,7 @@ handle_cast({rpc_request, Req}, State) ->
         workertbl=WorkerTbl,
         lp_queue=LPQueue
     } = State,
-    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge, accept_workers=AcceptWorkers, lowercase_workers=LowercaseWorkers, ignore_passwords=IgnorePasswords} = Subpool,
+    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge, accept_workers=AcceptWorkers, lowercase_workers=LowercaseWorkers, ignore_passwords=IgnorePasswords, rollntime=RollNTime} = Subpool,
     % Check the method and authentication
     case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers, LowercaseWorkers, IgnorePasswords) of
         {ok, Worker=#worker{name=WorkerName, lp_heartbeat=WithHeartbeat}, Action} ->
@@ -287,7 +287,7 @@ handle_cast({rpc_request, Req}, State) ->
                     Req:start(WithHeartbeat),
                     {noreply, State#state{lp_queue=queue:in({Worker, Req}, LPQueue)}};
                 getwork ->
-                    {NewWorkQueue, NewWorkQueueSize} = assign_work(Req, SubpoolName, erlang:now(), MaxWorkAge, MaxCacheSize, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon),
+                    {NewWorkQueue, NewWorkQueueSize} = assign_work(Req, SubpoolName, erlang:now(), MaxWorkAge, MaxCacheSize, RollNTime, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon),
                     if
                         WorkQueueSize =:= MaxCacheSize, % Cache was max size
                         NewWorkQueueSize < MaxCacheSize -> % And now is below max size
@@ -375,7 +375,7 @@ handle_cast({new_block_detected, Chain}, State) ->
 handle_cast({store_workunit, Workunit}, State) ->
     % Extract state variables
     #state{
-        subpool=#subpool{name=SubpoolName, max_cache_size=MaxCacheSize},
+        subpool=#subpool{name=SubpoolName, max_cache_size=MaxCacheSize, rollntime=RollNTime},
         cdaemon=CoinDaemon,
         workq=WorkQueue,
         workq_size=WorkQueueSize,
@@ -389,7 +389,7 @@ handle_cast({store_workunit, Workunit}, State) ->
                 false -> log4erl:error(server, "~s: store_workunit got a collision :/", [SubpoolName]);
                 _ -> ok
             end,
-            Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit)),
+            Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit, RollNTime)),
             {NWQ, WorkQueueSize+1};
         WorkQueueSize < MaxCacheSize -> % We are under the cache limit -> cache
             {queue:in(Workunit, WorkQueue), WorkQueueSize+1};
@@ -578,7 +578,7 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
             end
     end.
 
-assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, Worker=#worker{id=WorkerId, name=WorkerName}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon) ->
+assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, RollNTime, Worker=#worker{id=WorkerId, name=WorkerName}, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon) ->
     % Look if work is available in the Cache
     if
         WorkQueueSize > 0 -> % Cache hit
@@ -589,12 +589,12 @@ assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, Worker=#worker{id=W
                         false -> log4erl:error(server, "~s: assign_work got a collision :/", [SubpoolName]);
                         _ -> ok
                     end,
-                    Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit)),
+                    Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit, RollNTime)),
                     log4erl:info(server, "~s: Cache hit by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(ip), WorkQueueSize-1, MaxCacheSize]),
                     {NewWorkQueue, WorkQueueSize-1};
                 _ -> % Try again if too old (tail recursive)
                     log4erl:debug(server, "~s: assign_work: discarded an old workunit.", [SubpoolName]),
-                    assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, Worker, NewWorkQueue, WorkQueueSize-1, WorkTbl, CoinDaemon)
+                    assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, RollNTime, Worker, NewWorkQueue, WorkQueueSize-1, WorkTbl, CoinDaemon)
             end;
         true -> % Cache miss, append to waiting queue
             log4erl:info(server, "~s: Cache miss by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(ip), WorkQueueSize-1, MaxCacheSize]),
@@ -648,7 +648,7 @@ check_work(Req, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerNa
             )
     end.
 
-process_results(Req, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerName}, CoinDaemon, MMM) ->
+process_results(Req, Results, Subpool=#subpool{name=SubpoolName, rollntime=RollNTime}, Worker=#worker{name=WorkerName}, CoinDaemon, MMM) ->
     % Process all results
     Peer = Req:get(peer),
     {ReplyItems, RejectReason, Candidates} = lists:foldr(
@@ -675,7 +675,7 @@ process_results(Req, Results, Subpool=#subpool{name=SubpoolName}, Worker=#worker
         Results 
     ),
     % Send reply
-    Options = make_response_options(Worker),
+    Options = make_response_options(Worker, RollNTime),
     case RejectReason of
         undefined ->
             Req:ok(CoinDaemon:make_reply(ReplyItems), Options);
@@ -701,14 +701,18 @@ check_work_age(SubpoolName, WorkQueue, WorkQueueSize, Now, MaxWorkAge) ->
             {WorkQueue, WorkQueueSize} % Done
     end.
 
-make_response_options(#worker{lp=LP}) ->
+make_response_options(#worker{lp=LP}, RollNTime) ->
+    Options = if
+        RollNTime -> [rollntime];
+        true -> []
+    end,
     case LP of
-        true -> [longpolling];
-        _ -> []
+        true -> [longpolling | Options];
+        _ -> Options
     end.
 
-make_response_options(Worker, #workunit{block_num=BlockNum}) ->
-    [{block_num, BlockNum} | make_response_options(Worker)].
+make_response_options(Worker, #workunit{block_num=BlockNum}, RollNTime) ->
+    [{block_num, BlockNum} | make_response_options(Worker, RollNTime)].
 
 check_new_round(_, []) ->
     ok;

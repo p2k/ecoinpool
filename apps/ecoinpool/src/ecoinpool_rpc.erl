@@ -137,6 +137,8 @@ headers_from_options(Options) ->
         fun
             (longpolling, AccHeaders) ->
                 [{"X-Long-Polling", "/LP"} | AccHeaders];
+            (rollntime, AccHeaders) ->
+                [{"X-Roll-NTime", "expire=10"} | AccHeaders];
             ({reject_reason, Reason}, AccHeaders) ->
                 [{"X-Reject-Reason", Reason} | AccHeaders];
             ({block_num, BlockNum}, AccHeaders) ->
