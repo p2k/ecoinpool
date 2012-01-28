@@ -345,9 +345,11 @@ handle_request(SubpoolPID, Req) ->
         cancel ->
             ok;
         {error, Type} ->
+            mochiweb_socket:setopts(Socket, [{active, false}]),
             {HTTPCode, Body} = compose_error(ReqId, Type),
             Req:respond({HTTPCode, default_headers(), Body});
         {ok, Result, Options} ->
+            mochiweb_socket:setopts(Socket, [{active, false}]),
             Body = compose_success(ReqId, Result),
             Headers = headers_from_options(Options),
             Req:respond({200, default_headers() ++ Headers, Body});
@@ -357,6 +359,7 @@ handle_request(SubpoolPID, Req) ->
             longpolling_loop(ReqId, Resp, WithHeartbeat, Socket);
         {tcp_closed, Socket} ->
             log4erl:info("ecoinpool_rpc: Connection from ~s dropped unexpectedly.", [Peer]),
+            mochiweb_socket:close(Socket),
             exit(normal)
     after
         300000 ->
@@ -368,14 +371,17 @@ handle_request(SubpoolPID, Req) ->
 longpolling_loop(ReqId, Resp, WithHeartbeat, Socket) ->
     receive
         {ok, Result, _} ->
+            mochiweb_socket:setopts(Socket, [{active, false}]),
             Body = compose_success(ReqId, Result),
             Resp:write_chunk(Body),
             Resp:write_chunk(<<>>);
         {error, Type} ->
+            mochiweb_socket:setopts(Socket, [{active, false}]),
             {_, Body} = compose_error(ReqId, Type),
             Resp:write_chunk(Body),
             Resp:write_chunk(<<>>);
         {tcp_closed, Socket} ->
+            mochiweb_socket:close(Socket),
             exit(normal)
     after 300000 ->
         if
@@ -385,6 +391,6 @@ longpolling_loop(ReqId, Resp, WithHeartbeat, Socket) ->
                 longpolling_loop(ReqId, Resp, WithHeartbeat, Socket);
             true ->
                 Req = Resp:get(request),
-                mochiweb_socket:close(Req:get(socket))
+                mochiweb_socket:close(Socket)
         end
     end.
