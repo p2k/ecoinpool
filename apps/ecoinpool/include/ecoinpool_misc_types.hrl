@@ -24,10 +24,12 @@
 
 -type mmm() :: {ecoinpool_mmm, any()}.
 
--type ecoinpool_rpc_request() :: {ecoinpool_rpc_request, any(), any(), any(), any(), any(), any()}.
-
 -type peer() :: {IP :: string(), UserAgent :: string() | undefined}.
 
 -type candidate() :: main | aux.
 
--type reject_reason() :: stale | duplicate | target | data.
+-type mining_extension() :: midstate | rollntime | submitold.
+
+-type ecoinpool_rpc_request() :: {ecoinpool_rpc_request, pid(), peer(), atom(), list(), {binary(), binary()} | unauthorized, [mining_extension()], boolean()}.
+
+-type reject_reason() :: stale | duplicate | target | data | time.

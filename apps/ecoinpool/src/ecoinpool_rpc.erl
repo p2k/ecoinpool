@@ -201,7 +201,19 @@ parse_path("/LP/") ->
 parse_path(_) ->
     undefined.
 
-handle_form_request(SubpoolPID, Req, Auth, Properties, LP) ->
+parse_mining_extensions(SExtensions) ->
+    lists:foldl(
+        fun
+            ("midstate", Acc) -> [midstate | Acc];
+            ("rollntime", Acc) -> [rollntime | Acc];
+            ("submitold", Acc) ->[submitold | Acc];
+            (_, Acc) -> Acc
+        end,
+        [],
+        SExtensions
+    ).
+
+handle_form_request(SubpoolPID, Req, Auth, Properties, MiningExtensions, LP) ->
     % Check for JSONP
     case proplists:get_value("callback", Properties) of
         undefined -> put(jsonp, undefined);
@@ -209,7 +221,7 @@ handle_form_request(SubpoolPID, Req, Auth, Properties, LP) ->
     end,
     if
         LP -> % Ignore method and params on LP
-            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, default, [], Auth, true));
+            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, default, [], Auth, MiningExtensions, true));
         true ->
             case parse_method(list_to_binary(proplists:get_value("method", Properties, ""))) of
                 none ->
@@ -220,7 +232,7 @@ handle_form_request(SubpoolPID, Req, Auth, Properties, LP) ->
                     self() ! {error, invalid_request};
                 Method ->
                     BinParams = lists:map(fun list_to_binary/1, proplists:get_all_values("params[]", Properties)),
-                    ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, BinParams, Auth, false))
+                    ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, BinParams, Auth, MiningExtensions, false))
             end,
             % Return the request ID; if possible convert to integer else convert to binary
             ReqId = proplists:get_value("id", Properties, "1"),
@@ -232,7 +244,7 @@ handle_form_request(SubpoolPID, Req, Auth, Properties, LP) ->
     end.
 
 % Note: this function returns the request ID (except if the connection is canceled)
-handle_post(SubpoolPID, Req, Auth, LP) ->
+handle_post(SubpoolPID, Req, Auth, MiningExtensions, LP) ->
     case Req:get_header_value("Content-Type") of
         Type when Type =:= "application/json"; Type =:= undefined ->
             put(jsonp, undefined),
@@ -249,7 +261,7 @@ handle_post(SubpoolPID, Req, Auth, LP) ->
                             Method ->
                                 case proplists:get_value(<<"params">>, Properties, []) of
                                     Params when is_list(Params) ->
-                                        ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, Params, Auth, LP));
+                                        ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, Params, Auth, MiningExtensions, LP));
                                     _ ->
                                         self() ! {error, invalid_request}
                                 end
@@ -258,13 +270,13 @@ handle_post(SubpoolPID, Req, Auth, LP) ->
                     _ ->
                         self() ! {error, invalid_request}, 1
                 end
-            catch _ ->
+            catch _:_ ->
                 self() ! {error, parse_error}, 1
             end;
         "application/x-www-form-urlencoded" ->
             try
                 Properties = Req:parse_post(),
-                handle_form_request(SubpoolPID, Req, Auth, Properties, LP)
+                handle_form_request(SubpoolPID, Req, Auth, Properties, MiningExtensions, LP)
             catch error:_ ->
                 self() ! {error, parse_error}, 1
             end;
@@ -273,10 +285,10 @@ handle_post(SubpoolPID, Req, Auth, LP) ->
             self() ! cancel, 1
     end.
 
-handle_get(SubpoolPID, Req, Auth, LP) ->
+handle_get(SubpoolPID, Req, Auth, MiningExtensions, LP) ->
     try
         Properties = Req:parse_qs(),
-        handle_form_request(SubpoolPID, Req, Auth, Properties, LP)
+        handle_form_request(SubpoolPID, Req, Auth, Properties, MiningExtensions, LP)
     catch error:_ ->
         self() ! {error, parse_error}, 1
     end.
@@ -296,6 +308,12 @@ handle_request(SubpoolPID, Req) ->
         _ ->
             unauthorized
     end,
+    MiningExtensions = case Req:get_header_value("X-Mining-Extensions") of
+        undefined ->
+            [];
+        SMiningExtensions ->
+            parse_mining_extensions(string:tokens(SMiningExtensions, " "))
+    end,
     case Req:accepts_content_type("application/json") of
         true ->
             ok; % Fine
@@ -309,9 +327,9 @@ handle_request(SubpoolPID, Req) ->
         {ok, LP} ->
             case Req:get(method) of
                 'GET' ->
-                    handle_get(SubpoolPID, Req, Auth, LP);
+                    handle_get(SubpoolPID, Req, Auth, MiningExtensions, LP);
                 'POST' ->
-                    handle_post(SubpoolPID, Req, Auth, LP);
+                    handle_post(SubpoolPID, Req, Auth, MiningExtensions, LP);
                 _ ->
                     Req:respond({501, [{"Content-Type", "text/plain"}], "Unknown method"}),
                     self() ! cancel
@@ -319,7 +337,10 @@ handle_request(SubpoolPID, Req) ->
         _ ->
             self() ! {error, method_not_found}, 1
     end,
-    % Block here, waiting for the result
+    % Block here, waiting for the result; also activate the socket to get close events
+    Socket = Req:get(socket),
+    mochiweb_socket:setopts(Socket, [{active, true}]),
+    Peer = Req:get(peer),
     receive
         cancel ->
             ok;
@@ -330,17 +351,21 @@ handle_request(SubpoolPID, Req) ->
             Body = compose_success(ReqId, Result),
             Headers = headers_from_options(Options),
             Req:respond({200, default_headers() ++ Headers, Body});
-        {start, WithHeartbeat} ->
-            Resp = Req:respond({200, default_headers(), chunked}),
-            longpolling_loop(ReqId, Resp, WithHeartbeat)
+        {start, WithHeartbeat, Options} ->
+            Headers = headers_from_options(Options),
+            Resp = Req:respond({200, default_headers() ++ Headers, chunked}),
+            longpolling_loop(ReqId, Resp, WithHeartbeat, Socket);
+        {tcp_closed, Socket} ->
+            log4erl:info("ecoinpool_rpc: Connection from ~s dropped unexpectedly.", [Peer]),
+            exit(normal)
     after
         300000 ->
             % Die after 5 minutes if nothing happened
-            log4erl:info("ecoinpool_rpc: Dropping idle connection to ~s.", [Req:get(peer)]),
-            mochiweb_socket:close(Req:get(socket))
+            log4erl:info("ecoinpool_rpc: Dropping idle connection to ~s.", [Peer]),
+            mochiweb_socket:close(Socket)
     end.
 
-longpolling_loop(ReqId, Resp, WithHeartbeat) ->
+longpolling_loop(ReqId, Resp, WithHeartbeat, Socket) ->
     receive
         {ok, Result, _} ->
             Body = compose_success(ReqId, Result),
@@ -349,13 +374,15 @@ longpolling_loop(ReqId, Resp, WithHeartbeat) ->
         {error, Type} ->
             {_, Body} = compose_error(ReqId, Type),
             Resp:write_chunk(Body),
-            Resp:write_chunk(<<>>)
+            Resp:write_chunk(<<>>);
+        {tcp_closed, Socket} ->
+            exit(normal)
     after 300000 ->
         if
             WithHeartbeat ->
                 % Send a newline character every 5 minutes to keep the connection alive
                 Resp:write_chunk(<<10>>),
-                longpolling_loop(ReqId, Resp, WithHeartbeat);
+                longpolling_loop(ReqId, Resp, WithHeartbeat, Socket);
             true ->
                 Req = Resp:get(request),
                 mochiweb_socket:close(Req:get(socket))

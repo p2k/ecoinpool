@@ -33,7 +33,7 @@
     getwork_method/0,
     sendwork_method/0,
     share_target/0,
-    encode_workunit/1,
+    encode_workunit/2,
     analyze_result/1,
     make_reply/1,
     set_mmm/2,
@@ -91,15 +91,23 @@ sendwork_method() ->
 share_target() ->
     <<16#00000000ffff0000000000000000000000000000000000000000000000000000:256>>.
 
-encode_workunit(#workunit{data=Data}) ->
+encode_workunit(#workunit{data=Data}, MiningExtensions) ->
     HexData = ecoinpool_util:bin_to_hexbin(ecoinpool_util:endian_swap(Data)),
-    Midstate = ecoinpool_hash:sha256_midstate(Data),
-    {[
-        {<<"data">>, <<HexData/binary, "000000800000000000000000000000000000000000000000000000000000000000000000000000000000000080020000">>},
-        {<<"midstate">>, ecoinpool_util:bin_to_hexbin(Midstate)},
-        {<<"hash1">>, <<"00000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000010000">>},
-        {<<"target">>, <<"0000000000000000000000000000000000000000000000000000ffff00000000">>}
-    ]}.
+    case lists:member(midstate, MiningExtensions) of
+        true ->
+            {[
+                {<<"data">>, <<HexData/binary, "000000800000000000000000000000000000000000000000000000000000000000000000000000000000000080020000">>},
+                {<<"target">>, <<"0000000000000000000000000000000000000000000000000000ffff00000000">>}
+            ]};
+        _ ->
+            Midstate = ecoinpool_hash:sha256_midstate(Data),
+            {[
+                {<<"data">>, <<HexData/binary, "000000800000000000000000000000000000000000000000000000000000000000000000000000000000000080020000">>},
+                {<<"midstate">>, ecoinpool_util:bin_to_hexbin(Midstate)},
+                {<<"hash1">>, <<"00000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000010000">>},
+                {<<"target">>, <<"0000000000000000000000000000000000000000000000000000ffff00000000">>}
+            ]}
+    end.
 
 analyze_result([<<Data:160/bytes, _/binary>>]) ->
     case catch ecoinpool_util:hexbin_to_bin(Data) of

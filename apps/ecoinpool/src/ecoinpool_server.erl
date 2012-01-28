@@ -58,7 +58,7 @@
     hashtbl :: ets:tid(),
     workertbl :: ets:tid(),
     workerltbl :: ets:tid(),
-    lp_queue :: queue(),
+    lp_queue :: [{worker(), ecoinpool_rpc_request()}],
     work_checker :: timer:tref()
 }).
 
@@ -128,7 +128,7 @@ init([SubpoolId]) ->
     gen_server:cast(self(), {reload_config, Subpool}),
     % Create work check timer
     {ok, WorkChecker} = timer:send_interval(500, check_work_age), % Fixed to twice per second
-    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=queue:new(), work_checker=WorkChecker}}.
+    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[], work_checker=WorkChecker}}.
 
 handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
     % Returns the sub-pool IDs for which worker changes should be retrieved
@@ -276,7 +276,16 @@ handle_cast({rpc_request, Req}, State) ->
         workertbl=WorkerTbl,
         lp_queue=LPQueue
     } = State,
-    #subpool{id=SubpoolId, name=SubpoolName, max_cache_size=MaxCacheSize, max_work_age=MaxWorkAge, accept_workers=AcceptWorkers, lowercase_workers=LowercaseWorkers, ignore_passwords=IgnorePasswords, rollntime=RollNTime} = Subpool,
+    #subpool{
+        id=SubpoolId,
+        name=SubpoolName,
+        max_cache_size=MaxCacheSize,
+        max_work_age=MaxWorkAge,
+        accept_workers=AcceptWorkers,
+        lowercase_workers=LowercaseWorkers,
+        ignore_passwords=IgnorePasswords,
+        rollntime=RollNTime
+    } = Subpool,
     % Check the method and authentication
     case parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod, AcceptWorkers, LowercaseWorkers, IgnorePasswords) of
         {ok, Worker=#worker{name=WorkerName, lp_heartbeat=WithHeartbeat}, Action} ->
@@ -284,8 +293,8 @@ handle_cast({rpc_request, Req}, State) ->
             case Action of % Now match for the action
                 getwork when LP ->
                     log4erl:info(server, "~s: LP requested by ~s/~s", [SubpoolName, WorkerName, Req:get(ip)]),
-                    Req:start(WithHeartbeat),
-                    {noreply, State#state{lp_queue=queue:in({Worker, Req}, LPQueue)}};
+                    Req:start(WithHeartbeat, make_response_options(Worker, RollNTime, Req:get(mining_extensions))),
+                    {noreply, State#state{lp_queue=[{Worker, Req} | LPQueue]}};
                 getwork ->
                     {NewWorkQueue, NewWorkQueueSize} = assign_work(Req, SubpoolName, erlang:now(), MaxWorkAge, MaxCacheSize, RollNTime, Worker, WorkQueue, WorkQueueSize, WorkTbl, CoinDaemon),
                     if
@@ -322,16 +331,18 @@ handle_cast({new_block_detected, Chain}, State) ->
         hashtbl=HashTbl,
         lp_queue=LPQueue
     } = State,
-    log4erl:warn(server, "~s: --- New ~p block! Assigned: ~b; Shares: ~b; Cached: ~b; Longpolling: ~b ---", [SubpoolName, Chain, ets:info(WorkTbl, size), ets:info(HashTbl, size), WorkQueueSize, queue:len(LPQueue)]),
-    case Chain of
+    log4erl:warn(server, "~s: --- New ~p block! Assigned: ~b; Shares: ~b; Cached: ~b; Longpolling: ~b ---", [SubpoolName, Chain, ets:info(WorkTbl, size), ets:info(HashTbl, size), WorkQueueSize, length(LPQueue)]),
+    ReqSource = case Chain of
         main ->
             ets:delete_all_objects(WorkTbl), % Clear the work table
-            ets:delete_all_objects(HashTbl); % Clear the duplicate hashes table
+            ets:delete_all_objects(HashTbl), % Clear the duplicate hashes table
+            main_lp;
         aux ->
-            mark_aux_work_stale(WorkTbl, ets:first(WorkTbl)) % Mark all aux work as stale
+            mark_aux_work_stale(WorkTbl, ets:first(WorkTbl)), % Mark all aux work as stale
+            aux_lp
     end,
     % Check if LP are still valid
-    CheckedLPQueue = queue:filter(
+    CheckedLPQueue = lists:filter(
         fun ({#worker{name=WorkerName}, Req}) ->
             case Req:check() of
                 ok ->
@@ -343,25 +354,35 @@ handle_cast({new_block_detected, Chain}, State) ->
         end,
         LPQueue
     ),
-    % On an aux block, filter for users which care about it
+    % On an aux block, partition the list so users which don't care about it are not notified.
     {FilteredLPQueue, NewLPQueue} = case Chain of
         main ->
-            {CheckedLPQueue, queue:new()};
+            {CheckedLPQueue, []};
         aux ->
-            {
-                queue:filter(fun ({#worker{aux_lp=AuxLP}, _}) -> AuxLP end, CheckedLPQueue),
-                queue:filter(fun ({#worker{aux_lp=AuxLP}, _}) -> not AuxLP end, CheckedLPQueue)
-            }
+            lists:partition(fun ({#worker{aux_lp=AuxLP}, _}) -> AuxLP end, CheckedLPQueue)
     end,
-    {NewWorkQueue, NewWorkQueueSize} = case queue:is_empty(FilteredLPQueue) of
-        true when WorkQueueSize < 0 ->
-            {WorkQueue, WorkQueueSize};
-        true -> % And WorkQueueSize >= 0
-            {queue:new(), 0};
-        false when WorkQueueSize < 0 -> % Join with existing requests (LP has priority)
-            {queue:join(FilteredLPQueue, WorkQueue), WorkQueueSize - queue:len(FilteredLPQueue)};
-        false ->
-            {FilteredLPQueue, -queue:len(FilteredLPQueue)}
+    {NewWorkQueue, NewWorkQueueSize} = case FilteredLPQueue of
+        [] ->
+            % Empty LP queue -> only discard cache, if present
+            if
+                WorkQueueSize < 0 ->
+                    {WorkQueue, WorkQueueSize};
+                true ->
+                    {queue:new(), 0}
+            end;
+        _ ->
+            % Add the request source, reverse the list so order is correct and convert to a Erlang queue
+            LPWorkQueue = queue:from_list(lists:foldl(
+                fun ({Worker, Req}, Acc) -> [{Worker, Req, ReqSource} | Acc] end,
+                [],
+                FilteredLPQueue
+            )),
+            if
+                WorkQueueSize < 0 -> % Join with existing requests (LP has priority)
+                    {queue:join(LPWorkQueue, WorkQueue), WorkQueueSize - length(FilteredLPQueue)};
+                true ->
+                    {LPWorkQueue, -length(FilteredLPQueue)}
+            end
     end,
     if
         WorkQueueSize =:= MaxCacheSize, % Cache was max size
@@ -384,12 +405,27 @@ handle_cast({store_workunit, Workunit}, State) ->
     % Inspect the Cache/Queue
     {NewWorkQueue, NewWorkQueueSize} = if
         WorkQueueSize < 0 -> % We have connections waiting -> send out
-            {{value, {Worker=#worker{id=WorkerId}, Req}}, NWQ} = queue:out(WorkQueue),
+            {{value, {Worker=#worker{id=WorkerId}, Req, ReqSource}}, NWQ} = queue:out(WorkQueue),
             case ets:insert_new(WorkTbl, Workunit#workunit{worker_id=WorkerId}) of
                 false -> log4erl:error(server, "~s: store_workunit got a collision :/", [SubpoolName]);
                 _ -> ok
             end,
-            Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit, RollNTime)),
+            MiningExtensions = Req:get(mining_extensions),
+            EncWorkunit = CoinDaemon:encode_workunit(Workunit, MiningExtensions),
+            SendWorkunit = case lists:member(submitold, MiningExtensions) of
+                true ->
+                    case ReqSource of % Set submitold depending on the request source
+                        normal ->
+                            EncWorkunit;
+                        main_lp ->
+                            json_add_value(<<"submitold">>, false, EncWorkunit);
+                        aux_lp ->
+                            json_add_value(<<"submitold">>, true, EncWorkunit)
+                    end;
+                _ ->
+                    EncWorkunit
+            end,
+            Req:ok(SendWorkunit, make_response_options(Worker, Workunit, RollNTime, MiningExtensions)),
             {NWQ, WorkQueueSize+1};
         WorkQueueSize < MaxCacheSize -> % We are under the cache limit -> cache
             {queue:in(Workunit, WorkQueue), WorkQueueSize+1};
@@ -485,11 +521,10 @@ terminate(Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, wo
     % Stop the RPC
     ecoinpool_rpc:stop_rpc(Port),
     % Cancel open connections
-    Cancel = fun ({_, Req}) -> Req:error({-32603, <<"Server is terminating!">>}) end,
-    lists:foreach(Cancel, queue:to_list(LPQueue)),
+    lists:foreach(fun ({_, Req}) -> Req:error({-32603, <<"Server is terminating!">>}) end, LPQueue),
     if
         WorkQueueSize < 0 ->
-            lists:foreach(Cancel, queue:to_list(WorkQueue));
+            lists:foreach(fun ({_, Req, _}) -> Req:error({-32603, <<"Server is terminating!">>}) end, queue:to_list(WorkQueue));
         true ->
             ok
     end,
@@ -589,7 +624,8 @@ assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, RollNTime, Worker=#
                         false -> log4erl:error(server, "~s: assign_work got a collision :/", [SubpoolName]);
                         _ -> ok
                     end,
-                    Req:ok(CoinDaemon:encode_workunit(Workunit), make_response_options(Worker, Workunit, RollNTime)),
+                    MiningExtensions = Req:get(mining_extensions),
+                    Req:ok(CoinDaemon:encode_workunit(Workunit, MiningExtensions), make_response_options(Worker, Workunit, RollNTime, MiningExtensions)),
                     log4erl:info(server, "~s: Cache hit by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(ip), WorkQueueSize-1, MaxCacheSize]),
                     {NewWorkQueue, WorkQueueSize-1};
                 _ -> % Try again if too old (tail recursive)
@@ -598,7 +634,7 @@ assign_work(Req, SubpoolName, Now, MaxWorkAge, MaxCacheSize, RollNTime, Worker=#
             end;
         true -> % Cache miss, append to waiting queue
             log4erl:info(server, "~s: Cache miss by ~s/~s - Queue size: ~b/~b", [SubpoolName, WorkerName, Req:get(ip), WorkQueueSize-1, MaxCacheSize]),
-            {queue:in({Worker, Req}, WorkQueue), WorkQueueSize-1}
+            {queue:in({Worker, Req, normal}, WorkQueue), WorkQueueSize-1}
     end.
 
 check_work(Req, Subpool=#subpool{name=SubpoolName}, Worker=#worker{name=WorkerName}, WorkTbl, HashTbl, CoinDaemon, MMM, ShareTarget) ->
@@ -675,7 +711,7 @@ process_results(Req, Results, Subpool=#subpool{name=SubpoolName, rollntime=RollN
         Results 
     ),
     % Send reply
-    Options = make_response_options(Worker, RollNTime),
+    Options = make_response_options(Worker, RollNTime, Req:get(mining_extensions)),
     case RejectReason of
         undefined ->
             Req:ok(CoinDaemon:make_reply(ReplyItems), Options);
@@ -701,18 +737,23 @@ check_work_age(SubpoolName, WorkQueue, WorkQueueSize, Now, MaxWorkAge) ->
             {WorkQueue, WorkQueueSize} % Done
     end.
 
-make_response_options(#worker{lp=LP}, RollNTime) ->
+make_response_options(#worker{lp=LP}, RollNTime, MiningExtensions) ->
     Options = if
-        RollNTime -> [rollntime];
-        true -> []
+        RollNTime ->
+            case lists:member(rollntime, MiningExtensions) of
+                true -> [rollntime];
+                _ -> []
+            end;
+        true ->
+            []
     end,
     case LP of
         true -> [longpolling | Options];
         _ -> Options
     end.
 
-make_response_options(Worker, #workunit{block_num=BlockNum}, RollNTime) ->
-    [{block_num, BlockNum} | make_response_options(Worker, RollNTime)].
+make_response_options(Worker, #workunit{block_num=BlockNum}, RollNTime, MiningExtensions) ->
+    [{block_num, BlockNum} | make_response_options(Worker, RollNTime, MiningExtensions)].
 
 check_new_round(_, []) ->
     ok;
@@ -834,3 +875,6 @@ mark_aux_work_stale(WorkTbl, Key) ->
 
 binary_to_lower(B) ->
     list_to_binary(string:to_lower(binary_to_list(B))).
+
+json_add_value(Key, Value, {ObjProps}) ->
+    {[{Key, Value} | ObjProps]}.

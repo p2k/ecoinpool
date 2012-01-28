@@ -47,10 +47,12 @@ behaviour_info(callbacks) ->
         %   in big endian (static).
         {share_target, 0},
         
-        % encode_workunit(Workunit)
+        % encode_workunit(Workunit, MiningExtensions)
         %   Encodes a workunit so it can be sent as result to a getwork call.
-        %   Should return a ejson-encodeable object.
-        {encode_workunit, 1},
+        %   Should return a ejson-encodeable object. MiningExtensions is a list
+        %   of extensions the miner sent; you can use this to optimize your
+        %   results.
+        {encode_workunit, 2},
         
         % analyze_result(Result)
         %   Should return a list of tuples {WorkunitId, Hash, BData} from result

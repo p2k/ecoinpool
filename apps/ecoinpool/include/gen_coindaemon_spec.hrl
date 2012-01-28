@@ -32,7 +32,7 @@
 -spec share_target() ->
     binary().
 
--spec encode_workunit(Workunit :: workunit()) ->
+-spec encode_workunit(Workunit :: workunit(), MiningExtensions :: [mining_extension()]) ->
     term().
 
 -spec analyze_result(Result :: [term()]) ->

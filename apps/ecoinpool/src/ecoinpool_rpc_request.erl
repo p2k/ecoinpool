@@ -18,9 +18,9 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
--module(ecoinpool_rpc_request, [ReqPID, Peer, Method, Params, Auth, LP]).
+-module(ecoinpool_rpc_request, [ReqPID, Peer, Method, Params, Auth, MiningExtensions, LP]).
 
--export([get/1, has_params/0, check/0, start/1, ok/2, error/1]).
+-export([get/1, has_params/0, check/0, start/2, ok/2, error/1]).
 
 get(peer) ->
     Peer;
@@ -34,6 +34,8 @@ get(params) ->
     Params;
 get(auth) ->
     Auth;
+get(mining_extensions) ->
+    MiningExtensions;
 get(lp) ->
     LP.
 
@@ -50,8 +52,8 @@ check() ->
         _ -> ok
     end.
 
-start(WithHeartbeat) ->
-    ReqPID ! {start, WithHeartbeat}, ok.
+start(WithHeartbeat, Options) ->
+    ReqPID ! {start, WithHeartbeat, Options}, ok.
 
 ok(Result, Options) ->
     ReqPID ! {ok, Result, Options}, ok.

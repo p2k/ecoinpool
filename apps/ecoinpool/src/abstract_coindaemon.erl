@@ -29,7 +29,7 @@
     getwork_method/0,
     sendwork_method/0,
     share_target/0,
-    encode_workunit/1,
+    encode_workunit/2,
     analyze_result/1,
     make_reply/1,
     set_mmm/1,
@@ -49,8 +49,8 @@ sendwork_method() ->
 share_target() ->
     M:share_target().
 
-encode_workunit(Workunit) ->
-    M:encode_workunit(Workunit).
+encode_workunit(Workunit, MiningExtensions) ->
+    M:encode_workunit(Workunit, MiningExtensions).
 
 analyze_result(Result) ->
     M:analyze_result(Result).
