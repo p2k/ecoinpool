@@ -13,6 +13,7 @@ apps/ecoinpool/priv/server_id.txt
 deps/
 ebin/
 scrapped/
+storage/
 
 .sass-cache
 site/build

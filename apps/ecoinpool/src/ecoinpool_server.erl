@@ -113,14 +113,15 @@ init([SubpoolId]) ->
     process_flag(trap_exit, true),
     % Get Subpool record; terminate on error
     {ok, Subpool} = ecoinpool_db:get_subpool_record(SubpoolId),
-    % Check if crash recovery is in effect
-    {WorkTbl, HashTbl} = case ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, worktbl}) of
-        ok ->
-            ecoinpool_sup:crash_transfer_ets({?MODULE, SubpoolId, hashtbl}),
-            {undefined, undefined};
-        error ->
-            {ets:new(worktbl, [set, protected, {keypos, #workunit.id}]),
-            ets:new(hashtbl, [set, protected])}
+    % Load work and hashes table
+    StorageDir = ecoinpool_util:server_storage_dir(SubpoolId),
+    WorkTbl = case ets:file2tab(binary_to_list(filename:join(StorageDir, "worktbl.ets")), [{verify, true}]) of
+        {ok, Tab1} -> Tab1;
+        {error, _} -> ets:new(worktbl, [set, protected, {keypos, #workunit.id}])
+    end,
+    HashTbl = case ets:file2tab(binary_to_list(filename:join(StorageDir, "hashtbl.ets")), [{verify, true}]) of
+        {ok, Tab2} -> Tab2;
+        {error, _} -> ets:new(hashtbl, [set, protected])
     end,
     WorkerTbl = ets:new(workertbl, [set, protected, {keypos, #worker.name}]),
     WorkerLookupTbl = ets:new(workerltbl, [set, protected]),
@@ -498,26 +499,14 @@ handle_info(check_work_age, State) ->
     end,
     {noreply, State#state{workq=NewWorkQueue, workq_size=NewWorkQueueSize}};
 
-handle_info({'ETS-TRANSFER', WorkTbl, _FromPid, {?MODULE, SubpoolId, worktbl}}, State=#state{subpool=#subpool{id=SubpoolId}}) ->
-    {noreply, State#state{worktbl=WorkTbl}};
-
-handle_info({'ETS-TRANSFER', HashTbl, _FromPid, {?MODULE, SubpoolId, hashtbl}}, State=#state{subpool=#subpool{id=SubpoolId}}) ->
-    {noreply, State#state{hashtbl=HashTbl}};
-
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue, work_checker=WorkChecker}) ->
-    % Check for crashes
-    case Reason of
-        normal -> ok;
-        shutdown -> ok;
-        {shutdown, _} -> ok;
-        _ ->
-            CrashRepoPid = ecoinpool_sup:crash_repo_pid(),
-            ets:give_away(WorkTbl, CrashRepoPid, {?MODULE, Id, worktbl}),
-            ets:give_away(HashTbl, CrashRepoPid, {?MODULE, Id, hashtbl})
-    end,
+terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue, work_checker=WorkChecker}) ->
+    % Store work and hashes table
+    StorageDir = ecoinpool_util:server_storage_dir(Id),
+    ets:tab2file(WorkTbl, binary_to_list(filename:join(StorageDir, "worktbl.ets")), [{extended_info, [object_count]}]),
+    ets:tab2file(HashTbl, binary_to_list(filename:join(StorageDir, "hashtbl.ets")), [{extended_info, [object_count]}]),
     % Stop the RPC
     ecoinpool_rpc:stop_rpc(Port),
     % Cancel open connections

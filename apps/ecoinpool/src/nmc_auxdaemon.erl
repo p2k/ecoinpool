@@ -22,8 +22,9 @@
 -behaviour(gen_auxdaemon).
 -behaviour(gen_server).
 
--include("../ebitcoin/include/btc_protocol_records.hrl").
 -include("ecoinpool_workunit.hrl").
+-include("btc_daemon_util.hrl").
+-include("../ebitcoin/include/btc_protocol_records.hrl").
 
 -export([start_link/2, get_aux_work/1, send_aux_pow/3]).
 
@@ -32,15 +33,21 @@
 % Internal state record
 -record(state, {
     subpool,
+    pool_type,
     url,
     auth,
+    tag,
+    coinbaser_config,
     
     ebtc_id,
+    txtbl,
+    worktbl,
     block_num,
-    prev_block,
-    
     last_fetch,
-    auxblock_data
+    
+    memorypool,
+    
+    aux_work
 }).
 
 %% ===================================================================
@@ -62,64 +69,60 @@ send_aux_pow(PID, AuxHash, AuxPOW) ->
 
 init([SubpoolId, Config]) ->
     process_flag(trap_exit, true),
-    log4erl:warn(daemon, "NMC AuxDaemon starting..."),
+    PoolType = proplists:get_value(pool_type, Config),
+    log4erl:warn(daemon, "Bitcoin-~p AuxDaemon starting...", [PoolType]),
     
-    Host = binary:bin_to_list(proplists:get_value(host, Config, <<"localhost">>)),
-    Port = proplists:get_value(port, Config, 8335),
-    URL = lists:flatten(io_lib:format("http://~s:~b/", [Host, Port])),
-    User = binary:bin_to_list(proplists:get_value(user, Config, <<"user">>)),
-    Pass = binary:bin_to_list(ecoinpool_util:parse_json_password(proplists:get_value(pass, Config, <<"pass">>))),
+    {URL, Auth, CoinbaserConfig, FullTag, EBtcId} = btc_daemon_util:parse_config(Config, 8335),
     
-    EBtcId = case proplists:get_value(ebitcoin_client_id, Config) of
-        undefined ->
-            {ok, _} = timer:send_interval(200, poll_daemon), % Always poll 5 times per second
-            undefined;
-        Id ->
-            ebitcoin_client:add_blockchange_listener(Id, self()),
-            Id
-    end,
+    {StoredState, TxTbl, WorkTbl} = btc_daemon_util:load_or_create_state(SubpoolId, PoolType, true),
+    State = state_from_stored_state(StoredState),
+    
+    btc_daemon_util:setup_blockchange_listener(EBtcId),
     
     ecoinpool_server:auxdaemon_ready(SubpoolId, ?MODULE, self()),
     
-    {ok, #state{subpool=SubpoolId, url=URL, auth={User, Pass}, ebtc_id=EBtcId}}.
+    {ok, State#state{subpool=SubpoolId, pool_type=PoolType, url=URL, auth=Auth, tag=FullTag, coinbaser_config=CoinbaserConfig, ebtc_id=EBtcId, txtbl=TxTbl, worktbl=WorkTbl}}.
 
 handle_call(get_aux_work, _From, OldState) ->
     % Check if a new block must be fetched
     State = fetch_block_with_state(OldState),
-    % Extract state variables
-    #state{block_num=BlockNum, prev_block=PrevBlock, auxblock_data=AuxblockData} = State,
     % Send reply
-    case AuxblockData of
-        {AuxHash, Target, ChainId} ->
-            {reply, #auxwork{aux_hash=AuxHash, target=Target, chain_id=ChainId, block_num=BlockNum, prev_block=PrevBlock}, State};
+    case State#state.aux_work of
         undefined ->
-            {reply, {error, <<"aux block could not be created">>}, State}
+            {reply, {error, <<"aux block could not be created">>}, State};
+        Auxwork ->
+            {reply, Auxwork, State}
     end;
 
-handle_call({send_aux_pow, AuxHash, AuxPOW}, _From, State=#state{url=URL, auth=Auth}) ->
+handle_call({send_aux_pow, AuxHash, AuxPOW}, _From, State=#state{url=URL, auth=Auth, worktbl=WorkTbl, txtbl=TxTbl}) ->
     try
-        {reply, do_send_aux_pow(URL, Auth, AuxHash, AuxPOW), State}
+        {reply, btc_daemon_util:send_aux_result(AuxHash, AuxPOW, URL, Auth, WorkTbl, TxTbl), State}
     catch error:_ ->
-        {reply, {error, <<"exception in nmc_auxdaemon:do_send_aux_pow/4">>}, State}
+        {reply, {error, <<"exception in btc_daemon_util:send_aux_result/6">>}, State}
     end;
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
-handle_cast({ebitcoin_blockchange, _, PrevBlock, BlockNum}, State) ->
-    {noreply, fetch_block_with_state(State#state{block_num={pushed, BlockNum + 1}, prev_block=PrevBlock})};
+handle_cast({ebitcoin_blockchange, _, _, BlockNum}, State) ->
+    {noreply, fetch_block_with_state(State#state{block_num={pushed, BlockNum + 1}})};
 
 handle_cast(_Message, State) ->
     {noreply, State}.
 
 handle_info(poll_daemon, State) ->
+    btc_daemon_util:flush_poll_daemon(),
     {noreply, fetch_block_with_state(State)};
 
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{}) ->
-    log4erl:warn(daemon, "NMC AuxDaemon terminated."),
+terminate(_Reason, State=#state{subpool=SubpoolId, pool_type=PoolType, txtbl=TxTbl, worktbl=WorkTbl}) ->
+    % Store the last state
+    StoredState = state_to_stored_state(State),
+    btc_daemon_util:store_state(StoredState, SubpoolId, PoolType, TxTbl, WorkTbl, true),
+    
+    log4erl:warn(daemon, "Bitcoin-~p AuxDaemon terminated.", [PoolType]),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
@@ -129,105 +132,30 @@ code_change(_OldVersion, State, _Extra) ->
 %% Other functions
 %% ===================================================================
 
-get_block_number(URL, Auth) ->
-    {ok, "200", _ResponseHeaders, ResponseBody} = ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getblocknumber\"}"),
-    {Body} = ejson:decode(ResponseBody),
-    proplists:get_value(<<"result">>, Body) + 1.
+fetch_block_with_state(State) ->
+    #state{
+        subpool=SubpoolId,
+        url=URL,
+        auth=Auth,
+        tag=Tag,
+        coinbaser_config=CoinbaserConfig,
+        block_num=OldBlockNum,
+        last_fetch=LastFetch,
+        ebtc_id=EBtcId,
+        txtbl=TxTbl,
+        worktbl=WorkTbl,
+        memorypool=OldMemorypool,
+        aux_work=OldAuxWork
+    } = State,
+    {BlockNum, Now, Memorypool, NewAuxWork} = btc_daemon_util:fetch_work(SubpoolId, URL, Auth, EBtcId, OldBlockNum, LastFetch, TxTbl, WorkTbl, OldMemorypool, OldAuxWork, ?MODULE),
+    AuxWork = case NewAuxWork of
+        undefined -> btc_daemon_util:make_auxwork(BlockNum, Memorypool, Tag, CoinbaserConfig, WorkTbl, fun ecoinpool_hash:dsha256_hash/1);
+        _ -> NewAuxWork
+    end,
+    State#state{block_num=BlockNum, last_fetch=Now, memorypool=Memorypool, aux_work=AuxWork}.
 
-do_get_aux_block(URL, Auth) ->
-    {ok, "200", _ResponseHeaders, ResponseBody} = ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getauxblock\"}"),
-    {Body} = ejson:decode(ResponseBody),
-    {Result} = proplists:get_value(<<"result">>, Body),
-    
-    Target = ecoinpool_util:byte_reverse(ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"target">>, Result))),
-    AuxHash = ecoinpool_util:byte_reverse(ecoinpool_util:hexbin_to_bin(proplists:get_value(<<"hash">>, Result))),
-    ChainId = proplists:get_value(<<"chainid">>, Result),
-    
-    {AuxHash, Target, ChainId}.
+state_from_stored_state(#stored_state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, aux_work=AuxWork}) ->
+    #state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, aux_work=AuxWork}.
 
-check_fetch_now(_, #state{last_fetch=undefined}) ->
-    {true, starting};
-check_fetch_now(_, #state{block_num=undefined}) ->
-    {true, starting};
-check_fetch_now(Now, #state{ebtc_id=EBtcId, block_num=BlockNum, last_fetch=LastFetch}) when is_binary(EBtcId) -> % Non-polling
-    case BlockNum of
-        {pushed, NewBlockNum} ->
-            {true, {new_block, NewBlockNum}};
-        _ ->
-            case timer:now_diff(Now, LastFetch) of
-                Diff when Diff > 15000000 -> % Force data fetch every 15s
-                    {true, timeout};
-                _ ->
-                    false
-            end
-    end;
-check_fetch_now(Now, #state{url=URL, auth=Auth, block_num=BlockNum, last_fetch=LastFetch}) -> % Polling
-    case timer:now_diff(Now, LastFetch) of
-        Diff when Diff < 200000 -> % Prevent rpc call if less than 200ms passed
-            false;
-        Diff when Diff > 15000000 -> % Force data fetch every 15s
-            {true, timeout};
-        _ ->
-            try
-                case get_block_number(URL, Auth) of
-                    BlockNum ->
-                        false;
-                    NewBlockNum ->
-                        {true, {new_block, NewBlockNum}}
-                end
-            catch error:_ ->
-                {true, error}
-            end
-    end.
-
-fetch_block_with_state(State=#state{subpool=SubpoolId, url=URL, auth=Auth, ebtc_id=EBtcId}) ->
-    Now = erlang:now(),
-    case check_fetch_now(Now, State) of
-        false ->
-            State;
-        {true, Reason} ->
-            case Reason of
-                {new_block, _} ->
-                    ecoinpool_server:new_aux_block_detected(SubpoolId, ?MODULE);
-                _ ->
-                    ok
-            end,
-            
-            AuxblockData = do_get_aux_block(URL, Auth),
-            
-            case Reason of
-                {new_block, BlockNum} ->
-                    State#state{block_num=BlockNum, last_fetch=Now, auxblock_data=AuxblockData};
-                starting ->
-                    TheBlockNum = case EBtcId of
-                        undefined ->
-                            get_block_number(URL, Auth);
-                        _ ->
-                            ebitcoin_client:last_block_num(EBtcId)
-                    end,
-                    State#state{block_num=TheBlockNum, last_fetch=Now, auxblock_data=AuxblockData};
-                _ ->
-                    State#state{last_fetch=Now, auxblock_data=AuxblockData}
-            end
-    end.
-
-do_send_aux_pow(URL, Auth, <<AuxHash:256/big>>, AuxPOW) ->
-    BData = btc_protocol:encode_auxpow(AuxPOW),
-    HexHash = ecoinpool_util:list_to_hexstr(binary:bin_to_list(<<AuxHash:256/little>>)),
-    HexData = ecoinpool_util:list_to_hexstr(binary:bin_to_list(BData)),
-    PostData = "{\"method\":\"getauxblock\",\"params\":[\"" ++ HexHash ++ "\",\"" ++ HexData ++ "\"]}",
-    log4erl:debug(daemon, "nmc_auxdaemon: Sending upstream: ~s", [PostData]),
-    case ecoinpool_util:send_http_req(URL, Auth, PostData) of
-        {ok, "200", _ResponseHeaders, ResponseBody} ->
-            {Body} = ejson:decode(ResponseBody),
-            case proplists:get_value(<<"result">>, Body) of
-                true ->
-                    accepted;
-                _ ->
-                    rejected
-            end;
-        {ok, Status, _ResponseHeaders, ResponseBody} ->
-            {error, binary:list_to_bin(io_lib:format("do_send_aux_pow: Received HTTP ~s - Body: ~p", [Status, ResponseBody]))};
-        {error, Reason} ->
-            {error, Reason}
-    end.
+state_to_stored_state(#state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, aux_work=AuxWork}) ->
+    #stored_state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, aux_work=AuxWork}.

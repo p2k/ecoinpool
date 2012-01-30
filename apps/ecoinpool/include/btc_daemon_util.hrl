@@ -18,12 +18,20 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
-{application, ecoinpool,
- [
-  {description, "A pool mining software for cryptographic currencies"},
-  {vsn, "0.3.16"},
-  {registered, [ecoinpool_app]},
-  {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, mysql, epgsql, couchbeam, ebitcoin]},
-  {mod, {ecoinpool_app, []}},
-  {env, [{db_host, "localhost"}, {db_port, 5984}, {db_prefix, ""}, {db_options, []}]}
- ]}.
+-record(stored_state, {
+    block_num,
+    last_fetch,
+    memorypool,
+    coinbase_tx,
+    aux_work
+}).
+
+-record(memorypool, {
+    version,
+    hash_prev_block,
+    timestamp,
+    bits,
+    tx_index,
+    first_tree_branches,
+    coinbase_value
+}).

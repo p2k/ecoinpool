@@ -390,7 +390,6 @@ longpolling_loop(ReqId, Resp, WithHeartbeat, Socket) ->
                 Resp:write_chunk(<<10>>),
                 longpolling_loop(ReqId, Resp, WithHeartbeat, Socket);
             true ->
-                Req = Resp:get(request),
                 mochiweb_socket:close(Socket)
         end
     end.

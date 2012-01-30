@@ -45,7 +45,10 @@
     parse_json_password/1,
     parse_json_password/2,
     make_json_password/2,
-    make_json_password/3
+    make_json_password/3,
+    
+    daemon_storage_dir/2,
+    server_storage_dir/1
 ]).
 
 -on_load(module_init/0).
@@ -223,3 +226,21 @@ make_json_password(Key, Plain, Seed) ->
         {<<"c">>, base64:encode(Cipher)},
         {<<"i">>, base64:encode(IVec)}
     ]}.
+
+daemon_storage_dir(SubpoolId, DaemonName) ->
+    Dirname = filename:join(["storage", SubpoolId, DaemonName]),
+    ok = filelib:ensure_dir(Dirname),
+    ok = case filelib:is_dir(Dirname) of
+        true -> ok;
+        _ -> file:make_dir(Dirname)
+    end,
+    Dirname.
+
+server_storage_dir(SubpoolId) ->
+    Dirname = filename:join(["storage", SubpoolId, "server"]),
+    ok = filelib:ensure_dir(Dirname),
+    ok = case filelib:is_dir(Dirname) of
+        true -> ok;
+        _ -> file:make_dir(Dirname)
+    end,
+    Dirname.
