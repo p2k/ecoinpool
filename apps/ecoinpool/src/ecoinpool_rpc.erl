@@ -119,6 +119,9 @@ send_greeting() ->
         "You have reached one of the coin mining ports meant to be used with coin ",
         "mining software; consult the mining pool's homepage on how to setup a miner.">>, []}.
 
+send_test_notice() ->
+    self() ! {ok, <<"Yes, the server is online! So the problem is either your miner, your ISP or sitting between chair and keyboard.">>, []}.
+
 compose_success(ReqId, Result) ->
     Body = ejson:encode(
         {[
@@ -189,6 +192,7 @@ parse_method(<<"sc_testwork">>) -> sc_testwork;
 parse_method(<<"setup_user">>) -> setup_user;
 
 parse_method(<<"">>) -> none;
+parse_method(<<"test">>) -> test;
 parse_method(Other) when is_binary(Other) -> unknown;
 parse_method(_) -> invalid.
 
@@ -226,6 +230,8 @@ handle_form_request(SubpoolPID, Req, Auth, Properties, MiningExtensions, LP) ->
             case parse_method(list_to_binary(proplists:get_value("method", Properties, ""))) of
                 none ->
                     send_greeting();
+                test ->
+                    send_test_notice();
                 unknown ->
                     self() ! {error, method_not_found};
                 invalid ->
@@ -254,6 +260,8 @@ handle_post(SubpoolPID, Req, Auth, MiningExtensions, LP) ->
                         case parse_method(proplists:get_value(<<"method">>, Properties)) of
                             none ->
                                 send_greeting();
+                            test ->
+                                send_test_notice();
                             unknown ->
                                 self() ! {error, method_not_found};
                             invalid ->
