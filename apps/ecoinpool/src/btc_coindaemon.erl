@@ -207,8 +207,8 @@ fetch_work_with_state(State) ->
     AuxWork = btc_daemon_util:fetch_aux_work(MMM, OldAuxWork),
     State#state{block_num=BlockNum, last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}.
 
-state_from_stored_state(#stored_state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}) ->
-    #state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}.
+state_from_stored_state(#stored_state{block_num=BlockNum, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}) ->
+    #state{block_num=BlockNum, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}.
 
-state_to_stored_state(#state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}) ->
-    #stored_state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}.
+state_to_stored_state(#state{block_num=BlockNum, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}) ->
+    #stored_state{block_num=BlockNum, memorypool=Memorypool, coinbase_tx=CoinbaseTx, aux_work=AuxWork}.

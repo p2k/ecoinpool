@@ -121,9 +121,6 @@ store_state(StoredState, SubpoolId, PoolType, TxTbl, WorkTbl, AuxDaemon) ->
 send_result(BData, URL, Auth, WorkTbl, TxTbl) when is_binary(BData) ->
     {Header, <<>>} = btc_protocol:decode_header(BData),
     WorkunitId = workunit_id_from_btc_header(Header),
-    send_result(WorkunitId, Header, URL, Auth, WorkTbl, TxTbl).
-
-send_result(WorkunitId, Header=#btc_header{}, URL, Auth, WorkTbl, TxTbl) ->
     case ets:lookup(WorkTbl, WorkunitId) of
         [{_, CoinbaseTx, TxIndex, _}] ->
             [{_, Transactions}] = ets:lookup(TxTbl, TxIndex),
@@ -328,10 +325,19 @@ fetch_work(SubpoolId, URL, Auth, EBtcId, OldBlockNum, LastFetch, TxTbl, WorkTbl,
                     {BlockNum, Now, Memorypool, CoinbaseTx};
                 starting ->
                     TheBlockNum = case EBtcId of
-                        undefined ->
-                            get_block_number(URL, Auth);
-                        _ ->
-                            ebitcoin_client:last_block_num(EBtcId)
+                        undefined -> get_block_number(URL, Auth);
+                        _ -> ebitcoin_client:last_block_num(EBtcId)
+                    end,
+                    if
+                        TheBlockNum =/= OldBlockNum -> % Post get_memory_pool blockchange on startup
+                            case AuxDaemonModule of
+                                undefined -> ecoinpool_server:new_block_detected(SubpoolId);
+                                _ -> ecoinpool_server:new_aux_block_detected(SubpoolId, AuxDaemonModule)
+                            end,
+                            ets:delete_all_objects(WorkTbl),
+                            ets:delete_all_objects(TxTbl);
+                        true ->
+                            ok
                     end,
                     {TheBlockNum, Now, Memorypool, CoinbaseTx};
                 _ ->

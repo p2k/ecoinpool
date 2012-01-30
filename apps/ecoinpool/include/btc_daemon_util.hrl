@@ -20,7 +20,6 @@
 
 -record(stored_state, {
     block_num,
-    last_fetch,
     memorypool,
     coinbase_tx,
     aux_work

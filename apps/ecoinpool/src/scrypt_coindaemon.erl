@@ -203,11 +203,11 @@ fetch_work_with_state(State) ->
     {BlockNum, Now, Memorypool, CoinbaseTx} = btc_daemon_util:fetch_work(SubpoolId, URL, Auth, EBtcId, OldBlockNum, LastFetch, TxTbl, WorkTbl, OldMemorypool, OldCoinbaseTx, undefined),
     State#state{block_num=BlockNum, last_fetch=Now, memorypool=Memorypool, coinbase_tx=CoinbaseTx}.
 
-state_from_stored_state(#stored_state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, coinbase_tx=CoinbaseTx}) ->
-    #state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, coinbase_tx=CoinbaseTx}.
+state_from_stored_state(#stored_state{block_num=BlockNum, memorypool=Memorypool, coinbase_tx=CoinbaseTx}) ->
+    #state{block_num=BlockNum, memorypool=Memorypool, coinbase_tx=CoinbaseTx}.
 
-state_to_stored_state(#state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, coinbase_tx=CoinbaseTx}) ->
-    #stored_state{block_num=BlockNum, last_fetch=LastFetch, memorypool=Memorypool, coinbase_tx=CoinbaseTx}.
+state_to_stored_state(#state{block_num=BlockNum, memorypool=Memorypool, coinbase_tx=CoinbaseTx}) ->
+    #stored_state{block_num=BlockNum, memorypool=Memorypool, coinbase_tx=CoinbaseTx}.
 
 -ifdef(TEST).
 
