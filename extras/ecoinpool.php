@@ -1,5 +1,7 @@
 <?php
 
+// Short note: you need mcrypt for encryption support
+
 class EcoinpoolClient
 {
     private $db_auth = false;
@@ -10,6 +12,7 @@ class EcoinpoolClient
     private $sub_pool_cache;
     
     public $default_sub_pool_id = NULL; // You may change this
+    public $blowfish_secret = NULL; // You may change this too
     
     public function __construct($db_user = false, $db_pass = false, $db_host = "localhost", $db_port = 5984, $db_prefix = "")
     {
@@ -197,12 +200,32 @@ class EcoinpoolClient
         return $sub_pool;
     }
     
-    const WORKER_FIELDS_FILTER = "@_id@_rev@type@name@user_id@sub_pool_id@";
+    const WORKER_FIELDS_FILTER = "@_id@_rev@type@name@pass@user_id@sub_pool_id@";
     private function unserializeWorker($worker_doc)
     {
         $worker = new EcoinpoolWorker($worker_doc->user_id, $worker_doc->name, $worker_doc->sub_pool_id);
         $worker->id = $worker_doc->_id;
         $worker->_rev = $worker_doc->_rev;
+        if (property_exists($worker_doc, "pass")) {
+            if (is_object($worker_doc->pass)) {
+                if ($this->blowfish_secret !== NULL) {
+                    $ivec = base64_decode($worker_doc->pass->i, true);
+                    $cipher = base64_decode($worker_doc->pass->c, true);
+                    $mcrypt = mcrypt_module_open(MCRYPT_BLOWFISH, '', MCRYPT_MODE_CBC, '');
+                    if (mcrypt_generic_init($mcrypt, $this->blowfish_secret, $ivec) != -1) {
+                        $decrypted = mdecrypt_generic($mcrypt, $cipher);
+                        mcrypt_generic_deinit($mcrypt);
+                        preg_match("/\\0+$/", $decrypted, $matches, PREG_OFFSET_CAPTURE);
+                        if (count($matches) == 1)
+                            $worker->pass = substr($decrypted, 0, $matches[0][1]);
+                        else
+                            $worker->pass = $decrypted;
+                    }
+                }
+            }
+            else
+                $worker->pass = $worker_doc->pass;
+        }
         foreach ($worker_doc as $prop_name => $prop_value) {
             if (strpos(self::WORKER_FIELDS_FILTER, "@$prop_name@") === false)
                 $worker->other->$prop_name = $prop_value;
@@ -220,6 +243,21 @@ class EcoinpoolClient
         $worker_doc->user_id = $worker->user_id;
         $worker_doc->name = $worker->name;
         $worker_doc->sub_pool_id = $worker->sub_pool_id;
+        if ($worker->pass !== NULL) {
+            if ($this->blowfish_secret !== NULL) {
+                $ivec = substr(sha1($worker->name, true), 0, 8);
+                $mcrypt = mcrypt_module_open(MCRYPT_BLOWFISH, '', MCRYPT_MODE_CBC, '');
+                if (mcrypt_generic_init($mcrypt, $this->blowfish_secret, $ivec) != -1) {
+                    $cipher = mcrypt_generic($mcrypt, $worker->pass);
+                    mcrypt_generic_deinit($mcrypt);
+                    $worker_doc->pass = new stdClass();
+                    $worker_doc->pass->c = base64_encode($cipher);
+                    $worker_doc->pass->i = base64_encode($ivec);
+                }
+            }
+            else
+                $worker_doc->pass = $worker->pass;
+        }
         foreach ($worker->other as $prop_name => $prop_value) {
             $worker_doc->$prop_name = $prop_value;
         }
@@ -247,16 +285,10 @@ class EcoinpoolClient
         return $sub_pool_doc;
     }
     
-    private function dbNameWithPrefix($db_name)
-    {
-        return $this->db_prefix . $db_name;
-    }
-    
     // Public for experimenting; should be private
     public function getView($db_name, $view_id, $view_name, $start_key = NULL, $end_key = NULL, $include_docs = false, $group_level = NULL)
     {
-        $db_name = $this->dbNameWithPrefix($db_name);
-        $url = "/$db_name/_design/$view_id/_view/$view_name";
+        $url = $this->db_prefix . "/$db_name/_design/$view_id/_view/$view_name";
         $query = array();
         if ($start_key !== NULL)
             $query["start_key"] = json_encode($start_key);
@@ -279,8 +311,7 @@ class EcoinpoolClient
     // Public for experimenting; should be private
     public function getViewMultiKey($db_name, $view_id, $view_name, $keys, $include_docs = false, $group = false)
     {
-        $db_name = $this->dbNameWithPrefix($db_name);
-        $url = "/$db_name/_design/$view_id/_view/$view_name";
+        $url = $this->db_prefix . "/$db_name/_design/$view_id/_view/$view_name";
         $query = array("keys" => json_encode($keys));
         if ($include_docs)
             $query["include_docs"] = "true";
@@ -298,8 +329,7 @@ class EcoinpoolClient
     // Public for experimenting; should be private
     public function getDocument($db_name, $doc_id)
     {
-        $db_name = $this->dbNameWithPrefix($db_name);
-        list($status, $reason, $headers, $doc) = $this->sendJSONRequest("GET", "/$db_name/$doc_id");
+        list($status, $reason, $headers, $doc) = $this->sendJSONRequest("GET", $this->db_prefix . "/$db_name/$doc_id");
         if ($status != 200)
             throw new Exception("getDocument: $status $reason");
         
@@ -312,8 +342,7 @@ class EcoinpoolClient
         if ($doc->_id === NULL) // Create new document?
             $doc->_id = $this->getUUID();
         
-        $db_name = $this->dbNameWithPrefix($db_name);
-        list($status, $reason, $headers, $ret) = $this->sendJSONRequest("PUT", "/$db_name/$doc->_id", $doc);
+        list($status, $reason, $headers, $ret) = $this->sendJSONRequest("PUT", $this->db_prefix . "/$db_name/$doc->_id", $doc);
         if ($status != 200 && $status != 201)
             throw new Exception("putDocument: $status $reason");
         
@@ -325,8 +354,7 @@ class EcoinpoolClient
     // Public for experimenting; should be private
     public function deleteDocument($db_name, $doc_id, $doc_rev)
     {
-        $db_name = $this->dbNameWithPrefix($db_name);
-        list($status, $reason, $headers, $ret) = $this->sendJSONRequest("DELETE", "/$db_name/$doc_id?rev=$doc_rev");
+        list($status, $reason, $headers, $ret) = $this->sendJSONRequest("DELETE", $this->db_prefix . "/$db_name/$doc_id?rev=$doc_rev");
         if ($status != 200)
             throw new Exception("deleteDocument: $status $reason");
     }
@@ -464,6 +492,34 @@ class EcoinpoolWorker
         $this->other->lp = $enabled;
     }
     
+    public function longpollingHeartbeat()
+    {
+        $enabled = $this->other->lp_heartbeat;
+        if ($enabled === NULL)
+            return true;
+        else
+            return $enabled;
+    }
+    
+    public function setLongpollingHeartbeat($enabled)
+    {
+        $this->other->lp_heartbeat = $enabled;
+    }
+    
+    public function auxLongpolling()
+    {
+        $enabled = $this->other->aux_lp;
+        if ($enabled === NULL)
+            return true;
+        else
+            return $enabled;
+    }
+    
+    public function setAuxLongpolling($enabled)
+    {
+        $this->other->aux_lp = $enabled;
+    }
+    
     public function allValidShares()
     {
         return $this->shares->valid + $this->shares->candidate;
@@ -480,6 +536,7 @@ class EcoinpoolWorker
 class EcoinpoolSubPool
 {
     public $name;
+    public $pass = NULL;
     public $pool_type;
     public $port;
     public $coin_daemon;
@@ -500,10 +557,14 @@ class EcoinpoolSubPool
     
     public function hashspeedFromSharespeed($shares_per_second)
     {
-        if ($this->pool_type == "sc")
-            return $shares_per_second * 131072;
-        else
-            return $shares_per_second * 4294967296;
+        switch ($this->pool_type) {
+            case "sc":
+            case "ltc":
+            case "fbx":
+                return $shares_per_second * 131072;
+            default:
+                return $shares_per_second * 4294967296;
+        }
     }
 }
 

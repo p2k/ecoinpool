@@ -62,6 +62,11 @@
     work_checker :: timer:tref()
 }).
 
+-define(TEST_UNAUTH_MESSAGE, <<"Yes, the server is online! So the problem is either your miner, your ISP or sitting between chair and keyboard.">>).
+-define(TEST_ACCEPT_MESSAGE, <<"Yes, the server is online and your credentials were accepted! So the problem is either your miner, your ISP or sitting between chair and keyboard.">>).
+-define(TEST_REJECT_MESSAGE, <<"The server is online but you must have misspelled your worker name and/or password or the worker doesn't exist.">>).
+-define(TEST_REJECT_ADDRESS_MESSAGE, <<"The server is online but you must have misspelled your payout address.">>).
+
 %% ===================================================================
 %% API functions
 %% ===================================================================
@@ -318,6 +323,9 @@ handle_cast({rpc_request, Req}, State) ->
             {noreply, State};
         {setup_user, UserName} ->
             ecoinpool_db:setup_sub_pool_user_id(SubpoolId, UserName, fun ({ok, UserId}) -> Req:ok(UserId, []); ({error, Reason}) -> Req:error({-1, Reason}) end),
+            {noreply, State};
+        {test, Message} ->
+            Req:ok(Message, []),
             {noreply, State}
     end;
 
@@ -547,6 +555,8 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
             getwork;
         setup_user ->
             setup_user;
+        test ->
+            test;
         _ ->
             unknown
     end,
@@ -559,6 +569,40 @@ parse_method_and_auth(Req, SubpoolName, WorkerTbl, GetworkMethod, SendworkMethod
                     {setup_user, UserName};
                 _ ->
                     {error, invalid_method_params}
+            end;
+        test ->
+            case Req:get(auth) of
+                unauthorized ->
+                    {test, ?TEST_UNAUTH_MESSAGE};
+                {MixedCaseUser, Password} ->
+                    User = case LowercaseWorkers of
+                        true -> binary_to_lower(MixedCaseUser);
+                        false -> MixedCaseUser
+                    end,
+                    case ets:lookup(WorkerTbl, User) of
+                        [#worker{pass=Pass}] ->
+                            if
+                                IgnorePasswords; Pass =:= undefined; Pass =:= Password ->
+                                    {test, ?TEST_ACCEPT_MESSAGE};
+                                true ->
+                                    {test, ?TEST_REJECT_MESSAGE}
+                            end;
+                        _ ->
+                            case AcceptWorkers of
+                                any ->
+                                    {test, ?TEST_ACCEPT_MESSAGE};
+                                valid_address ->
+                                    try
+                                        btc_protocol:hash160_from_address(User),
+                                        {test, ?TEST_ACCEPT_MESSAGE}
+                                    catch
+                                        error:invalid_bitcoin_address ->
+                                            {test, ?TEST_REJECT_ADDRESS_MESSAGE}
+                                    end;
+                                _ ->
+                                    {test, ?TEST_REJECT_MESSAGE}
+                            end
+                    end
             end;
         _ ->
             % Check authentication
