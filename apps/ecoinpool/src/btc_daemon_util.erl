@@ -326,7 +326,7 @@ fetch_work(SubpoolId, URL, Auth, EBtcId, OldBlockNum, LastFetch, TxTbl, WorkTbl,
                 starting ->
                     TheBlockNum = case EBtcId of
                         undefined -> get_block_number(URL, Auth);
-                        _ -> ebitcoin_client:last_block_num(EBtcId)
+                        _ -> ebitcoin_client:last_block_num(EBtcId) + 1
                     end,
                     if
                         TheBlockNum =/= OldBlockNum -> % Post get_memory_pool blockchange on startup
