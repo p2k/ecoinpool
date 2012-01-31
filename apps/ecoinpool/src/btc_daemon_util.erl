@@ -403,7 +403,7 @@ increment_coinbase_extra_nonce(Tx=#btc_tx{tx_in=[TxIn]}) ->
 
 make_script_sig_trailer(undefined) ->
     [];
-make_script_sig_trailer(#auxwork{aux_hash=AuxHash>>}) ->
+make_script_sig_trailer(#auxwork{aux_hash=AuxHash}) ->
     [<<250,190,109,109, AuxHash/binary, 1,0,0,0,0,0,0,0>>].
 
 flush_poll_daemon() ->
