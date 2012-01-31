@@ -60,7 +60,8 @@
     decode_headers/1,
     encode_headers/1,
     hash160_from_address/1,
-    get_hash/1
+    get_hash/1,
+    verify_block_basic/1
 ]).
 
 -define(OP_TABLE, [
@@ -601,6 +602,51 @@ get_hash(Tx=#btc_tx{}) ->
     get_hash(encode_tx(Tx));
 get_hash(Bin) when is_binary(Bin) ->
     ecoinpool_hash:dsha256_hash(Bin).
+
+verify_block_basic(#btc_block{header=Header, txns=Txns}) ->
+    #btc_header{
+        version=Version,
+        hash_merkle_root=HashMerkleRoot,
+        auxpow=AuxPow
+    } = Header,
+    TxnHashes = lists:map(fun get_hash/1, Txns),
+    RealHashMerkleRoot = ecoinpool_hash:tree_dsha256_hash(TxnHashes),
+    if
+        HashMerkleRoot =/= RealHashMerkleRoot ->
+            {error, merkle_root};
+        Version band 16#100 =:= 0, AuxPow =:= undefined ->
+            {error, auxpow_not_allowed};
+        AuxPow =/= undefined ->
+            #btc_auxpow{
+                coinbase_tx=CoinbaseTx,
+                block_hash=BlockHash,
+                tx_tree_branches=TxTreeBranches,
+                parent_header=ParentHeader
+            } = AuxPow,
+            RealBlockHash = get_hash(Header),
+            if
+                BlockHash =/= RealBlockHash ->
+                    {error, auxpow_block_hash};
+                true ->
+                    ParentHeaderMerkleRoot = ParentHeader#btc_header.hash_merkle_root,
+                    CoinbaseTxHash = get_hash(CoinbaseTx),
+                    RealParentHeaderMerkleRoot = ecoinpool_hash:fold_tree_branches_dsha256_hash(CoinbaseTxHash, TxTreeBranches),
+                    if
+                        ParentHeaderMerkleRoot =/= RealParentHeaderMerkleRoot ->
+                            {error, auxpow_parent_merkle_root};
+                        true ->
+                            [CoinbaseTxIn] = CoinbaseTx#btc_tx.tx_in,
+                            case binary:match(CoinbaseTxIn#btc_tx_in.signature_script, BlockHash) of
+                                nomatch ->
+                                    {error, auxpow_parent_coinbase};
+                                _ ->
+                                    ok
+                            end
+                    end
+            end;
+        true ->
+            ok
+    end.
 
 %% Unit Testing %%
 

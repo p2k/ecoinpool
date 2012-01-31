@@ -68,8 +68,8 @@ last_block_num(ClientId) ->
     gen_server:call({global, {?MODULE, ClientId}}, last_block_num).
 
 -spec load_full_block(ClientId :: binary(), BlockHashOrHeight :: binary() | integer()) -> loading | already | unknown.
-load_full_block(ClientId, BlockHash) ->
-    gen_server:call({global, {?MODULE, ClientId}}, {load_full_block, BlockHash}).
+load_full_block(ClientId, BlockHashOrHeight) ->
+    gen_server:call({global, {?MODULE, ClientId}}, {load_full_block, BlockHashOrHeight}).
 
 % Note: This will callback gen_server:cast(ListenerRef, {ebitcoin_blockchange, ClientId, BlockHash, BlockNum}) on a blockchange
 % Also, the listener will be monitored and automatically removed if it goes down.
@@ -113,7 +113,7 @@ handle_call({load_full_block, BlockHashOrHeight}, _From, State=#state{client=Cli
             Getdata = #btc_getdata{
                 inventory=[#btc_inv_vect{
                     type=msg_block,
-                    hash=ecoinpool_util:hexbin_to_bin(BlockHash)
+                    hash=BlockHash
                 }]
             },
             send_msg(State, Getdata),
