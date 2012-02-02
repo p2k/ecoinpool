@@ -24,6 +24,10 @@
         % authentication settings:   username      password
         {db_options, [{basic_auth, {"ecoinpool", "localtest"}}]},
         
+        % Here you can change ecoinpool's HTTP service port, currently used to
+        % serve global RPC functions used by the frontend.
+        %{service_port, 8080},
+        
         % The last line in this section contains your blowfish secret key, share
         % this among your servers and don't tell it to anyone else. Minimum key
         % length is 4 bytes, maximum is 56 bytes.

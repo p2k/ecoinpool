@@ -607,11 +607,16 @@ verify_block_basic(#btc_block{header=Header, txns=Txns}) ->
     #btc_header{
         version=Version,
         hash_merkle_root=HashMerkleRoot,
+        bits=Bits,
         auxpow=AuxPow
     } = Header,
+    Target = ecoinpool_util:bits_to_target(Bits),
+    Hash = get_hash(Header),
     TxnHashes = lists:map(fun get_hash/1, Txns),
     RealHashMerkleRoot = ecoinpool_hash:tree_dsha256_hash(TxnHashes),
     if
+        AuxPow =:= undefined, Hash > Target ->
+            {error, target};
         HashMerkleRoot =/= RealHashMerkleRoot ->
             {error, merkle_root};
         Version band 16#100 =:= 0, AuxPow =:= undefined ->
@@ -623,25 +628,24 @@ verify_block_basic(#btc_block{header=Header, txns=Txns}) ->
                 tx_tree_branches=TxTreeBranches,
                 parent_header=ParentHeader
             } = AuxPow,
-            RealBlockHash = get_hash(Header),
+            RealBlockHash = get_hash(ParentHeader),
+            ParentHeaderMerkleRoot = ParentHeader#btc_header.hash_merkle_root,
+            CoinbaseTxHash = get_hash(CoinbaseTx),
+            RealParentHeaderMerkleRoot = ecoinpool_hash:fold_tree_branches_dsha256_hash(CoinbaseTxHash, TxTreeBranches),
             if
+                RealBlockHash > Target ->
+                    {error, auxpow_target};
                 BlockHash =/= RealBlockHash ->
                     {error, auxpow_block_hash};
+                ParentHeaderMerkleRoot =/= RealParentHeaderMerkleRoot ->
+                    {error, auxpow_parent_merkle_root};
                 true ->
-                    ParentHeaderMerkleRoot = ParentHeader#btc_header.hash_merkle_root,
-                    CoinbaseTxHash = get_hash(CoinbaseTx),
-                    RealParentHeaderMerkleRoot = ecoinpool_hash:fold_tree_branches_dsha256_hash(CoinbaseTxHash, TxTreeBranches),
-                    if
-                        ParentHeaderMerkleRoot =/= RealParentHeaderMerkleRoot ->
-                            {error, auxpow_parent_merkle_root};
-                        true ->
-                            [CoinbaseTxIn] = CoinbaseTx#btc_tx.tx_in,
-                            case binary:match(CoinbaseTxIn#btc_tx_in.signature_script, BlockHash) of
-                                nomatch ->
-                                    {error, auxpow_parent_coinbase};
-                                _ ->
-                                    ok
-                            end
+                    [CoinbaseTxIn] = CoinbaseTx#btc_tx.tx_in,
+                    case binary:match(CoinbaseTxIn#btc_tx_in.signature_script, Hash) of
+                        nomatch ->
+                            {error, auxpow_parent_coinbase};
+                        _ ->
+                            ok
                     end
             end;
         true ->

@@ -52,6 +52,9 @@ start(_StartType, _StartArgs) ->
         {ok, "Replace me!"} -> error(please_set_a_better_blowfish_secret);
         {ok, _} -> ok
     end,
+    % Start service port
+    {ok, ServicePort} = application:get_env(ecoinpool, service_port),
+    ecoinpool_http_service:start(ServicePort),
     % log4erl
     log4erl:conf(filename:join(code:priv_dir(ecoinpool), "log4erl.conf")),
     {ok, VSN} = application:get_key(ecoinpool, vsn),
@@ -59,4 +62,6 @@ start(_StartType, _StartArgs) ->
     ecoinpool_sup:start_link(ServerId, {DBHost, DBPort, DBPrefix, DBOptions}).
 
 stop(_State) ->
+    % Stop service port
+    ecoinpool_http_service:stop(),
     ok.

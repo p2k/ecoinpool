@@ -104,33 +104,12 @@ code_change(_OldVersion, Servers, _Extra) ->
 %% Internal functions
 %% ===================================================================
 
-default_headers() ->
-    {ok, VSN} = application:get_key(ecoinpool, vsn),
-    S = {"Server", "ecoinpool/" ++ VSN},
-    case get(jsonp) of
-        undefined -> [S, {"Content-Type", "application/json"}];
-        _ -> [S, {"Content-Type", "text/javascript"}, {"Access-Control-Allow-Origin", "*"}]
-    end.
-
 send_greeting() ->
     {ok, VSN} = application:get_key(ecoinpool, vsn),
     BinVSN = list_to_binary(VSN),
     self() ! {ok, <<"Welcome! This server is running ecoinpool v", BinVSN/binary, " by p2k. ",
         "You have reached one of the coin mining ports meant to be used with coin ",
         "mining software; consult the mining pool's homepage on how to setup a miner.">>, []}.
-
-compose_success(ReqId, Result) ->
-    Body = ejson:encode(
-        {[
-            {<<"result">>, Result},
-            {<<"error">>, null},
-            {<<"id">>, ReqId}
-        ]}
-    ),
-    case get(jsonp) of
-        undefined -> Body;
-        Callback -> <<Callback/binary, $(, Body/binary, $), $;>>
-    end.
 
 headers_from_options(Options) ->
     lists:foldl(
@@ -150,38 +129,6 @@ headers_from_options(Options) ->
         Options
     ).
 
-compose_error(ReqId, Type) ->
-    {HTTPCode, RPCCode, RPCMessage} = case Type of
-        parse_error -> {500, -32700, <<"Parse error">>};
-        invalid_request -> {400, -32600, <<"Invalid request">>};
-        method_not_found -> {404, -32601, <<"Method not found">>};
-        invalid_method_params -> {400, -32602, <<"Invalid parameters">>};
-        authorization_required -> {401, -32001, <<"Authorization required">>};
-        permission_denied -> {403, -32002, <<"Permission denied">>};
-        {CustomCode, CustomMessage} when is_integer(CustomCode) ->
-            BinCustomMessage = if
-                is_binary(CustomMessage) -> CustomMessage;
-                is_list(CustomMessage) -> list_to_binary(CustomMessage);
-                true -> list_to_binary(io_lib:print(CustomMessage))
-            end,
-            {500, CustomCode, BinCustomMessage};
-        _ -> {500, -32603, <<"Internal error">>}
-    end,
-    Body = ejson:encode(
-        {[
-            {<<"result">>, null},
-            {<<"error">>, {[
-                {<<"code">>, RPCCode},
-                {<<"message">>, RPCMessage}
-            ]}},
-            {<<"id">>, ReqId}
-        ]}
-    ),
-    case get(jsonp) of
-        undefined -> {HTTPCode, Body};
-        Callback -> {HTTPCode, <<Callback/binary, $(, Body/binary, $), $;>>}
-    end.
-
 % Valid methods are defined here
 parse_method(<<"getwork">>) -> getwork;
 parse_method(<<"sc_getwork">>) -> sc_getwork;
@@ -190,8 +137,7 @@ parse_method(<<"setup_user">>) -> setup_user;
 
 parse_method(<<"">>) -> none;
 parse_method(<<"test">>) -> test;
-parse_method(Other) when is_binary(Other) -> unknown;
-parse_method(_) -> invalid.
+parse_method(_) -> unknown.
 
 parse_path("/") ->
     {ok, false};
@@ -214,130 +160,38 @@ parse_mining_extensions(SExtensions) ->
         SExtensions
     ).
 
-handle_form_request(SubpoolPID, Req, Auth, Properties, MiningExtensions, LP) ->
-    % Check for JSONP
-    case proplists:get_value("callback", Properties) of
-        undefined -> put(jsonp, undefined);
-        Callback -> put(jsonp, list_to_binary(Callback))
-    end,
-    if
-        LP -> % Ignore method and params on LP
-            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, default, [], Auth, MiningExtensions, true));
-        true ->
-            case parse_method(list_to_binary(proplists:get_value("method", Properties, ""))) of
-                none ->
-                    send_greeting();
-                unknown ->
-                    self() ! {error, method_not_found};
-                invalid ->
-                    self() ! {error, invalid_request};
-                Method ->
-                    BinParams = lists:map(fun list_to_binary/1, proplists:get_all_values("params[]", Properties)),
-                    ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, BinParams, Auth, MiningExtensions, false))
-            end,
-            % Return the request ID; if possible convert to integer else convert to binary
-            ReqId = proplists:get_value("id", Properties, "1"),
-            try
-                list_to_integer(ReqId)
-            catch
-                error:_ -> list_to_binary(ReqId)
-            end
-    end.
-
-% Note: this function returns the request ID (except if the connection is canceled)
-handle_post(SubpoolPID, Req, Auth, MiningExtensions, LP) ->
-    case Req:get_header_value("Content-Type") of
-        Type when Type =:= "application/json"; Type =:= undefined ->
-            put(jsonp, undefined),
-            try
-                case ejson:decode(Req:recv_body()) of % Decode JSON
-                    {Properties} ->
-                        case parse_method(proplists:get_value(<<"method">>, Properties)) of
-                            none ->
-                                send_greeting();
-                            unknown ->
-                                self() ! {error, method_not_found};
-                            invalid ->
-                                self() ! {error, invalid_request};
-                            Method ->
-                                case proplists:get_value(<<"params">>, Properties, []) of
-                                    Params when is_list(Params) ->
-                                        ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, Method, Params, Auth, MiningExtensions, LP));
-                                    _ ->
-                                        self() ! {error, invalid_request}
-                                end
-                        end,
-                        proplists:get_value(<<"id">>, Properties, 1);
-                    _ ->
-                        self() ! {error, invalid_request}, 1
-                end
-            catch _:_ ->
-                self() ! {error, parse_error}, 1
-            end;
-        "application/x-www-form-urlencoded" ->
-            try
-                Properties = Req:parse_post(),
-                handle_form_request(SubpoolPID, Req, Auth, Properties, MiningExtensions, LP)
-            catch error:_ ->
-                self() ! {error, parse_error}, 1
-            end;
-        _ ->
-            Req:respond({415, [{"Content-Type", "text/plain"}], "Unsupported Content-Type. We only accept application/json and application/x-www-form-urlencoded."}),
-            self() ! cancel, 1
-    end.
-
-handle_get(SubpoolPID, Req, Auth, MiningExtensions, LP) ->
-    try
-        Properties = Req:parse_qs(),
-        handle_form_request(SubpoolPID, Req, Auth, Properties, MiningExtensions, LP)
-    catch error:_ ->
-        self() ! {error, parse_error}, 1
-    end.
-
 handle_request(SubpoolPID, Req) ->
-    Auth = case Req:get_header_value("Authorization") of
-        "Basic " ++ BasicAuth ->
-            try
-                case binary:split(base64:decode(BasicAuth), <<":">>) of
-                    [User, Pass] -> {User, Pass};
-                    _ -> unauthorized
-                end
-            catch
-                error:_ ->
-                    unauthorized
-            end;
-        _ ->
-            unauthorized
-    end,
-    MiningExtensions = case Req:get_header_value("X-Mining-Extensions") of
-        undefined ->
-            [];
-        SMiningExtensions ->
-            parse_mining_extensions(string:tokens(SMiningExtensions, " "))
-    end,
-    case Req:accepts_content_type("application/json") of
-        true ->
-            ok; % Fine
-        _ ->
-            log4erl:info("ecoinpool_rpc: Crappy mining software detected from ~s: ~s", [
-                Req:get(peer),
-                case Req:get_header_value("User-Agent") of UA when is_list(UA) -> UA; _ -> "unknown" end
-            ])
-    end,
-    ReqId = case parse_path(Req:get(path)) of
-        {ok, LP} ->
-            case Req:get(method) of
-                'GET' ->
-                    handle_get(SubpoolPID, Req, Auth, MiningExtensions, LP);
-                'POST' ->
-                    handle_post(SubpoolPID, Req, Auth, MiningExtensions, LP);
+    {ok, VSN} = application:get_key(ecoinpool, vsn),
+    ServerName = "ecoinpool/" ++ VSN,
+    case ecoinpool_jsonrpc:process_request(Req, ServerName, false) of
+        {ok, Method, Params, ReqId, Auth, JSONP} ->
+            MiningExtensions = case Req:get_header_value("X-Mining-Extensions") of
+                undefined ->
+                    [];
+                SMiningExtensions ->
+                    parse_mining_extensions(string:tokens(SMiningExtensions, " "))
+            end,
+            case parse_path(Req:get(path)) of
+                {ok, true} -> % Ignore method and params on LP
+                    ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, default, [], Auth, MiningExtensions, true));
+                {ok, false} ->
+                    case parse_method(Method) of
+                        none ->
+                            send_greeting();
+                        unknown ->
+                            self() ! {error, method_not_found};
+                        AMethod ->
+                            ecoinpool_server:rpc_request(SubpoolPID, ecoinpool_rpc_request:new(self(), {Req:get(peer), Req:get_header_value("User-Agent")}, AMethod, Params, Auth, MiningExtensions, false))
+                    end;
                 _ ->
-                    Req:respond({501, [{"Content-Type", "text/plain"}], "Unknown method"}),
-                    self() ! cancel
-            end;
-        _ ->
-            self() ! {error, method_not_found}, 1
-    end,
+                    self() ! {error, method_not_found}
+            end,
+            reply_loop(Req, ReqId, ServerName, JSONP);
+        {error, _} ->
+            error
+    end.
+
+reply_loop(Req, ReqId, ServerName, JSONP) ->
     % Block here, waiting for the result; also activate the socket to get close events
     Socket = Req:get(socket),
     mochiweb_socket:setopts(Socket, [{active, true}]),
@@ -347,17 +201,13 @@ handle_request(SubpoolPID, Req) ->
             ok;
         {error, Type} ->
             mochiweb_socket:setopts(Socket, [{active, false}]),
-            {HTTPCode, Body} = compose_error(ReqId, Type),
-            Req:respond({HTTPCode, default_headers(), Body});
+            ecoinpool_jsonrpc:respond_error(Req, Type, ReqId, ServerName, JSONP);
         {ok, Result, Options} ->
             mochiweb_socket:setopts(Socket, [{active, false}]),
-            Body = compose_success(ReqId, Result),
-            Headers = headers_from_options(Options),
-            Req:respond({200, default_headers() ++ Headers, Body});
+            ecoinpool_jsonrpc:respond_success(Req, Result, ReqId, ServerName, JSONP, headers_from_options(Options));
         {start, WithHeartbeat, Options} ->
-            Headers = headers_from_options(Options),
-            Resp = Req:respond({200, default_headers() ++ Headers, chunked}),
-            longpolling_loop(ReqId, Resp, WithHeartbeat, Socket);
+            Resp = ecoinpool_jsonrpc:respond_start_chunked(Req, ServerName, JSONP, headers_from_options(Options)),
+            longpolling_loop(Resp, ReqId, WithHeartbeat, Socket, JSONP);
         {tcp_closed, Socket} ->
             log4erl:info("ecoinpool_rpc: Connection from ~s dropped unexpectedly.", [Peer]),
             mochiweb_socket:close(Socket),
@@ -369,18 +219,14 @@ handle_request(SubpoolPID, Req) ->
             mochiweb_socket:close(Socket)
     end.
 
-longpolling_loop(ReqId, Resp, WithHeartbeat, Socket) ->
+longpolling_loop(Resp, ReqId, WithHeartbeat, Socket, JSONP) ->
     receive
         {ok, Result, _} ->
             mochiweb_socket:setopts(Socket, [{active, false}]),
-            Body = compose_success(ReqId, Result),
-            Resp:write_chunk(Body),
-            Resp:write_chunk(<<>>);
+            ecoinpool_jsonrpc:respond_finish_chunked(Resp, Result, ReqId, JSONP);
         {error, Type} ->
             mochiweb_socket:setopts(Socket, [{active, false}]),
-            {_, Body} = compose_error(ReqId, Type),
-            Resp:write_chunk(Body),
-            Resp:write_chunk(<<>>);
+            ecoinpool_jsonrpc:respond_finish_chunked(Resp, {error, Type}, ReqId, JSONP);
         {tcp_closed, Socket} ->
             mochiweb_socket:close(Socket),
             exit(normal)
@@ -389,7 +235,7 @@ longpolling_loop(ReqId, Resp, WithHeartbeat, Socket) ->
             WithHeartbeat ->
                 % Send a newline character every 5 minutes to keep the connection alive
                 Resp:write_chunk(<<10>>),
-                longpolling_loop(ReqId, Resp, WithHeartbeat, Socket);
+                longpolling_loop(ReqId, Resp, WithHeartbeat, Socket, JSONP);
             true ->
                 mochiweb_socket:close(Socket)
         end
