@@ -63,5 +63,16 @@ handle_rpc_request(<<"get_api_version">>, Params, _Auth) ->
         _ -> error(invalid_request)
     end,
     1;
+handle_rpc_request(<<"validate_address">>, Params, _Auth) ->
+    case Params of
+        [Address] when is_binary(Address) ->
+            try
+                btc_protocol:hash160_from_address(Address),
+                true
+            catch error:_ ->
+                false
+            end;
+        _ -> error(invalid_request)
+    end;
 handle_rpc_request(_, _, _) ->
     error(method_not_found).
