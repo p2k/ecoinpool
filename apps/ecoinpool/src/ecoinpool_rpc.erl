@@ -42,10 +42,10 @@ start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 start_rpc(Port, SubpoolPID) ->
-    gen_server:call(?MODULE, {start_rpc, Port, SubpoolPID}).
+    gen_server:call(?MODULE, {start_rpc, Port, SubpoolPID}, infinity).
 
 stop_rpc(Port) ->
-    gen_server:call(?MODULE, {stop_rpc, Port}).
+    gen_server:call(?MODULE, {stop_rpc, Port}, infinity).
 
 %% ===================================================================
 %% Gen_Server callbacks

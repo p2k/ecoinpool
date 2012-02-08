@@ -123,7 +123,7 @@ process_post(Req, Auth, ServerName) ->
                             Method when is_binary(Method) ->
                                 case proplists:get_value(<<"params">>, Properties, []) of
                                     Params when is_list(Params) ->
-                                        {ok, Method, Params, ReqId, Auth, false};
+                                        {ok, Method, Params, ReqId, Auth, undefined};
                                     _ ->
                                         respond_error(Req, invalid_request, ReqId, ServerName)
                                 end;
