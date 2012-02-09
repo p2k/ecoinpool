@@ -200,7 +200,7 @@ respond_start_chunked(Req, ServerName, JSONP, AdditionalHeaders) ->
 respond_finish_chunked(Resp, Result, ReqId, JSONP) ->
     Body = case Result of
         {error, Type} ->
-            element(2, compose_error(ReqId, Type, JSONP));
+            element(2, compose_error(Type, ReqId, JSONP));
         _ ->
             compose_success(Result, ReqId, JSONP)
     end,

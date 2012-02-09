@@ -235,7 +235,7 @@ longpolling_loop(Resp, ReqId, WithHeartbeat, Socket, JSONP) ->
             WithHeartbeat ->
                 % Send a newline character every 5 minutes to keep the connection alive
                 Resp:write_chunk(<<10>>),
-                longpolling_loop(ReqId, Resp, WithHeartbeat, Socket, JSONP);
+                longpolling_loop(Resp, ReqId, WithHeartbeat, Socket, JSONP);
             true ->
                 mochiweb_socket:close(Socket)
         end

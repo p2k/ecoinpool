@@ -28,6 +28,12 @@
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
+-record(state, {
+    candidates_only,
+    conn,
+    known_dbs
+}).
+
 %% ===================================================================
 %% API functions
 %% ===================================================================
@@ -42,9 +48,10 @@ log_share(LoggerId, Share) ->
 %% Gen_Server callbacks
 %% ===================================================================
 
-init(_) ->
+init(Config) ->
+    CandidatesOnly = proplists:get_value(candidate_shares_only, Config, false),
     S = ecoinpool_db:get_couchdb_connection(),
-    {ok, {S, sets:new()}}.
+    {ok, #state{candidates_only=CandidatesOnly, conn=S, known_dbs=sets:new()}}.
 
 handle_call(_, _From, State) ->
     {reply, error, State}.
@@ -74,35 +81,49 @@ handle_cast(#share{
         aux_target=AuxTarget,
         aux_block_num=AuxBlockNum,
         aux_prev_block=AuxPrevBlock,
-        aux_round=AuxRound}, {S, KnownDBs}) ->
+        aux_round=AuxRound},
+        SState=#state{
+        candidates_only=CandidatesOnly,
+        conn=S,
+        known_dbs=KnownDBs}) ->
     
     KnownDBs1 = case sets:is_element(SubpoolName, KnownDBs) of
         true -> KnownDBs;
         false -> setup_shares_db(S, SubpoolName), sets:add_element(SubpoolName, KnownDBs)
     end,
     {ok, DB} = couchbeam:open_db(S, SubpoolName),
-    case State of
-        invalid ->
-            store_invalid_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, RejectReason, Hash, undefined, Target, BlockNum, PrevBlock, Round, DB);
-        _ ->
-            store_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, State, Hash, undefined, Target, BlockNum, PrevBlock, Data, Round, DB)
+    if
+        not CandidatesOnly; State =:= candidate ->
+            case State of
+                invalid ->
+                    store_invalid_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, RejectReason, Hash, undefined, Target, BlockNum, PrevBlock, Round, DB);
+                _ ->
+                    store_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, State, Hash, undefined, Target, BlockNum, PrevBlock, Data, Round, DB)
+            end;
+        true ->
+            ok
     end,
     case AuxpoolName of
         undefined ->
-            {noreply, {S, KnownDBs1}};
+            {noreply, SState#state{known_dbs=KnownDBs1}};
         _ ->
             KnownDBs2 = case sets:is_element(AuxpoolName, KnownDBs) of
                 true -> KnownDBs1;
                 false -> setup_shares_db(S, AuxpoolName), sets:add_element(SubpoolName, KnownDBs1)
             end,
             {ok, AuxDB} = couchbeam:open_db(S, AuxpoolName),
-            case AuxState of
-                invalid ->
-                    store_invalid_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, RejectReason, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, AuxRound, AuxDB);
-                _ ->
-                    store_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, Data, AuxRound, AuxDB)
+            if
+                not CandidatesOnly; AuxState =:= candidate ->
+                    case AuxState of
+                        invalid ->
+                            store_invalid_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, RejectReason, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, AuxRound, AuxDB);
+                        _ ->
+                            store_share_in_db(Timestamp, WorkerId, UserId, IP, UserAgent, AuxState, AuxHash, Hash, AuxTarget, AuxBlockNum, AuxPrevBlock, Data, AuxRound, AuxDB)
+                    end;
+                true ->
+                    ok
             end,
-            {noreply, {S, KnownDBs2}}
+            {noreply, SState#state{known_dbs=KnownDBs2}}
     end;
 
 handle_cast(#share{}, State) -> % Ignore other shares (currently these are remote shares)
