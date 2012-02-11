@@ -326,7 +326,7 @@ fetch_work(SubpoolId, URL, Auth, EBtcId, OldBlockNum, LastFetch, TxTbl, WorkTbl,
                 starting ->
                     TheBlockNum = case EBtcId of
                         undefined -> get_block_number(URL, Auth);
-                        _ -> ebitcoin_client:last_block_num(EBtcId) + 1
+                        _ -> wait_for_last_block_num(EBtcId) + 1
                     end,
                     if
                         TheBlockNum =/= OldBlockNum -> % Post get_memory_pool blockchange on startup
@@ -411,4 +411,20 @@ flush_poll_daemon() ->
         poll_daemon -> flush_poll_daemon()
     after
         0 -> ok
+    end.
+
+wait_for_last_block_num(EBtcId) ->
+    wait_for_last_block_num(EBtcId, 5). % Giving it 5 seconds to start up (before the restart logic will try again)
+
+wait_for_last_block_num(EBtcId, RetriesLeft) ->
+    try
+        ebitcoin_client:last_block_num(EBtcId)
+    catch exit:{noproc, _} ->
+        case RetriesLeft of
+            1 -> % That was our last try, give up
+                exit(ebitcoin_client_timeout);
+            _ ->
+                timer:sleep(1000),
+                wait_for_last_block_num(EBtcId, RetriesLeft - 1)
+        end
     end.
