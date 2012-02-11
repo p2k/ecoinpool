@@ -210,7 +210,7 @@ handle_cast({setup_sub_pool_user_id, SubpoolId, UserName, Callback}, State=#stat
         {ok, Doc} ->
             case couchbeam_view:fetch(UsersDB, {"ecoinpool", "user_ids"}, [{key, [SubpoolId, UserName]}]) of
                 {ok, []} ->
-                    NewUserId = case couchbeam_view:fetch(UsersDB, {"ecoinpool", "user_ids"}, [{start_key, ejson:encode([SubpoolId])}, {end_key, ejson:encode([SubpoolId, {[]}])}]) of
+                    NewUserId = case couchbeam_view:fetch(UsersDB, {"ecoinpool", "user_ids"}, [{start_key, [SubpoolId]}, {end_key, [SubpoolId, {[]}]}]) of
                         {ok, []} -> 1;
                         {ok, [{RowProps}]} -> proplists:get_value(<<"value">>, RowProps, 0) + 1
                     end,
