@@ -58,8 +58,7 @@
     hashtbl :: ets:tid(),
     workertbl :: ets:tid(),
     workerltbl :: ets:tid(),
-    lp_queue :: [{worker(), ecoinpool_rpc_request()}],
-    work_checker :: timer:tref()
+    lp_queue :: [{worker(), ecoinpool_rpc_request()}]
 }).
 
 -define(TEST_UNAUTH_MESSAGE, <<"Yes, the server is online! So the problem is either your miner, your ISP or sitting between chair and keyboard.">>).
@@ -133,8 +132,8 @@ init([SubpoolId]) ->
     % Schedule config reload
     gen_server:cast(self(), {reload_config, Subpool}),
     % Create work check timer
-    {ok, WorkChecker} = timer:send_interval(500, check_work_age), % Fixed to twice per second
-    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[], work_checker=WorkChecker}}.
+    {ok, _} = timer:send_interval(500, check_work_age), % Fixed to twice per second
+    {ok, #state{subpool=#subpool{}, workq=queue:new(), workq_size=0, worktbl=WorkTbl, hashtbl=HashTbl, workertbl=WorkerTbl, workerltbl=WorkerLookupTbl, lp_queue=[]}}.
 
 handle_call(get_worker_notifications, _From, State=#state{subpool=Subpool}) ->
     % Returns the sub-pool IDs for which worker changes should be retrieved
@@ -510,7 +509,11 @@ handle_info(check_work_age, State) ->
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue, work_checker=WorkChecker}) ->
+terminate(_Reason, #state{subpool=#subpool{id=undefined}}) ->
+    % Here, we crashed at the start having no information at all :/
+    log4erl:warn(server, "Subpool terminated."),
+    ok;
+terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, workq_size=WorkQueueSize, worktbl=WorkTbl, hashtbl=HashTbl, lp_queue=LPQueue}) ->
     % Store work and hashes table
     StorageDir = ecoinpool_util:server_storage_dir(Id),
     ets:tab2file(WorkTbl, binary_to_list(filename:join(StorageDir, "worktbl.ets")), [{extended_info, [object_count]}]),
@@ -529,8 +532,6 @@ terminate(_Reason, #state{subpool=#subpool{id=Id, port=Port}, workq=WorkQueue, w
     ecoinpool_worker_monitor:set_worker_notifications(Id, []),
     % We don't need to stop the CoinDaemon, because that will be handled by the supervisor
     log4erl:warn(server, "Subpool ~s terminated.", [Id]),
-    % Kill the work check timer
-    timer:cancel(WorkChecker),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->

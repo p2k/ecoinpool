@@ -32,4 +32,5 @@ start() ->
     ok = application:start(mysql),
     ok = application:start(epgsql),
     ok = application:start(ebitcoin),
-    ok = application:start(ecoinpool).
+    ok = application:start(ecoinpool),
+    file:write_file("ecoinpool.pid", os:getpid()).

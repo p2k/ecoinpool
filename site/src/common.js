@@ -285,7 +285,7 @@ function UserContext (data, callbacks) {
                 lines.push("",
                            "As you are an admin user, you are advised to check your",
                            "firewall settings so that this URL can be reached:",
-                           '<a href="'+url+'" target="_blank">'+url+'</a>');
+                           '<a href="'+url+'" target="_blank">'+url+'</a> (click to check)');
             $.showDialog(templates.messageDialog,
                 {
                     context: {

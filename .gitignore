@@ -4,6 +4,7 @@
 *.o
 *.so
 *.state
+*.pid
 erl_crash.dump
 
 test_launch.config
