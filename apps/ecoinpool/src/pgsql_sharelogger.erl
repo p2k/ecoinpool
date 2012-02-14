@@ -25,7 +25,7 @@
 
 -export([start_link/2, log_share/2]).
 
--export([defaults/0, connect/6, fetch_result/2, get_field_names/2, get_timediff/1, get_query_size_limit/1, encode_elements/1]).
+-export([defaults/0, connect/6, disconnect/1, fetch_result/2, get_field_names/2, get_timediff/1, get_query_size_limit/1, encode_elements/1]).
 
 %% ===================================================================
 %% API functions
@@ -46,6 +46,9 @@ defaults() ->
 
 connect(_, Host, Port, User, Password, Database) ->
     pgsql:connect(Host, User, Password, [{port, Port}, {database, Database}]).
+
+disconnect(Conn) ->
+    pgsql:close(Conn).
 
 fetch_result(Conn, Query) ->
     case pgsql:equery(Conn, Query) of

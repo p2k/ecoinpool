@@ -60,10 +60,13 @@
     query_size_limit :: integer() | unlimited,
     
     sql_conn :: pid(),
+    error_count = 0 :: integer(),
     commit_timer :: timer:tref() | undefined,
     
     sql_shares = [] :: [sql_share()]
 }).
+
+-define(MAX_ERROR_COUNT, 5).
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -241,7 +244,7 @@ handle_cast(#share{
                     {noreply, State};
                 {error, _} -> % Error handling: start a default commit timer
                     {ok, T} = timer:send_interval(15000, insert_sql_shares),
-                    {noreply, State#state{sql_shares=[SQLShare1 | SQLShares], commit_timer=T}}
+                    {noreply, State#state{sql_shares=[SQLShare1 | SQLShares], error_count=1, commit_timer=T}}
             end;
         _ ->
             {noreply, State#state{sql_shares=[SQLShare1 | SQLShares]}}
@@ -261,6 +264,7 @@ handle_info(insert_sql_shares, State=#state{
         insert_field_ids=InsertFieldIds,
         query_size_limit=OldQuerySizeLimit,
         sql_conn=OldSQLConn,
+        error_count=ErrorCount,
         commit_timer=CommitTimer,
         sql_shares=SQLShares}) ->
     
@@ -271,8 +275,8 @@ handle_info(insert_sql_shares, State=#state{
     case insert_sql_shares(LoggerId, SQLModule, SQLConn, SQLShares, InsertStmtHead, InsertFieldIds, QuerySizeLimit) of
         {ok, RestSQLShares} ->
             if
-                OldSQLConn =/= SQLConn ->
-                    log4erl:warn("Successfully recovered the connection (~p).", [LoggerId]);
+                ErrorCount > 0 ->
+                    log4erl:warn("Successfully recovered from previous errors, ~b shares saved (~p).", [length(SQLShares) - length(RestSQLShares), LoggerId]);
                 true ->
                     ok
             end,
@@ -289,10 +293,18 @@ handle_info(insert_sql_shares, State=#state{
                     log4erl:warn("Could not send all shares at once due to size limit, continuing later (~p).", [LoggerId]),
                     CommitTimer
             end,
-            {noreply, State#state{query_size_limit=QuerySizeLimit, sql_conn=SQLConn, commit_timer=NewCommitTimer, sql_shares=RestSQLShares}};
+            {noreply, State#state{query_size_limit=QuerySizeLimit, sql_conn=SQLConn, error_count=0, commit_timer=NewCommitTimer, sql_shares=RestSQLShares}};
         {error, _} ->
             log4erl:warn("Cached shares (~p): ~b", [LoggerId, length(SQLShares)]),
-            {noreply, State#state{query_size_limit=QuerySizeLimit, sql_conn=SQLConn}}
+            if
+                ErrorCount + 1 > ?MAX_ERROR_COUNT,
+                SQLConn =/= undefined ->
+                    log4erl:warn("Maximum error count reached, reconnecting (~p).", [LoggerId]),
+                    SQLModule:disconnect(SQLConn),
+                    {noreply, State#state{query_size_limit=QuerySizeLimit, error_count=0, sql_conn=undefined}};
+                true ->
+                    {noreply, State#state{query_size_limit=QuerySizeLimit, error_count=ErrorCount+1, sql_conn=SQLConn}}
+            end
     end;
 
 handle_info({'EXIT', SQLConn, _Reason}, State=#state{sql_conn=SQLConn}) ->
