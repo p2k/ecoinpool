@@ -21,7 +21,7 @@
 {application, ebitcoin,
  [
   {description, "A Bitcoin cryptographic currency client implementation in Erlang"},
-  {vsn, "0.1.3"},
+  {vsn, "0.1.4"},
   {registered, [ebitcoin_app]},
   {applications, [kernel, stdlib, sasl, log4erl, crypto, ibrowse, couchbeam]},
   {mod, {ebitcoin_app, []}},

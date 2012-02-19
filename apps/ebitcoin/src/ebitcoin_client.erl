@@ -477,12 +477,6 @@ scan_msg(NetMagic, <<_, T/binary>>) ->
     log4erl:warn(ebitcoin, "Bitcoin data stream out of sync!"),
     scan_msg(NetMagic, T).
 
-unpack_message(_, <<"version",0,0,0,0,0>>, Length, PayloadWithTail) when byte_size(PayloadWithTail) >= Length ->
-    <<Payload:Length/bytes, Tail/binary>> = PayloadWithTail,
-    {found, version, undefined, Payload, Tail};
-unpack_message(_, <<"verack",0,0,0,0,0,0>>, Length, PayloadWithTail) when byte_size(PayloadWithTail) >= Length ->
-    <<Payload:Length/bytes, Tail/binary>> = PayloadWithTail,
-    {found, verack, undefined, Payload, Tail};
 unpack_message(_, BCommand, Length, ChecksumPayloadWithTail) when byte_size(ChecksumPayloadWithTail) >= Length+4 ->
     Command = btc_protocol:decode_command(BCommand),
     <<Checksum:32/unsigned-little, Payload:Length/bytes, Tail/binary>> = ChecksumPayloadWithTail,
@@ -490,11 +484,6 @@ unpack_message(_, BCommand, Length, ChecksumPayloadWithTail) when byte_size(Chec
 unpack_message(Data, _, _, _) ->
     {incomplete, Data}.
 
-pack_message(NetMagic, verack, _) ->
-    <<NetMagic/binary, "verack",0,0,0,0,0,0, 0:32>>;
-pack_message(NetMagic, version, Payload) ->
-    Length = byte_size(Payload),
-    <<NetMagic/binary, "version",0,0,0,0,0, Length:32/unsigned-little, Payload/bytes>>;
 pack_message(NetMagic, Command, Payload) ->
     BCommand = btc_protocol:encode_command(Command),
     Length = byte_size(Payload),
