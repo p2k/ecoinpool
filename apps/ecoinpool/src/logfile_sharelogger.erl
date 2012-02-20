@@ -81,7 +81,9 @@ handle_cast(Share=#share{server_id=ServerId, state=State, aux_state=AuxState}, {
             Share#share{data=undefined}
     end,
     log_data([{I, element(I, ShareNow)} || I <- FieldIds]),
-    {noreply, {LogRemote, AlwaysLogData, FieldIds}}.
+    {noreply, {LogRemote, AlwaysLogData, FieldIds}};
+handle_cast(_, State) ->
+    {noreply, State}.
 
 handle_info(_, State) ->
     {noreply, State}.

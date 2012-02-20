@@ -66,11 +66,11 @@ handle_rpc_request(<<"get_api_version">>, Params, _Auth) ->
 handle_rpc_request(<<"validate_address">>, Params, _Auth) ->
     case Params of
         [Address] when is_binary(Address) ->
-            try
-                btc_protocol:hash160_from_address(Address),
-                true
-            catch error:_ ->
-                false
+            case btc_protocol:check_address(Address) of
+                {ok, Network} ->
+                    {[{<<"valid">>, true}, {<<"network">>, Network}]};
+                invalid ->
+                    {[{<<"valid">>, false}]}
             end;
         _ -> error(invalid_request)
     end;

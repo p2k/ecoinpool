@@ -59,7 +59,10 @@
     encode_getheaders/1,
     decode_headers/1,
     encode_headers/1,
+    decode_alert/1,
+    encode_alert/1,
     hash160_from_address/1,
+    check_address/1,
     get_hash/1,
     verify_block_basic/1
 ]).
@@ -313,6 +316,41 @@ decode_getheaders(<<Version:32/unsigned-little, BGetHeaders/binary>>) ->
 decode_headers(BHeaders) ->
     {LongHeaders, T} = decode_var_list(BHeaders, fun decode_long_header/1),
     {#btc_headers{long_headers=LongHeaders}, T}.
+
+decode_alert(BAlert) ->
+    {BPayload, T1} = decode_var_str(BAlert),
+    {Signature, T2} = decode_var_str(T1),
+    
+    <<
+        Version:32/little,
+        RelayUntil:64/little,
+        Expiration:64/little,
+        ID:32/little,
+        Cancel:32/little,
+        TT1/binary
+    >> = BPayload,
+    {SetCancel, <<MinVer:32/little, MaxVer:32/little, TT2/binary>>} = decode_var_list(TT1, fun (<<X:32/little, Y/binary>>) -> {X, Y} end),
+    {SetSubVer, <<Priority:32/little, TT3/binary>>} = decode_var_list(TT2, fun decode_var_str/1),
+    {Comment, TT4} = decode_var_str(TT3),
+    {StatusBar, TT5} = decode_var_str(TT4),
+    {Reserved, <<>>} = decode_var_str(TT5),
+    
+    Payload = #btc_alert_payload{
+        version=Version,
+        relay_until=RelayUntil,
+        expiration=Expiration,
+        id=ID,
+        cancel=Cancel,
+        set_cancel=SetCancel,
+        min_ver=MinVer,
+        max_ver=MaxVer,
+        set_sub_ver=SetSubVer,
+        priority=Priority,
+        comment=Comment,
+        status_bar=StatusBar,
+        reserved=Reserved
+    },
+    {#btc_alert{payload=Payload, signature=Signature}, T2}.
 
 %% Encoding %%
 
@@ -583,6 +621,48 @@ encode_getheaders(#btc_getheaders{version = Version, block_locator_hashes = Bloc
 encode_headers(#btc_headers{long_headers=LongHeaders}) ->
     encode_var_list(LongHeaders, fun encode_long_header/1).
 
+encode_alert(#btc_alert{payload=Payload, signature=Signature}) ->
+    #btc_alert_payload{
+        version=Version,
+        relay_until=RelayUntil,
+        expiration=Expiration,
+        id=ID,
+        cancel=Cancel,
+        set_cancel=SetCancel,
+        min_ver=MinVer,
+        max_ver=MaxVer,
+        set_sub_ver=SetSubVer,
+        priority=Priority,
+        comment=Comment,
+        status_bar=StatusBar,
+        reserved=Reserved
+    } = Payload,
+    
+    BSetCancel = encode_var_list_noskip(SetCancel, fun (X) -> <<X:32/little>> end),
+    BSetSubVer = encode_var_list(SetSubVer, fun encode_var_str/1),
+    BComment = decode_var_str(Comment),
+    BStatusBar = encode_var_str(StatusBar),
+    BReserved = encode_var_str(Reserved),
+    BPayload = <<
+        Version:32/little,
+        RelayUntil:64/little,
+        Expiration:64/little,
+        ID:32/little,
+        Cancel:32/little,
+        BSetCancel/binary,
+        MinVer:32/little,
+        MaxVer:32/little,
+        BSetSubVer/binary,
+        Priority:32/little,
+        BComment/binary,
+        BStatusBar/binary,
+        BReserved/binary
+    >>,
+    
+    BPayload = encode_var_str(Payload),
+    BSignature = encode_var_str(Signature),
+    <<BPayload, BSignature>>.
+
 %% Other %%
 
 hash160_from_address(BTCAddress) ->
@@ -592,6 +672,15 @@ hash160_from_address(BTCAddress) ->
         Hash160
     catch error:_ ->
         error(invalid_bitcoin_address)
+    end.
+
+check_address(BTCAddress) ->
+    try
+        <<Network:8/unsigned, Hash160:20/bytes, Checksum:32/unsigned>> = base58:decode(BTCAddress),
+        <<_:28/bytes, Checksum:32/unsigned-little>> = ecoinpool_hash:dsha256_hash(<<Network:8/unsigned, Hash160:20/bytes>>),
+        {ok, Network}
+    catch error:_ ->
+        invalid
     end.
 
 get_hash(#btc_block{header=Header}) ->

@@ -127,3 +127,26 @@
     long_headers :: [{btc_header(), integer()}]
 }).
 -type btc_headers() :: #btc_headers{}.
+
+-record(btc_alert, {
+    payload :: binary(),
+    signature :: binary()
+}).
+-type btc_alert() :: #btc_alert{}.
+
+-record(btc_alert_payload, {
+    version :: integer(),
+    relay_until :: integer(),
+    expiration :: integer(),
+    id :: integer(),
+    cancel :: integer(),
+    set_cancel :: [integer()],
+    min_ver :: integer(),
+    max_ver :: integer(),
+    set_sub_ver :: [binary()],
+    priority :: integer(),
+    comment :: binary(),
+    status_bar :: binary(),
+    reserved :: binary()
+}).
+-type btc_alert_payload() :: #btc_alert_payload{}.

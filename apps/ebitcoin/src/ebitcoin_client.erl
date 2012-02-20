@@ -398,6 +398,10 @@ handle_bitcoin(#btc_inv{inventory=Inv}, State=#state{client=Client, last_block_n
 handle_bitcoin(#btc_addr{}, State) ->
     {noreply, State}; % Ignore addr messages
 
+handle_bitcoin(#btc_alert{payload=#btc_alert_payload{status_bar=StatusBar}}, State=#state{client=#client{name=Name}}) ->
+    log4erl:warn(ebitcoin, "~s: Alert received: ~s", [Name, StatusBar]),
+    {noreply, State};
+
 handle_bitcoin(Message, State=#state{client=#client{name=Name}}) ->
     log4erl:warn(ebitcoin, "~s: Unhandled message:~n~p", [Name, Message]),
     {noreply, State}.
@@ -512,6 +516,8 @@ decode_message(ping, _) ->
     ping;
 decode_message(getaddr, _) ->
     getaddr;
+decode_message(alert, Data) ->
+    btc_protocol:decode_alert(Data);
 decode_message(_, _) ->
     {error, unknown_message}.
 
@@ -537,6 +543,8 @@ encode_message(Message=#btc_getheaders{}) ->
 %    {ping, <<>>};
 %encode_message(getaddr) ->
 %    {getaddr, <<>>};
+%encode_message(Message=#btc_alert{}) ->
+%    {alert, btc_protocol:encode_alert(Message)};
 encode_message(verack) ->
     {verack, <<>>}.
 
