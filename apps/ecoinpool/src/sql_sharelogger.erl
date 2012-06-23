@@ -51,7 +51,7 @@
     
     log_remote :: boolean(),
     subpool_id :: binary() | any,
-    log_type :: main | aux | both,
+    chain_logging :: main | aux | both,
     commit_interval :: integer(),
     always_log_data :: boolean(),
     conv_ts :: fun((erlang:timestamp()) -> calendar:datetime()),
@@ -85,7 +85,7 @@ init({LoggerId, SQLModule, Config}) ->
     Table = proplists:get_value(table, Config, <<"shares">>),
     LogRemote = proplists:get_value(log_remote, Config, false),
     SubpoolId = proplists:get_value(subpool_id, Config, any),
-    LogType = case proplists:get_value(log_type, Config, <<"main">>) of
+    ChainLogging = case proplists:get_value(chain_logging, Config, <<"main">>) of
         <<"aux">> -> aux;
         <<"both">> -> both;
         _ -> main
@@ -127,7 +127,7 @@ init({LoggerId, SQLModule, Config}) ->
         
         log_remote = LogRemote,
         subpool_id = SubpoolId,
-        log_type = LogType,
+        chain_logging = ChainLogging,
         commit_interval = case CommitTimer of undefined -> 0; _ -> CommitInterval end,
         always_log_data = AlwaysLogData,
         conv_ts = ConvTS,
@@ -172,7 +172,7 @@ handle_cast(#share{
         logger_id=LoggerId,
         log_remote=LogRemote,
         subpool_id=FilterSubpoolId,
-        log_type=LogType,
+        chain_logging=ChainLogging,
         always_log_data = AlwaysLogData,
         conv_ts=ConvTS,
         commit_timer=CommitTimer,
@@ -183,8 +183,8 @@ handle_cast(#share{
     
     Solution = if
         AlwaysLogData;
-        ShareState =:= candidate, LogType =/= aux;
-        AuxState =:= candidate, LogType =/= main ->
+        ShareState =:= candidate, ChainLogging =/= aux;
+        AuxState =:= candidate, ChainLogging =/= main ->
             conv_binary_data(Data);
         true ->
             undefined
@@ -202,11 +202,11 @@ handle_cast(#share{
     },
     
     SQLShare1 = if
-        LogType =:= main;
-        LogType =:= both ->
+        ChainLogging =:= main;
+        ChainLogging =:= both ->
             BinBlockNum = conv_block_num(BlockNum),
             PrevBlockHash = conv_binary_data(PrevBlock),
-            case LogType of
+            case ChainLogging of
                 both when AuxpoolName =/= undefined ->
                     BinAuxBlockNum = conv_block_num(AuxBlockNum),
                     SQLShare#sql_share{
@@ -290,7 +290,7 @@ handle_info(insert_sql_shares, State=#state{
                             CommitTimer
                     end;
                 _ ->
-                    log4erl:warn("Could not send all shares at once due to size limit, continuing later (~p).", [LoggerId]),
+                    log4erl:warn("Could not send all shares at once due to size limit, continuing later, ~b shares left (~p).", [length(RestSQLShares), LoggerId]),
                     CommitTimer
             end,
             {noreply, State#state{query_size_limit=QuerySizeLimit, sql_conn=SQLConn, error_count=0, commit_timer=NewCommitTimer, sql_shares=RestSQLShares}};

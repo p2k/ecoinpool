@@ -11,7 +11,8 @@ In order to build the site design documents, you need a copy of
 or symlink the compiler.jar into this folder.
 
 Secondly, get [Sass](http://sass-lang.com/), a cascading style sheet compiler.
-The `sass` executable has to be in your `PATH`.
+The `sass` executable has to be in your `PATH`. You also need
+[compass](http://compass-style.org/), an enhancement library for sass.
 
 You should also have `escript` in your `PATH` which usually comes with your
 Erlang installation.

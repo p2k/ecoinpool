@@ -12,8 +12,10 @@ AUTH=user:pass
 
 if [ "$2" == "" ];then
   curl http://$AUTH@$HOST:$PORT -X POST -d "{\"method\":\"$1\",\"id\":1}" -H 'Content-Type: application/json'
-else
+elif [ "$3" == "" ];then
   curl http://$AUTH@$HOST:$PORT -X POST -d "{\"method\":\"$1\",\"params\":[\"$2\"],\"id\":1}" -H 'Content-Type: application/json'
+else
+  curl http://$AUTH@$HOST:$PORT -X POST -d "{\"method\":\"$1\",\"params\":[\"$2\",\"$3\"],\"id\":1}" -H 'Content-Type: application/json'
 fi
 
 echo ""

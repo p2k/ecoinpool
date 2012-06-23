@@ -48,7 +48,9 @@
     make_json_password/3,
     
     daemon_storage_dir/2,
-    server_storage_dir/1
+    server_storage_dir/1,
+    
+    ceiling/1
 ]).
 
 -on_load(module_init/0).
@@ -244,3 +246,11 @@ server_storage_dir(SubpoolId) ->
         _ -> file:make_dir(Dirname)
     end,
     Dirname.
+
+ceiling(X) ->
+    T = erlang:trunc(X),
+    case (X - T) of
+        Neg when Neg < 0 -> T;
+        Pos when Pos > 0 -> T + 1;
+        _ -> T
+    end.

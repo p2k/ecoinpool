@@ -65,7 +65,7 @@ disconnect(Conn) ->
     end.
 
 fetch_result(Conn, Query) ->
-    case mysql_conn:fetch(Conn, iolist_to_binary(Query), self(), 10000) of
+    case mysql_conn:fetch(Conn, iolist_to_binary(Query), self(), 30000) of
         {data, MyFieldsResult} -> {ok, mysql:get_result_rows(MyFieldsResult)};
         {updated, MyUpdateResult} -> {ok, mysql:get_result_affected_rows(MyUpdateResult)};
         {error, #mysql_result{error=Reason}} -> {error, Reason};
