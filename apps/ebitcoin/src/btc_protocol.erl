@@ -160,7 +160,11 @@ decode_tx(<<Version:32/unsigned-little, T1/binary>>) ->
     {TxIn, T2} = decode_var_list(T1, fun decode_tx_in/1),
     {TxOut, T3} = decode_var_list(T2, fun decode_tx_out/1),
     <<LockTime:32/unsigned-little, T4/binary>> = T3,
-    {#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}, T4}.
+    case Version of
+        1 -> RefHeight = 0, T5 = T4;
+        2 -> <<RefHeight:32/unsigned-little, T5/binary>> = T4
+    end,
+    {#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime, ref_height=RefHeight}, T5}.
 
 decode_tx_in(<<PrevOutputHash:256/little, PrevOutputIndex:32/unsigned-little, T1/binary>>) ->
     {SignatureScript, <<Sequence:32/unsigned-little, T2/binary>>} = decode_var_str(T1),
@@ -440,10 +444,13 @@ encode_long_header({BTCHeader, NTx}) ->
     BNTx = encode_var_int(NTx),
     <<BHeader/binary, BNTx/binary>>.
 
-encode_tx(#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime}) ->
+encode_tx(#btc_tx{version=Version, tx_in=TxIn, tx_out=TxOut, lock_time=LockTime, ref_height=RefHeight}) ->
     BTxIn = encode_var_list(TxIn, fun encode_tx_in/1),
     BTxOut = encode_var_list(TxOut, fun encode_tx_out/1),
-    <<Version:32/unsigned-little, BTxIn/binary, BTxOut/binary, LockTime:32/unsigned-little>>.
+    case Version of
+        1 -> <<Version:32/unsigned-little, BTxIn/binary, BTxOut/binary, LockTime:32/unsigned-little>>;
+        2 -> <<Version:32/unsigned-little, BTxIn/binary, BTxOut/binary, LockTime:32/unsigned-little, RefHeight:32/unsigned-little>>
+    end.
 
 encode_tx_in(#btc_tx_in{prev_output_hash = <<PrevOutputHash:256/big>>, prev_output_index = PrevOutputIndex, signature_script = SignatureScript, sequence = Sequence}) ->
     BSignatureScript = encode_var_str(

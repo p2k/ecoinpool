@@ -34,6 +34,8 @@ type_and_port(<<"nmc">>) -> {namecoin, 8334};
 type_and_port(<<"nmc_testnet">>) -> {namecoin_testnet, 18334};
 type_and_port(<<"ltc">>) -> {litecoin, 9333};
 type_and_port(<<"ltc_testnet">>) -> {litecoin_testnet, 19333};
+type_and_port(<<"frc">>) -> {freicoin, 8639};
+type_and_port(<<"frc_testnet">>) -> {freicoin_testnet, 18639};
 
 type_and_port(_) -> undefined.
 
@@ -48,7 +50,13 @@ network_magic(namecoin_testnet) ->
 network_magic(litecoin) ->
     <<251,192,182,219>>;
 network_magic(litecoin_testnet) ->
-    <<252,193,183,220>>.
+    <<252,193,183,220>>;
+network_magic(freicoin) ->
+    <<199,211,35,137>>;
+network_magic(freicoin_testnet) ->
+    <<200,212,36,138>>;
+
+network_magic(_) -> undefined.
 
 genesis_block(bitcoin) ->
     ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
@@ -130,3 +138,31 @@ genesis_block(litecoin) ->
     },
     BlockHash = <<"12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2">>,
     {BlockHash, Header, Tx};
+
+genesis_block(freicoin) ->
+    ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
+    Header = #btc_header{
+        version = 1,
+        hash_prev_block = ZeroHash,
+        hash_merkle_root = base64:decode(<<"JmMhIlkSHyjHT9C0Rg+PTyrcoEjm8WZmbA0OmRbg4bY=">>),
+        timestamp = 16#5004dd1d,
+        bits = 16#1d00ffff,
+        nonce = 16#340cafbb
+    },
+    Tx = #btc_tx{
+        version = 2,
+        tx_in = [#btc_tx_in{
+            prev_output_hash = ZeroHash,
+            prev_output_index = 16#ffffffff,
+            signature_script = [16#1d00ffff, <<4>>, <<"Telegraph 27/Jun/2012 Barclays hit with ", 194, 163, "290m fine over Libor fixing">>],
+            sequence = 16#ffffffff
+        }],
+        tx_out = [#btc_tx_out{
+            value = 2380952380962,
+            pk_script = base64:decode(<<"QQRniv2w/lVIJxln8aZxMLcQXNaoKOA5CaZ5YuDqH2Hetkn2vD9M7zjE81UE5R7BEt5cOE33uguNV4pMcCtr8R1frA==">>)
+        }],
+        lock_time = 0,
+        ref_height = 0
+    },
+    BlockHash = <<"00000000f0918a8aeb7d5d613c709e862fdf01b7e2604616af1b6194e3c77694">>,
+    {BlockHash, Header, Tx}.
