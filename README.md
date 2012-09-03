@@ -13,7 +13,7 @@ coin pool software, yet not everything is 100% solid and waterproof and some
 features are missing in this version. Nevertheless, everything you need to get
 started and give it a try is there.
 
-ecoinpool supports Bitcoin, Bitcoin+Namecoin (merged), Litecoin and Fairbrix.
+ecoinpool supports Bitcoin, Bitcoin+Namecoin (merged), Litecoin.
 
 Contact
 -------

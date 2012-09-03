@@ -516,18 +516,6 @@ var poolTypeInfo = new (function PoolTypeInfo () {
         aux: [],
         auxonly: false
     });
-    
-    addType({
-        type: "fbx",
-        title: "FairBrix",
-        hps: 131072,
-        cb: true,
-        ebc: true,
-        rpc: 8645,
-        p2p: 8591,
-        aux: [],
-        auxonly: false
-    });
 });
 
 var templates = {};

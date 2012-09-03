@@ -321,8 +321,6 @@ parse_subpool_document({DocProps}) ->
     PoolType = case proplists:get_value(<<"pool_type">>, DocProps) of
         <<"btc">> -> btc;
         <<"ltc">> -> ltc;
-        <<"fbx">> -> fbx;
-        <<"sc">> -> sc;
         _ -> undefined
     end,
     MaxCacheSize = proplists:get_value(<<"max_cache_size">>, DocProps, 20),

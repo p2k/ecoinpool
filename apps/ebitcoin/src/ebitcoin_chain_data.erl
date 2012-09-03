@@ -34,7 +34,6 @@ type_and_port(<<"nmc">>) -> {namecoin, 8334};
 type_and_port(<<"nmc_testnet">>) -> {namecoin_testnet, 18334};
 type_and_port(<<"ltc">>) -> {litecoin, 9333};
 type_and_port(<<"ltc_testnet">>) -> {litecoin_testnet, 19333};
-type_and_port(<<"fbx">>) -> {fairbrix, 8591};
 
 type_and_port(_) -> undefined.
 
@@ -49,9 +48,7 @@ network_magic(namecoin_testnet) ->
 network_magic(litecoin) ->
     <<251,192,182,219>>;
 network_magic(litecoin_testnet) ->
-    <<252,193,183,220>>;
-network_magic(fairbrix) ->
-    <<249,219,249,219>>.
+    <<252,193,183,220>>.
 
 genesis_block(bitcoin) ->
     ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
@@ -133,30 +130,3 @@ genesis_block(litecoin) ->
     },
     BlockHash = <<"12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2">>,
     {BlockHash, Header, Tx};
-
-genesis_block(fairbrix) ->
-    ZeroHash = binary:list_to_bin(lists:duplicate(32,0)),
-    Header = #btc_header{
-        version = 1,
-        hash_prev_block = ZeroHash,
-        hash_merkle_root = base64:decode(<<"QKYnJi7XFvDz1RBDFf4LYAv44yoCGSkpkWP3QVH6UrE=">>),
-        timestamp = 16#4e87e916,
-        bits = 16#1e0ffff0,
-        nonce = 16#16fbf1ed
-    },
-    Tx = #btc_tx{
-        version = 1,
-        tx_in = [#btc_tx_in{
-            prev_output_hash = ZeroHash,
-            prev_output_index = 16#ffffffff,
-            signature_script = [16#1d00ffff, <<4>>, <<"\"nytimes.com 10/1/2011 - Police Arrest Over 700 Protesters on Brooklyn Bridge\"">>],
-            sequence = 16#ffffffff
-        }],
-        tx_out = [#btc_tx_out{
-            value = 5000000000,
-            pk_script = base64:decode(<<"QQRniv2w/lVIJxln8aZxMLcQXNaoKOA5CaZ5YuDqH2Hetkn2vD9M7zjE81UE5R7BEt5cOE33uguNV4pMcCtr8R1frA==">>)
-        }],
-        lock_time = 0
-    },
-    BlockHash = <<"002a91713910bc96eb0edf237fcd2799d7a01186e1e96023e860bc70b3916200">>,
-    {BlockHash, Header, Tx}.
