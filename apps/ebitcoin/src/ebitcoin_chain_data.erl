@@ -144,10 +144,10 @@ genesis_block(freicoin) ->
     Header = #btc_header{
         version = 1,
         hash_prev_block = ZeroHash,
-        hash_merkle_root = base64:decode(<<"JmMhIlkSHyjHT9C0Rg+PTyrcoEjm8WZmbA0OmRbg4bY=">>),
-        timestamp = 16#5004dd1d,
+        hash_merkle_root = base64:decode(<<"tgN4/8leZxiafMA6JQwtK5IyLyLQY/Ya1KexQ5+r5D8=">>),
+        timestamp = 16#50536290,
         bits = 16#1d00ffff,
-        nonce = 16#340cafbb
+        nonce = 16#37fc17e7
     },
     Tx = #btc_tx{
         version = 2,
@@ -158,11 +158,11 @@ genesis_block(freicoin) ->
             sequence = 16#ffffffff
         }],
         tx_out = [#btc_tx_out{
-            value = 2380952380962,
+            value = 7950387546951,
             pk_script = base64:decode(<<"QQRniv2w/lVIJxln8aZxMLcQXNaoKOA5CaZ5YuDqH2Hetkn2vD9M7zjE81UE5R7BEt5cOE33uguNV4pMcCtr8R1frA==">>)
         }],
         lock_time = 0,
         ref_height = 0
     },
-    BlockHash = <<"00000000f0918a8aeb7d5d613c709e862fdf01b7e2604616af1b6194e3c77694">>,
+    BlockHash = <<"000000000c29f26697c30e29039927ab4241b5fc2cc76db7e0dafa5e2612ad46">>,
     {BlockHash, Header, Tx}.
