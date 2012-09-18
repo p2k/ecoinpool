@@ -482,6 +482,18 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     };
     
     addType({
+        type: "frc",
+        title: "Freicoin",
+        hps: 4295032833,
+        cb: true,
+        ebc: true,
+        rpc: 8638,
+        p2p: 8639,
+        aux: [],
+        auxonly: false
+    });
+    
+    addType({
         type: "btc",
         title: "BitCoin",
         hps: 4295032833,
