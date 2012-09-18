@@ -495,7 +495,7 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     
     addType({
         type: "btc",
-        title: "BitCoin",
+        title: "Bitcoin",
         hps: 4295032833,
         cb: true,
         ebc: true,
@@ -507,7 +507,7 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     
     addType({
         type: "nmc",
-        title: "NameCoin",
+        title: "Namecoin",
         hps: 4295032833,
         cb: false,
         ebc: true,
@@ -519,7 +519,7 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     
     addType({
         type: "ltc",
-        title: "LiteCoin",
+        title: "Litecoin",
         hps: 131072,
         cb: true,
         ebc: true,
