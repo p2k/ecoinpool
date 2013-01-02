@@ -74,7 +74,7 @@ get_worker_record(WorkerId) ->
 
 -spec get_workers_for_subpools(SubpoolIds :: [binary()]) -> [worker()].
 get_workers_for_subpools(SubpoolIds) ->
-    gen_server:call(?MODULE, {get_workers_for_subpools, SubpoolIds}).
+    gen_server:call(?MODULE, {get_workers_for_subpools, SubpoolIds}, 10000).
 
 -spec set_subpool_round(Subpool :: subpool(), Round :: integer()) -> ok.
 set_subpool_round(#subpool{id=SubpoolId}, Round) ->

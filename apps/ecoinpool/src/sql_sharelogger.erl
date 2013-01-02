@@ -93,10 +93,13 @@ init({LoggerId, SQLModule, Config}) ->
     CommitInterval = proplists:get_value(commit_interval, Config, 15),
     AlwaysLogData = proplists:get_value(always_log_data, Config, false),
     % Start SQL connection
+    log4erl:info("Connecting to SQL database (~p)...", [LoggerId]),
     {ok, SQLConn} = SQLModule:connect(LoggerId, Host, Port, User, Pass, Database),
+    log4erl:info("SQL connection established (~p).", [LoggerId]),
     % Check available columns
     FieldInfo = lists:zip(record_info(fields, sql_share), lists:seq(2, record_info(size, sql_share))),
     AvailableFieldNames = SQLModule:get_field_names(SQLConn, Table),
+    log4erl:info("~b SQL column(s) available (~p).", [length(AvailableFieldNames), LoggerId]),
     {InsertFieldNames, InsertFieldIds} = lists:foldr(
         fun (N, {IFN, IFI}) ->
             case proplists:get_value(binary_to_atom(N, utf8), FieldInfo) of
@@ -112,6 +115,7 @@ init({LoggerId, SQLModule, Config}) ->
     ConvTS = make_timestamp_converter(SQLModule:get_timediff(SQLConn)),
     % Get the query size limit
     QuerySizeLimit = SQLModule:get_query_size_limit(SQLConn),
+    log4erl:info("SQL query size limit: ~b (~p).", [QuerySizeLimit, LoggerId]),
     % Setup commit timer
     CommitTimer = if
         not is_integer(CommitInterval); CommitInterval =< 0 ->
@@ -120,6 +124,7 @@ init({LoggerId, SQLModule, Config}) ->
             {ok, T} = timer:send_interval(CommitInterval * 1000, insert_sql_shares),
             T
     end,
+    log4erl:info("SQL share logger initialized, using ~b columns (~p).", [length(InsertFieldNames), LoggerId]),
     {ok, #state{
         logger_id = LoggerId,
         sql_config = {Host, Port, User, Pass, Database},
