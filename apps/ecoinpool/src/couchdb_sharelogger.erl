@@ -1,4 +1,3 @@
-
 %%
 %% Copyright (C) 2011  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
 %%
@@ -63,6 +62,8 @@
 % This value cannot be changed at runtime, since it would mess up previous statistics
 -define(LOG_INTERVAL, 10).
 
+-define(GREGORIAN_SECONDS_1970, 62167219200).
+
 %% ===================================================================
 %% API functions
 %% ===================================================================
@@ -72,6 +73,12 @@ start_link(LoggerId, Config) ->
 
 log_share(LoggerId, Share) ->
     gen_server:cast(LoggerId, Share).
+
+%this function was called but it doesn't exist.
+datetime_to_now(DateTime) ->
+    GSeconds = calendar:datetime_to_gregorian_seconds(DateTime),
+    ESeconds = GSeconds - ?GREGORIAN_SECONDS_1970,
+    {ESeconds div 1000000, ESeconds rem 1000000, 0}.
 
 %% ===================================================================
 %% Gen_Server callbacks
@@ -171,9 +178,7 @@ handle_cast(#share{}, State) -> % Ignore other shares
     {noreply, State}.
 
 handle_info(check_update, State) ->
-    
-
-handle_info(_, State) ->
+%handle_info(_, State) -> was defined twice, I'm pointing out, not sure what to do with it.
     {noreply, State}.
 
 terminate(_, _) ->
@@ -210,7 +215,7 @@ get_next_update_ts() ->
         NextSecs ->
             {Date, calendar:seconds_to_time(NextSecs)}
     end,
-    calendar:datetime_to_now(NextDateTime).
+    datetime_to_now(NextDateTime).
 
 update_subpool(Tbl, SubpoolId, Chain, Timestamp, State, RejectReason, BlockNum, PrevBlock, Target, Round) ->
     Entry = case ets:lookup(Tbl, {SubpoolId, Chain}) of
