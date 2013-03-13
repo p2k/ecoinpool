@@ -2,7 +2,7 @@
 %%
 %% mycouch_replicator - A CouchDB and MySQL replication engine
 %%
-%% Copyright (C) 2011  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
+%% Copyright (C) 2011-2012  Patrick "p2k" Schneider <patrick.p2k.schneider@gmail.com>
 %%
 %% This program is free software: you can redistribute it and/or modify
 %% it under the terms of the GNU General Public License as published by
@@ -40,18 +40,6 @@
 
 % Internal state record
 -record(state, {
-    couch_db,
-    
-    my_pool_id,
-    my_table,
-    my_id_field,
-    my_timer,
-    
-    my_queries,
-    
-    couch_to_my,
-    my_to_couch,
-    
     cancel_echo
 }).
 
@@ -72,6 +60,9 @@
 % - CouchDB ID fields have to be strings, MySQL ID fields have to be integers.
 % - Both CouchToMy and MyToCouch must be functions which take one property list
 %   as parameter and return one (possibly converted) property list as result.
+% - Additionally CouchToMy and MyToCouch must accept the atom "new" and return
+%   a property list of default values (possibly for other fields which are not
+%   covered by the subsequent conversion call).
 % - The keys of the property lists coming from MySQL will be converted to lower
 %   case strings prior to the call to MyToCouch; property lists for CouchDB,
 %   on the other hand, have binaries as their keys in all cases.
@@ -177,28 +168,34 @@ init([CouchDb, MyPoolId, MyTable, MyTriggerFields, MyInterval, CouchToMy, MyToCo
     DataQ = list_to_atom(lists:concat([MyTable, "_data_q"])),
     mysql:prepare(DataQ, iolist_to_binary(["SELECT * FROM `", MyTable, "` WHERE `", MyIdField, "` = ?;"])),
     DelQ = list_to_atom(lists:concat([MyTable, "_del_q"])),
-    mysql:prepare(DelQ, iolist_to_binary(["DELETE FROM `pool_worker` WHERE `", MyIdField, "` = ?;"])),
+    mysql:prepare(DelQ, iolist_to_binary(["DELETE FROM `", MyTable, "` WHERE `", MyIdField, "` = ?;"])),
     DelRevQ = list_to_atom(lists:concat([MyTable, "_del_rev_q"])),
-    mysql:prepare(DelRevQ, <<"DELETE FROM `pool_worker_rev` WHERE `my_id` = ?;">>),
+    mysql:prepare(DelRevQ, iolist_to_binary(["DELETE FROM `", MyTable, "_rev` WHERE `my_id` = ?;"])),
     
     MyQueries = #queries{changes=ChangesQ, rev=RevQ, couch_id=CouchIdQ, upd_rev=UpdRevQ, ins_rev=InsRevQ, del_rev=DelRevQ, data=DataQ, del=DelQ},
     
     % Schedule changes polling timer
     {ok, MyTimer} = timer:send_interval(MyInterval * 1000, check_my_changes),
     
+    % Put immutable values into the process dictionary
+    % Conversion functions can access them too, like this
+    put(couch_db, CouchDb),
+    
+    put(my_pool_id, MyPoolId),
+    put(my_table, MyTable),
+    put(my_id_field, MyIdField),
+    put(my_timer, MyTimer),
+    
+    put(my_queries, MyQueries),
+    
+    put(couch_to_my, CouchToMy),
+    put(my_to_couch, MyToCouch),
+    
     {ok, #state{
-        couch_db = CouchDb,
-        my_pool_id = MyPoolId,
-        my_table = MyTable,
-        my_id_field = MyIdField,
-        my_timer = MyTimer,
-        my_queries = MyQueries,
-        couch_to_my = CouchToMy,
-        my_to_couch = MyToCouch,
         cancel_echo = queue:new()
     }}.
 
-handle_change({ChangeProps}, State=#state{couch_db=CouchDb, my_pool_id=MyPoolId, my_table=MyTable, my_id_field=MyIdField, my_queries=MyQueries, couch_to_my=CouchToMy, cancel_echo=CancelEcho}) ->
+handle_change({ChangeProps}, State=#state{cancel_echo=CancelEcho}) ->
     CouchId = proplists:get_value(<<"id">>, ChangeProps),
     case queue:peek(CancelEcho) of
         {value, CouchId} ->
@@ -209,6 +206,8 @@ handle_change({ChangeProps}, State=#state{couch_db=CouchDb, my_pool_id=MyPoolId,
             [{[{<<"rev">>, Rev}]}] = proplists:get_value(<<"changes">>, ChangeProps),
             Deleted = proplists:get_value(<<"deleted">>, ChangeProps, false),
             
+            MyPoolId = get(my_pool_id),
+            MyQueries = get(my_queries),
             {data, MyRevData} = mysql:execute(MyPoolId, MyQueries#queries.rev, [CouchId]),
             case mysql:get_result_rows(MyRevData) of
                 [] ->
@@ -217,7 +216,7 @@ handle_change({ChangeProps}, State=#state{couch_db=CouchDb, my_pool_id=MyPoolId,
                             ok;
                         true -> % Missing -> insert
                             ?Log("CouchId ~s: Inserting.", [CouchId]),
-                            insert_into_mysql(CouchDb, CouchId, Rev, MyPoolId, MyTable, MyQueries, CouchToMy)
+                            insert_into_mysql(get(couch_db), CouchId, Rev, MyPoolId, get(my_table), MyQueries, get(couch_to_my))
                     end;
                 [{MyId, MyRev, MyDeleted}] ->
                     if
@@ -232,14 +231,15 @@ handle_change({ChangeProps}, State=#state{couch_db=CouchDb, my_pool_id=MyPoolId,
                             ok;
                         true -> % Not on same revision (and maybe conflicting) -> take precedence and update
                             ?Log("CouchId ~s: MyId ~b: Updating.", [CouchId, MyId]),
-                            update_mysql(CouchDb, CouchId, Rev, MyPoolId, MyTable, MyIdField, MyId, MyQueries, CouchToMy)
+                            update_mysql(get(couch_db), CouchId, Rev, MyPoolId, get(my_table), get(my_id_field), MyId, MyQueries, get(couch_to_my))
                     end
             end,
             
             {noreply, State}
     end.
 
-handle_my_change(MyPoolId, CouchDb, MyId, CouchId, MyRev, Deleted, MyQueries, MyToCouch) ->
+handle_my_change(MyPoolId, MyId, CouchId, MyRev, Deleted, MyQueries) ->
+    CouchDb = get(couch_db),
     case couchbeam:lookup_doc_rev(CouchDb, CouchId) of
         {error, _} ->
             if
@@ -249,7 +249,7 @@ handle_my_change(MyPoolId, CouchDb, MyId, CouchId, MyRev, Deleted, MyQueries, My
                     false;
                 true -> % Missing -> insert
                     ?Log("MyId ~b: Inserting.", [MyId]),
-                    insert_into_couchdb(MyPoolId, MyId, CouchDb, MyQueries, MyToCouch),
+                    insert_into_couchdb(MyPoolId, MyId, CouchDb, MyQueries, get(my_to_couch)),
                     true
             end;
         Rev ->
@@ -263,7 +263,7 @@ handle_my_change(MyPoolId, CouchDb, MyId, CouchId, MyRev, Deleted, MyQueries, My
                         Rev =:= MyRev -> ?Log("MyId ~b: CouchId ~s: Updating.", [MyId, CouchId]);
                         true -> ?Log("MyId ~b: CouchId ~s: Overriding conflict.", [MyId, CouchId])
                     end,
-                    update_couchdb(MyPoolId, MyId, CouchDb, CouchId, Rev, MyQueries, MyToCouch)
+                    update_couchdb(MyPoolId, MyId, CouchDb, CouchId, Rev, MyQueries, get(my_to_couch))
             end
     end.
 
@@ -273,8 +273,10 @@ handle_call(_Message, _From, State) ->
 handle_cast(_Message, State) ->
     {noreply, State}.
 
-handle_info(check_my_changes, State=#state{couch_db=CouchDb, my_pool_id=MyPoolId, my_queries=MyQueries, my_to_couch=MyToCouch, cancel_echo=CancelEcho}) ->
+handle_info(check_my_changes, State=#state{cancel_echo=CancelEcho}) ->
     % Query for changes
+    MyPoolId = get(my_pool_id),
+    MyQueries = get(my_queries),
     {data, MyChangesData} = mysql:execute(MyPoolId, MyQueries#queries.changes, []),
     case mysql:get_result_rows(MyChangesData) of
         [] -> % No changes
@@ -282,7 +284,7 @@ handle_info(check_my_changes, State=#state{couch_db=CouchDb, my_pool_id=MyPoolId
         MyChanges ->
             {noreply, State#state{cancel_echo = lists:foldl(
                 fun ({MyId, CouchId, MyRev, Deleted}, CancelEchoAcc) ->
-                    case handle_my_change(MyPoolId, CouchDb, MyId, CouchId, MyRev, Deleted =:= 1, MyQueries, MyToCouch) of
+                    case handle_my_change(MyPoolId, MyId, CouchId, MyRev, Deleted =:= 1, MyQueries) of
                         true -> queue:in(CouchId, CancelEchoAcc);
                         false -> CancelEchoAcc
                     end
@@ -295,10 +297,10 @@ handle_info(check_my_changes, State=#state{couch_db=CouchDb, my_pool_id=MyPoolId
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{my_timer=MyTimer, my_queries=MyQueries}) ->
-    [_|Names] = tuple_to_list(MyQueries),
+terminate(_Reason, #state{}) ->
+    [_|Names] = tuple_to_list(get(my_queries)),
     lists:foreach(fun mysql:unprepare/1, Names),
-    timer:cancel(MyTimer),
+    timer:cancel(get(my_timer)),
     ok.
 
 % -----
@@ -306,8 +308,12 @@ terminate(_Reason, #state{my_timer=MyTimer, my_queries=MyQueries}) ->
 insert_into_mysql(CouchDb, CouchId, Rev, MyPoolId, MyTable, #queries{ins_rev=InsRevQ}, CouchToMy) ->
     % Retrieve CouchDB document
     {ok, {DocProps}} = couchbeam:open_doc(CouchDb, CouchId),
+    % Create the default data set
+    MyDefaults = lists:keysort(1, CouchToMy(new)),
     % Convert
-    MyProps = CouchToMy(DocProps),
+    MyConverted = lists:keysort(1, CouchToMy(DocProps)),
+    % Merge
+    MyProps = filter_undefined(lists:ukeymerge(1, MyConverted, MyDefaults)),
     % Create INSERT statement
     {MyKeys, MyValues} = lists:unzip([{[$`, Key ,$`], mysql:encode(Value)} || {Key, Value} <- MyProps]),
     % Insert data
@@ -350,8 +356,12 @@ insert_into_couchdb(MyPoolId, MyId, CouchDb, #queries{couch_id=CouchIdQ, upd_rev
     [{CouchId}] = mysql:get_result_rows(CouchIdResult),
     % Retrieve MySQL row
     MyProps = get_mysql_row_props(MyPoolId, MyId, DataQ),
+    % Create the default data set
+    DocDefaults = lists:keysort(1, MyToCouch(new)),
     % Convert
-    DocProps = filter_undefined(MyToCouch(MyProps)),
+    DocConverted = lists:keysort(1, MyToCouch(MyProps)),
+    % Merge
+    DocProps = filter_undefined(lists:ukeymerge(1, DocConverted, DocDefaults)),
     % Save new document and get rev
     {ok, {DocPropsSaved}} = couchbeam:save_doc(CouchDb, {[{<<"_id">>, CouchId} | DocProps]}),
     Rev = proplists:get_value(<<"_rev">>, DocPropsSaved),

@@ -7,9 +7,10 @@
 [
     % SASL is Erlang's internal error and crash logger; it also logs starting
     % and stopping of certain processes. I set it to "error" here so it won't
-    % pollute stdout/stderr.
+    % pollute the logfile with that information.
     {sasl, [
-        {errlog_type, error}
+        {errlog_type, error},
+        {sasl_error_logger, {file, "log/error.log"}}
     ]},
     
     % This is ecoinpool's main configuration. The CouchDB connection is

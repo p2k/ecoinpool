@@ -51,7 +51,7 @@
     
     log_remote :: boolean(),
     subpool_id :: binary() | any,
-    log_type :: main | aux | both,
+    chain_logging :: main | aux | both,
     commit_interval :: integer(),
     always_log_data :: boolean(),
     conv_ts :: fun((erlang:timestamp()) -> calendar:datetime()),
@@ -85,7 +85,7 @@ init({LoggerId, SQLModule, Config}) ->
     Table = proplists:get_value(table, Config, <<"shares">>),
     LogRemote = proplists:get_value(log_remote, Config, false),
     SubpoolId = proplists:get_value(subpool_id, Config, any),
-    LogType = case proplists:get_value(log_type, Config, <<"main">>) of
+    ChainLogging = case proplists:get_value(chain_logging, Config, <<"main">>) of
         <<"aux">> -> aux;
         <<"both">> -> both;
         _ -> main
@@ -93,10 +93,13 @@ init({LoggerId, SQLModule, Config}) ->
     CommitInterval = proplists:get_value(commit_interval, Config, 15),
     AlwaysLogData = proplists:get_value(always_log_data, Config, false),
     % Start SQL connection
+    log4erl:info("Connecting to SQL database (~p)...", [LoggerId]),
     {ok, SQLConn} = SQLModule:connect(LoggerId, Host, Port, User, Pass, Database),
+    log4erl:info("SQL connection established (~p).", [LoggerId]),
     % Check available columns
     FieldInfo = lists:zip(record_info(fields, sql_share), lists:seq(2, record_info(size, sql_share))),
     AvailableFieldNames = SQLModule:get_field_names(SQLConn, Table),
+    log4erl:info("~b SQL column(s) available (~p).", [length(AvailableFieldNames), LoggerId]),
     {InsertFieldNames, InsertFieldIds} = lists:foldr(
         fun (N, {IFN, IFI}) ->
             case proplists:get_value(binary_to_atom(N, utf8), FieldInfo) of
@@ -112,6 +115,7 @@ init({LoggerId, SQLModule, Config}) ->
     ConvTS = make_timestamp_converter(SQLModule:get_timediff(SQLConn)),
     % Get the query size limit
     QuerySizeLimit = SQLModule:get_query_size_limit(SQLConn),
+    log4erl:info("SQL query size limit: ~b (~p).", [QuerySizeLimit, LoggerId]),
     % Setup commit timer
     CommitTimer = if
         not is_integer(CommitInterval); CommitInterval =< 0 ->
@@ -120,6 +124,7 @@ init({LoggerId, SQLModule, Config}) ->
             {ok, T} = timer:send_interval(CommitInterval * 1000, insert_sql_shares),
             T
     end,
+    log4erl:info("SQL share logger initialized, using ~b columns (~p).", [length(InsertFieldNames), LoggerId]),
     {ok, #state{
         logger_id = LoggerId,
         sql_config = {Host, Port, User, Pass, Database},
@@ -127,7 +132,7 @@ init({LoggerId, SQLModule, Config}) ->
         
         log_remote = LogRemote,
         subpool_id = SubpoolId,
-        log_type = LogType,
+        chain_logging = ChainLogging,
         commit_interval = case CommitTimer of undefined -> 0; _ -> CommitInterval end,
         always_log_data = AlwaysLogData,
         conv_ts = ConvTS,
@@ -172,7 +177,7 @@ handle_cast(#share{
         logger_id=LoggerId,
         log_remote=LogRemote,
         subpool_id=FilterSubpoolId,
-        log_type=LogType,
+        chain_logging=ChainLogging,
         always_log_data = AlwaysLogData,
         conv_ts=ConvTS,
         commit_timer=CommitTimer,
@@ -183,8 +188,8 @@ handle_cast(#share{
     
     Solution = if
         AlwaysLogData;
-        ShareState =:= candidate, LogType =/= aux;
-        AuxState =:= candidate, LogType =/= main ->
+        ShareState =:= candidate, ChainLogging =/= aux;
+        AuxState =:= candidate, ChainLogging =/= main ->
             conv_binary_data(Data);
         true ->
             undefined
@@ -202,11 +207,11 @@ handle_cast(#share{
     },
     
     SQLShare1 = if
-        LogType =:= main;
-        LogType =:= both ->
+        ChainLogging =:= main;
+        ChainLogging =:= both ->
             BinBlockNum = conv_block_num(BlockNum),
             PrevBlockHash = conv_binary_data(PrevBlock),
-            case LogType of
+            case ChainLogging of
                 both when AuxpoolName =/= undefined ->
                     BinAuxBlockNum = conv_block_num(AuxBlockNum),
                     SQLShare#sql_share{
@@ -290,7 +295,7 @@ handle_info(insert_sql_shares, State=#state{
                             CommitTimer
                     end;
                 _ ->
-                    log4erl:warn("Could not send all shares at once due to size limit, continuing later (~p).", [LoggerId]),
+                    log4erl:warn("Could not send all shares at once due to size limit, continuing later, ~b shares left (~p).", [length(RestSQLShares), LoggerId]),
                     CommitTimer
             end,
             {noreply, State#state{query_size_limit=QuerySizeLimit, sql_conn=SQLConn, error_count=0, commit_timer=NewCommitTimer, sql_shares=RestSQLShares}};

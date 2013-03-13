@@ -104,7 +104,7 @@ post_workunit(PID) ->
     gen_server:cast(PID, post_workunit).
 
 send_result(PID, BData) ->
-    gen_server:call(PID, {send_result, BData}).
+    gen_server:call(PID, {send_result, BData}, 30000).
 
 get_first_tx_with_branches(PID, Workunit) ->
     gen_server:call(PID, {get_first_tx_with_branches, Workunit}).
