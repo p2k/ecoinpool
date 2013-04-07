@@ -26,6 +26,8 @@
 % Instances of this module are returned by ecoinpool_server_sup:add_auxdaemon/4
 % and ecoinpool_server_sup:remove_auxdaemon/3
 
+-include_lib("pmod_transform/include/pmod.hrl").
+
 -module(ecoinpool_mmm, [AuxDaemons]).
 
 -include("../ebitcoin/include/btc_protocol_records.hrl").

@@ -64,15 +64,19 @@ First time installation instructions:
    exist.
 3. Run `./rebar compile` - this will compile all dependencies and the main
    applications.
-4. Find and open CouchDB's local config file, usually at /etc/couchdb/local.ini.
-5. Within the `[httpd]` section, add a line `bind_address = 0.0.0.0` in order to
+4. There are some cases where `jiffy` won't compile its C source code when
+   running `rebar compile`. To remedy that, go to `deps/jiffy` and run an extra
+   `./rebar compile` from there. This will fix errors about `jiffy.so` not being
+   found.
+5. Find and open CouchDB's local config file, usually at /etc/couchdb/local.ini.
+6. Within the `[httpd]` section, add a line `bind_address = 0.0.0.0` in order to
    allow access from the internet (required if you want to expose the built-in
    web frontend to your users). Also make sure port 5984 can be reached. If you
    installed CouchDB from source, you have to allow write access to that ini
    file from CouchDB's process.
-5. Start CouchDB and browse to its local web frontend at
+7. Start CouchDB and browse to its local web frontend at
    `http://<your domain>:5984/_utils/`
-6. On the lower right corner it'll say "Welcome to Admin Party!".
+8. On the lower right corner it'll say "Welcome to Admin Party!".
    Click "Fix this" and create an admin account for ecoinpool with a password of
    your choice. Note it down for later. Optionally create another admin account
    for yourself.

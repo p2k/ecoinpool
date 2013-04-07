@@ -18,6 +18,8 @@
 %% along with ecoinpool.  If not, see <http://www.gnu.org/licenses/>.
 %%
 
+-include_lib("pmod_transform/include/pmod.hrl").
+
 -module(ecoinpool_rpc_request, [ReqPID, Peer, Method, Params, Auth, MiningExtensions, LP]).
 
 -export([get/1, has_params/0, check/0, start/2, ok/2, error/1]).
