@@ -217,7 +217,7 @@ get_default_payout_address(URL, Auth) ->
     end.
 
 get_block_number(URL, Auth) ->
-    {ok, "200", _ResponseHeaders, ResponseBody} = ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getblocknumber\"}"),
+    {ok, "200", _ResponseHeaders, ResponseBody} = ecoinpool_util:send_http_req(URL, Auth, "{\"method\":\"getblockcount\"}"),
     {Body} = ejson:decode(ResponseBody),
     proplists:get_value(<<"result">>, Body) + 1.
 
