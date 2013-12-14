@@ -558,9 +558,7 @@ class EcoinpoolSubPool
     public function hashspeedFromSharespeed($shares_per_second)
     {
         switch ($this->pool_type) {
-            case "sc":
             case "ltc":
-            case "fbx":
                 return $shares_per_second * 131072;
             default:
                 return $shares_per_second * 4294967296;

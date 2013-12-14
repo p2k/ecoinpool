@@ -482,8 +482,20 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     };
     
     addType({
+        type: "frc",
+        title: "Freicoin",
+        hps: 4295032833,
+        cb: true,
+        ebc: true,
+        rpc: 8638,
+        p2p: 8639,
+        aux: [],
+        auxonly: false
+    });
+    
+    addType({
         type: "btc",
-        title: "BitCoin",
+        title: "Bitcoin",
         hps: 4295032833,
         cb: true,
         ebc: true,
@@ -495,7 +507,7 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     
     addType({
         type: "nmc",
-        title: "NameCoin",
+        title: "Namecoin",
         hps: 4295032833,
         cb: false,
         ebc: true,
@@ -507,24 +519,12 @@ var poolTypeInfo = new (function PoolTypeInfo () {
     
     addType({
         type: "ltc",
-        title: "LiteCoin",
+        title: "Litecoin",
         hps: 131072,
         cb: true,
         ebc: true,
         rpc: 9332,
         p2p: 9333,
-        aux: [],
-        auxonly: false
-    });
-    
-    addType({
-        type: "fbx",
-        title: "FairBrix",
-        hps: 131072,
-        cb: true,
-        ebc: true,
-        rpc: 8645,
-        p2p: 8591,
         aux: [],
         auxonly: false
     });

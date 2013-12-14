@@ -150,8 +150,7 @@ handle_cast({reload_config, Subpool}, State=#state{subpool=OldSubpool, workq_siz
     #subpool{port=OldPort, max_cache_size=OldMaxCacheSize, lowercase_workers=OldLowercaseWorkers, worker_share_subpools=OldWorkerShareSubpools, coin_daemon_config=OldCoinDaemonConfig, aux_pool=OldAuxpool} = OldSubpool,
     % Derive the CoinDaemon module name from PoolType + "_coindaemon", except for SCrypt pools which are all handled by scrypt_coindaemon
     CoinDaemonModule = if
-        PoolType =:= ltc;
-        PoolType =:= fbx ->
+        PoolType =:= ltc ->
             scrypt_coindaemon;
         true ->
             list_to_atom(lists:concat([PoolType, "_coindaemon"]))

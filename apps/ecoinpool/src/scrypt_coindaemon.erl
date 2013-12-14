@@ -118,8 +118,7 @@ init([SubpoolId, Config]) ->
     log4erl:warn(daemon, "SCrypt-~p CoinDaemon starting...", [PoolType]),
     
     DefaultPort = case PoolType of
-        ltc -> 9332;
-        fbx -> 8645
+        ltc -> 9332
     end,
     {URL, Auth, CoinbaserConfig, FullTag, EBtcId} = btc_daemon_util:parse_config(Config, DefaultPort),
     

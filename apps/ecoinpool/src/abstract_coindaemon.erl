@@ -23,6 +23,8 @@
 
 % Instances of this module are returned by ecoinpool_server_sup:start_coindaemon/3
 
+-include_lib("pmod_transform/include/pmod.hrl").
+
 -module(abstract_coindaemon, [M, PID]).
 
 -export([

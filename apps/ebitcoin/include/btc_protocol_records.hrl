@@ -47,7 +47,8 @@
     version = 1 :: integer(),
     tx_in :: [btc_tx_in()],
     tx_out :: [btc_tx_out()],
-    lock_time = 0 :: integer()
+    lock_time = 0 :: integer(),
+    ref_height = 0 :: integer()
 }).
 -type btc_tx() :: #btc_tx{}.
 
